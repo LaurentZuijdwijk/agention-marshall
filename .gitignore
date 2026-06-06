@@ -1,0 +1,23 @@
+# dependencies
+node_modules/
+
+# environment — never commit secrets
+.env
+.env.*
+!.env.example
+
+# build output
+dist/
+*.js.map
+
+# agent scratch
+.marshall/
+
+# editor
+.claude/
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

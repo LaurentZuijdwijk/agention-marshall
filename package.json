@@ -1,0 +1,12 @@
+{
+  "name": "agention-marshall",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "cli": "node --import tsx/esm apps/cli/src/index.tsx",
+    "test": "npm run test --workspaces --if-present"
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "name": "@marshall/engine",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx/esm --test 'src/**/*.test.ts'"
+  },
+  "dependencies": {
+    "@agentionai/agents": "latest",
+    "@anthropic-ai/sdk": "^0.39.0",
+    "@marshall/tools": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  },
+  "peerDependencies": {
+    "openai": ">=4",
+    "@google/generative-ai": ">=0.2",
+    "@mistralai/mistralai": ">=0.4"
+  },
+  "peerDependenciesMeta": {
+    "openai": { "optional": true },
+    "@google/generative-ai": { "optional": true },
+    "@mistralai/mistralai": { "optional": true }
+  }
+}
