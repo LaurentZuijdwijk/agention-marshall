@@ -99,6 +99,7 @@ Press **Esc / Ctrl-C** to interrupt the current task:
 | `/cwd` | Show current workspace root |
 | `/auto` | Toggle auto-approve for read-only or a named tool |
 | `/memory` | View/edit project memory |
+| `/model` | View or switch the model for a given role (planner/coder/reviewer) |
 
 ## Config
 
