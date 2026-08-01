@@ -1,0 +1,56 @@
+
+[smart-solo / bug-fix] running...
+[smart-solo / bug-fix] PASS in 42.9s, 6 tool calls, tokens 11651/493
+
+[smart-solo / feature-add] running...
+[smart-solo / feature-add] PASS in 30.3s, 4 tool calls, tokens 8362/348
+
+[smart-solo / refactor] running...
+[smart-solo / refactor] FAIL in 33.3s, 7 tool calls, tokens 7678/473
+
+[smart-solo / iterate] running...
+[smart-solo / iterate] PASS in 80.1s, 8 tool calls, tokens 18021/889
+
+[fast-solo / bug-fix] running...
+[fast-solo / bug-fix] PASS in 29.4s, 7 tool calls, tokens 15168/544
+
+[fast-solo / feature-add] running...
+[fast-solo / feature-add] PASS in 16.6s, 4 tool calls, tokens 8383/374
+
+[fast-solo / refactor] running...
+[fast-solo / refactor] FAIL in 20.8s, 7 tool calls, tokens 7678/562
+
+[fast-solo / iterate] running...
+[fast-solo / iterate] PASS in 35.3s, 9 tool calls, tokens 21043/1323
+
+[smart-main+fast-context / bug-fix] running...
+[smart-main+fast-context / bug-fix] PASS in 26.2s, 3 tool calls, tokens 5659/306
+
+[smart-main+fast-context / feature-add] running...
+[smart-main+fast-context / feature-add] PASS in 30.2s, 4 tool calls, tokens 8679/355
+
+[smart-main+fast-context / refactor] running...
+[smart-main+fast-context / refactor] FAIL in 36.4s, 7 tool calls, tokens 7996/530
+
+[smart-main+fast-context / iterate] running...
+[smart-main+fast-context / iterate] PASS in 74.7s, 8 tool calls, tokens 26152/985
+
+=== Results ===
+┌─────────┬───────────────────────────┬───────────────┬────────┬─────────┬───────┬────────┬───────────┐
+│ (index) │ config                    │ task          │ result │ seconds │ inTok │ outTok │ toolCalls │
+├─────────┼───────────────────────────┼───────────────┼────────┼─────────┼───────┼────────┼───────────┤
+│ 0       │ 'smart-solo'              │ 'bug-fix'     │ 'PASS' │ '42.9'  │ 11651 │ 493    │ 6         │
+│ 1       │ 'smart-solo'              │ 'feature-add' │ 'PASS' │ '30.3'  │ 8362  │ 348    │ 4         │
+│ 2       │ 'smart-solo'              │ 'refactor'    │ 'FAIL' │ '33.3'  │ 7678  │ 473    │ 7         │
+│ 3       │ 'smart-solo'              │ 'iterate'     │ 'PASS' │ '80.1'  │ 18021 │ 889    │ 8         │
+│ 4       │ 'fast-solo'               │ 'bug-fix'     │ 'PASS' │ '29.4'  │ 15168 │ 544    │ 7         │
+│ 5       │ 'fast-solo'               │ 'feature-add' │ 'PASS' │ '16.6'  │ 8383  │ 374    │ 4         │
+│ 6       │ 'fast-solo'               │ 'refactor'    │ 'FAIL' │ '20.8'  │ 7678  │ 562    │ 7         │
+│ 7       │ 'fast-solo'               │ 'iterate'     │ 'PASS' │ '35.3'  │ 21043 │ 1323   │ 9         │
+│ 8       │ 'smart-main+fast-context' │ 'bug-fix'     │ 'PASS' │ '26.2'  │ 5659  │ 306    │ 3         │
+│ 9       │ 'smart-main+fast-context' │ 'feature-add' │ 'PASS' │ '30.2'  │ 8679  │ 355    │ 4         │
+│ 10      │ 'smart-main+fast-context' │ 'refactor'    │ 'FAIL' │ '36.4'  │ 7996  │ 530    │ 7         │
+│ 11      │ 'smart-main+fast-context' │ 'iterate'     │ 'PASS' │ '74.7'  │ 26152 │ 985    │ 8         │
+└─────────┴───────────────────────────┴───────────────┴────────┴─────────┴───────┴────────┴───────────┘
+
+Saved to /home/laurent/Documents/projects/agention-marshall/bench/results.json

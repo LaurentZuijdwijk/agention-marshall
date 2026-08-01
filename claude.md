@@ -158,7 +158,7 @@ Treat this as **two distinct layers** — don't collapse them:
 
 - The CLI is a **client of the engine** (Architecture), not the engine itself. REPL: prompt for a task, stream progress, show which agent is acting.
 - Render diffs before any `write_file`/`edit_file` and the full command before any `run_shell`, then the approval prompt (via `requestApproval`).
-- Slash commands: at minimum `/help`, `/exit`, `/clear` (reset history), `/cwd` (show workspace), `/auto` (toggle auto-approve for read-only or a named tool), `/memory` (view/edit project memory). Keep it extensible.
+- Slash commands: at minimum `/help`, `/exit`, `/clear` (reset history), `/cwd` (show workspace), `/auto` (toggle auto-approve for read-only or a named tool), `/memory` (view/edit project memory), `/model` (view or switch the model for a given role: planner/coder/reviewer). Keep it extensible.
 - Esc / Ctrl-C interrupts the current task and drops into steering (type a new instruction) rather than crashing; a second Esc/Ctrl-C hard-cancels. Tool errors are surfaced and the loop continues.
 
 ---
@@ -211,3 +211,38 @@ Treat this as **two distinct layers** — don't collapse them:
 - True OS-level isolation (containers/microVM), network egress control, multi-repo workspaces, editors beyond the reference VS Code extension, exposing our assistant *as* an MCP server, **publishing `packages/tools` as a public npm package** (keep it internal until the API proves itself), and non-Claude providers beyond the swappable config seam. (Consuming external MCP servers as a tool source is in scope but optional — milestone 7.)
 
 When done, summarize: what was built per milestone, every Agention API you verified vs. anything you had to build yourself, and the known limitations of the sandbox.
+
+---
+
+## Backlog
+
+### Install script
+
+A `curl | sh` installer in the style of nvm/yarn. Should:
+
+1. Check prerequisites — Node 20+, git.
+2. Clone the repo to `~/.marshall` (or `~/.local/lib/marshall`).
+3. Run `npm install` in the cloned dir.
+4. Symlink the CLI entry point into `~/.local/bin/marshall` (user-local, no sudo required).
+5. Detect shell (bash/zsh/fish) and append a PATH export to the relevant rc file.
+6. Prompt for `ANTHROPIC_API_KEY`, write it to `~/.marshall/.env`, and source it from the shell rc.
+7. Print a success message and run `marshall --help` to verify.
+8. Handle re-runs (idempotent — detect existing install and offer update via `git pull + npm install`).
+
+Usage: `curl -fsSL https://raw.githubusercontent.com/LaurentZuijdwijk/agention-marshall/main/install.sh | sh`
+
+Decisions to confirm before implementing:
+- Windows support: WSL note only, or a separate PowerShell script?
+- `marshall update` subcommand baked into the CLI, or only via the install script?
+
+### Documentation site
+
+A dedicated docs site (e.g. VitePress or Docusaurus) covering:
+- Getting started / quickstart
+- Architecture overview (engine, CLI, tools package)
+- Tool reference (all tools, approval behaviour, config options)
+- Sandbox model and limitations
+- Configuration reference
+- CLI command reference
+- IDE integration guide
+- Contributing guide

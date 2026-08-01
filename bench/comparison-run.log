@@ -1,0 +1,66 @@
+
+[fast-solo / refactor / trial 1] running...
+[fast-solo / refactor / trial 1] PASS in 42.6s, 16 tool calls, tokens 30826/1227
+
+[fast-solo / refactor / trial 2] running...
+[fast-solo / refactor / trial 2] PASS in 49.9s, 11 tool calls, tokens 25271/970
+
+[fast-solo / refactor / trial 3] running...
+[fast-solo / refactor / trial 3] PASS in 45.6s, 13 tool calls, tokens 26753/806
+
+[fast-solo / iterate / trial 1] running...
+[fast-solo / iterate / trial 1] PASS in 56.7s, 10 tool calls, tokens 28631/1341
+
+[fast-solo / iterate / trial 2] running...
+[fast-solo / iterate / trial 2] PASS in 32.5s, 8 tool calls, tokens 24369/1089
+
+[fast-solo / iterate / trial 3] running...
+[fast-solo / iterate / trial 3] PASS in 32.4s, 7 tool calls, tokens 14754/1313
+
+[fast-main+smart-planner+reviewer / refactor / trial 1] running...
+[fast-main+smart-planner+reviewer / refactor / trial 1] PASS in 25.5s, 7 tool calls, tokens 18632/650
+
+[fast-main+smart-planner+reviewer / refactor / trial 2] running...
+[fast-main+smart-planner+reviewer / refactor / trial 2] PASS in 30.2s, 12 tool calls, tokens 22697/945
+
+[fast-main+smart-planner+reviewer / refactor / trial 3] running...
+[fast-main+smart-planner+reviewer / refactor / trial 3] PASS in 22.4s, 9 tool calls, tokens 15091/764
+
+[fast-main+smart-planner+reviewer / iterate / trial 1] running...
+[fast-main+smart-planner+reviewer / iterate / trial 1] FAIL in 7.9s, 3 tool calls, tokens 6876/186
+
+[fast-main+smart-planner+reviewer / iterate / trial 2] running...
+[fast-main+smart-planner+reviewer / iterate / trial 2] PASS in 27.7s, 7 tool calls, tokens 23290/916
+
+[fast-main+smart-planner+reviewer / iterate / trial 3] running...
+[fast-main+smart-planner+reviewer / iterate / trial 3] PASS in 42.6s, 11 tool calls, tokens 38503/1431
+
+=== Results ===
+┌─────────┬────────────────────────────────────┬────────────┬───────┬────────┬─────────┬───────┬────────┬───────────┐
+│ (index) │ config                             │ task       │ trial │ result │ seconds │ inTok │ outTok │ toolCalls │
+├─────────┼────────────────────────────────────┼────────────┼───────┼────────┼─────────┼───────┼────────┼───────────┤
+│ 0       │ 'fast-solo'                        │ 'refactor' │ 1     │ 'PASS' │ '42.6'  │ 30826 │ 1227   │ 16        │
+│ 1       │ 'fast-solo'                        │ 'refactor' │ 2     │ 'PASS' │ '49.9'  │ 25271 │ 970    │ 11        │
+│ 2       │ 'fast-solo'                        │ 'refactor' │ 3     │ 'PASS' │ '45.6'  │ 26753 │ 806    │ 13        │
+│ 3       │ 'fast-solo'                        │ 'iterate'  │ 1     │ 'PASS' │ '56.7'  │ 28631 │ 1341   │ 10        │
+│ 4       │ 'fast-solo'                        │ 'iterate'  │ 2     │ 'PASS' │ '32.5'  │ 24369 │ 1089   │ 8         │
+│ 5       │ 'fast-solo'                        │ 'iterate'  │ 3     │ 'PASS' │ '32.4'  │ 14754 │ 1313   │ 7         │
+│ 6       │ 'fast-main+smart-planner+reviewer' │ 'refactor' │ 1     │ 'PASS' │ '25.5'  │ 18632 │ 650    │ 7         │
+│ 7       │ 'fast-main+smart-planner+reviewer' │ 'refactor' │ 2     │ 'PASS' │ '30.2'  │ 22697 │ 945    │ 12        │
+│ 8       │ 'fast-main+smart-planner+reviewer' │ 'refactor' │ 3     │ 'PASS' │ '22.4'  │ 15091 │ 764    │ 9         │
+│ 9       │ 'fast-main+smart-planner+reviewer' │ 'iterate'  │ 1     │ 'FAIL' │ '7.9'   │ 6876  │ 186    │ 3         │
+│ 10      │ 'fast-main+smart-planner+reviewer' │ 'iterate'  │ 2     │ 'PASS' │ '27.7'  │ 23290 │ 916    │ 7         │
+│ 11      │ 'fast-main+smart-planner+reviewer' │ 'iterate'  │ 3     │ 'PASS' │ '42.6'  │ 38503 │ 1431   │ 11        │
+└─────────┴────────────────────────────────────┴────────────┴───────┴────────┴─────────┴───────┴────────┴───────────┘
+
+=== Summary (aggregated across trials) ===
+┌─────────┬────────────────────────────────────┬────────────┬──────────┬────────────┬──────────┬───────────┬──────────────┐
+│ (index) │ config                             │ task       │ passRate │ avgSeconds │ avgInTok │ avgOutTok │ avgToolCalls │
+├─────────┼────────────────────────────────────┼────────────┼──────────┼────────────┼──────────┼───────────┼──────────────┤
+│ 0       │ 'fast-solo'                        │ 'refactor' │ '3/3'    │ '46.0'     │ '27617'  │ '1001'    │ '13.3'       │
+│ 1       │ 'fast-solo'                        │ 'iterate'  │ '3/3'    │ '40.5'     │ '22585'  │ '1248'    │ '8.3'        │
+│ 2       │ 'fast-main+smart-planner+reviewer' │ 'refactor' │ '3/3'    │ '26.1'     │ '18807'  │ '786'     │ '9.3'        │
+│ 3       │ 'fast-main+smart-planner+reviewer' │ 'iterate'  │ '2/3'    │ '26.1'     │ '22890'  │ '844'     │ '7.0'        │
+└─────────┴────────────────────────────────────┴────────────┴──────────┴────────────┴──────────┴───────────┴──────────────┘
+
+Saved to /home/laurent/Documents/projects/agention-marshall/bench/results.json

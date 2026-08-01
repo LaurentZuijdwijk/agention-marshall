@@ -1,0 +1,14 @@
+[
+  {
+    "config": "smart-main+fast-context",
+    "task": "real-repo-fix",
+    "trial": 1,
+    "pass": true,
+    "timedOut": false,
+    "durationMs": 108076,
+    "inputTokens": 49796,
+    "outputTokens": 965,
+    "toolCalls": 9,
+    "checkSummary": "# tests 32 | # suites 0 | # pass 32 | # fail 0 | # cancelled 0 | # skipped 0 | # todo 0 | # duration_ms 1250.246009"
+  }
+]

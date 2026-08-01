@@ -1,0 +1,5 @@
+{
+  "name": "@marshall/bench",
+  "private": true,
+  "type": "module"
+}

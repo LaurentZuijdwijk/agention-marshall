@@ -1,0 +1,24 @@
+
+[smart-solo / real-repo-fix] running...
+[smart-solo / real-repo-fix] PASS in 276.1s, 8 tool calls, tokens 40987/685
+
+[fast-solo / real-repo-fix] running...
+[fast-solo / real-repo-fix] PASS in 48.3s, 8 tool calls, tokens 41626/1111
+
+[smart-main+fast-context / real-repo-fix] running...
+[smart-main+fast-context / real-repo-fix] PASS in 101.9s, 7 tool calls, tokens 39126/848
+
+[fast-main+smart-planner+reviewer / real-repo-fix] running...
+[fast-main+smart-planner+reviewer / real-repo-fix] PASS in 72.5s, 12 tool calls, tokens 81063/1612
+
+=== Results ===
+┌─────────┬────────────────────────────────────┬─────────────────┬───────┬────────┬─────────┬───────┬────────┬───────────┐
+│ (index) │ config                             │ task            │ trial │ result │ seconds │ inTok │ outTok │ toolCalls │
+├─────────┼────────────────────────────────────┼─────────────────┼───────┼────────┼─────────┼───────┼────────┼───────────┤
+│ 0       │ 'smart-solo'                       │ 'real-repo-fix' │ 1     │ 'PASS' │ '276.1' │ 40987 │ 685    │ 8         │
+│ 1       │ 'fast-solo'                        │ 'real-repo-fix' │ 1     │ 'PASS' │ '48.3'  │ 41626 │ 1111   │ 8         │
+│ 2       │ 'smart-main+fast-context'          │ 'real-repo-fix' │ 1     │ 'PASS' │ '101.9' │ 39126 │ 848    │ 7         │
+│ 3       │ 'fast-main+smart-planner+reviewer' │ 'real-repo-fix' │ 1     │ 'PASS' │ '72.5'  │ 81063 │ 1612   │ 12        │
+└─────────┴────────────────────────────────────┴─────────────────┴───────┴────────┴─────────┴───────┴────────┴───────────┘
+
+Saved to /home/laurent/Documents/projects/agention-marshall/bench/results.json
