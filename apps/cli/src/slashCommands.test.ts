@@ -1,0 +1,117 @@
+import { describe, it, expect } from 'node:test';
+import assert from 'node:assert/strict';
+import { resolveSlashCommand, HELP, SLASH_COMMANDS } from './slashCommands.js';
+
+describe('slashCommands', () => {
+  describe('resolveSlashCommand', () => {
+    it('returns help for /help', () => {
+      const result = resolveSlashCommand('/help');
+      assert.equal(result.type, 'help');
+    });
+
+    it('returns exit for /exit', () => {
+      const result = resolveSlashCommand('/exit');
+      assert.equal(result.type, 'exit');
+    });
+
+    it('returns model for /model', () => {
+      const result = resolveSlashCommand('/model');
+      assert.equal(result.type, 'model');
+    });
+
+    it('returns cwd for /cwd', () => {
+      const result = resolveSlashCommand('/cwd');
+      assert.equal(result.type, 'cwd');
+    });
+
+    it('returns memory for /memory', () => {
+      const result = resolveSlashCommand('/memory');
+      assert.equal(result.type, 'memory');
+    });
+
+    it('returns login for /login', () => {
+      const result = resolveSlashCommand('/login');
+      assert.equal(result.type, 'login');
+    });
+
+    it('returns clear for /clear', () => {
+      const result = resolveSlashCommand('/clear');
+      assert.equal(result.type, 'clear');
+    });
+
+    it('returns stream for /stream', () => {
+      const result = resolveSlashCommand('/stream');
+      assert.equal(result.type, 'stream');
+    });
+
+    it('returns tokens for /tokens', () => {
+      const result = resolveSlashCommand('/tokens');
+      assert.equal(result.type, 'tokens');
+    });
+
+    it('returns plan with args for /plan <task>', () => {
+      const result = resolveSlashCommand('/plan add a login form');
+      assert.equal(result.type, 'plan');
+      assert.equal((result as { args: string }).args, 'add a login form');
+    });
+
+    it('returns review with empty args for bare /review', () => {
+      const result = resolveSlashCommand('/review');
+      assert.equal(result.type, 'review');
+      assert.equal((result as { args: string }).args, '');
+    });
+
+    it('returns review with args for /review <notes>', () => {
+      const result = resolveSlashCommand('/review check the auth changes');
+      assert.equal(result.type, 'review');
+      assert.equal((result as { args: string }).args, 'check the auth changes');
+    });
+
+    it('returns unknown for unrecognized slash command', () => {
+      const result = resolveSlashCommand('/foobar');
+      assert.equal(result.type, 'unknown');
+      assert.equal((result as { command: string }).command, '/foobar');
+    });
+
+    it('returns unknown with full text for non-slash input', () => {
+      const result = resolveSlashCommand('hello world');
+      assert.equal(result.type, 'unknown');
+      assert.equal((result as { command: string }).command, 'hello world');
+    });
+
+    it('handles slash command with arguments', () => {
+      const result = resolveSlashCommand('/model some-provider');
+      assert.equal(result.type, 'model');
+    });
+
+    it('handles slash command with extra whitespace', () => {
+      const result = resolveSlashCommand('  /help  ');
+      assert.equal(result.type, 'help');
+    });
+  });
+
+  describe('HELP text', () => {
+    it('contains all command names', () => {
+      for (const cmd of SLASH_COMMANDS) {
+        assert.ok(HELP.includes(cmd), `HELP should include ${cmd}`);
+      }
+    });
+
+    it('mentions esc shortcuts', () => {
+      assert.ok(HELP.includes('Esc'), 'HELP should mention Esc');
+    });
+
+    it('mentions steering mode', () => {
+      assert.ok(HELP.includes('steer'), 'HELP should mention steering');
+    });
+  });
+
+  describe('SLASH_COMMANDS', () => {
+    it('includes all expected commands', () => {
+      const expected = ['/clear', '/cwd', '/exit', '/help', '/login', '/memory', '/model'];
+      for (const cmd of expected) {
+        assert.ok(SLASH_COMMANDS.includes(cmd as any), `SLASH_COMMANDS should include ${cmd}`);
+      }
+    });
+  });
+});
