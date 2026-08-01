@@ -7,6 +7,15 @@
   ],
   "scripts": {
     "cli": "node --import tsx/esm apps/cli/src/index.tsx",
-    "test": "npm run test --workspaces --if-present"
+    "test": "npm run test --workspaces --if-present",
+    "postinstall": "patch-package"
+  },
+  "devDependencies": {
+    "@changesets/cli": "^2.31.0",
+    "patch-package": "^8.0.0"
+  },
+  "dependencies": {
+    "@agentionai/agents": "^0.13.0",
+    "openai": "^6.42.0"
   }
 }

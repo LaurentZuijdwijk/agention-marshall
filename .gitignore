@@ -5,7 +5,7 @@ node_modules/
 .env
 .env.*
 !.env.example
-
+memory
 # build output
 dist/
 *.js.map

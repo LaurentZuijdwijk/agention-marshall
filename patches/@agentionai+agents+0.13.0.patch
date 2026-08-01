@@ -1,0 +1,78 @@
+diff --git a/node_modules/@agentionai/agents/dist/agents/llamacpp/LlamaCppAgent.js b/node_modules/@agentionai/agents/dist/agents/llamacpp/LlamaCppAgent.js
+index 39a966f..30544a8 100644
+--- a/node_modules/@agentionai/agents/dist/agents/llamacpp/LlamaCppAgent.js
++++ b/node_modules/@agentionai/agents/dist/agents/llamacpp/LlamaCppAgent.js
+@@ -147,11 +147,11 @@ class LlamaCppAgent extends BaseAgent_1.BaseAgent {
+     async callLlamaCpp() {
+         const messages = transformers_1.chatCompletionsTransformer.toProvider(this.history.getEntries());
+         const tools = this.tools.size > 0 ? this.getToolDefinitions() : undefined;
+-        return this.client.chat.completions.create({
++        const stream = await this.client.chat.completions.create({
+             model: this.config.model,
+             messages,
+             tools,
+-            stream: false,
++            stream: true,
+             max_tokens: this.config.maxTokens,
+             temperature: this.config.temperature,
+             top_p: this.config.topP,
+@@ -160,6 +160,59 @@ class LlamaCppAgent extends BaseAgent_1.BaseAgent {
+             presence_penalty: this.config.presencePenalty,
+             frequency_penalty: this.config.frequencyPenalty,
+         });
++        // Reassemble the streamed chunks into the non-streaming response shape
++        // handleResponse expects. Tool-call deltas arrive fragmented across
++        // chunks (id/name once, arguments in slices) keyed by `index`.
++        let content = "";
++        let refusal = null;
++        let role;
++        let finishReason = null;
++        let usage;
++        const toolCalls = [];
++        for await (const chunk of stream) {
++            if (chunk.usage)
++                usage = chunk.usage;
++            const choice = chunk.choices?.[0];
++            if (!choice)
++                continue;
++            const delta = choice.delta ?? {};
++            if (delta.role)
++                role = delta.role;
++            if (typeof delta.content === "string" && delta.content.length > 0) {
++                content += delta.content;
++                // Consumers (e.g. Marshall's CLI) render these as they arrive.
++                this.emit("token", delta.content);
++            }
++            // OpenRouter and thinking-capable servers stream chain-of-thought
++            // separately from content. Not part of the OpenAI spec — harmless
++            // everywhere else because the field simply never appears.
++            const reasoningDelta = delta.reasoning ?? delta.reasoning_content;
++            if (typeof reasoningDelta === "string" && reasoningDelta.length > 0) {
++                this.emit("reasoning", reasoningDelta);
++            }
++            if (delta.refusal)
++                refusal = (refusal ?? "") + delta.refusal;
++            for (const tc of delta.tool_calls ?? []) {
++                const i = tc.index ?? 0;
++                const acc = toolCalls[i] ?? (toolCalls[i] = { id: "", type: "function", function: { name: "", arguments: "" } });
++                if (tc.id)
++                    acc.id += tc.id;
++                if (tc.function?.name)
++                    acc.function.name += tc.function.name;
++                if (tc.function?.arguments)
++                    acc.function.arguments += tc.function.arguments;
++            }
++            if (choice.finish_reason)
++                finishReason = choice.finish_reason;
++        }
++        const message = { role: role ?? "assistant", content, refusal };
++        const assembledToolCalls = toolCalls.filter(Boolean);
++        if (assembledToolCalls.length > 0)
++            message.tool_calls = assembledToolCalls;
++        return {
++            choices: [{ index: 0, message, finish_reason: finishReason ?? "stop", logprobs: null }],
++            usage,
++        };
+     }
+     async handleResponse(response) {
+         const usage = this.parseUsage(response);

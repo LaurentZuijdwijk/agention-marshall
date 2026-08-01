@@ -1,12 +1,17 @@
 {
   "name": "@marshall/tools",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
   },
+  "files": ["dist"],
+  "publishConfig": { "access": "public" },
   "scripts": {
+    "prepare": "tsc",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx/esm --test 'src/**/*.test.ts'"
   },
