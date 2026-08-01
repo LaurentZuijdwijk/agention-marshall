@@ -35,7 +35,7 @@ export interface Limits {
   maxFileBytes?: number;
   /** Max bytes captured from shell stdout/stderr each. Default: 64 KiB */
   maxOutputBytes?: number;
-  /** Shell command timeout in ms. Default: 30 s */
+  /** Shell command timeout in ms. Default: 120 s */
   timeoutMs?: number;
   /** Max grep results returned. Default: 200 */
   maxSearchResults?: number;

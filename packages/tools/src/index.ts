@@ -21,7 +21,7 @@ export {
 } from './primitives/spawn.js';
 
 export { withApproval } from './factories/approval.js';
-export { createFileTools } from './factories/file-tools.js';
+export { createFileTools, createReadOnlyFileTools } from './factories/file-tools.js';
 export { createShellTool, DEFAULT_COMMAND_POLICY } from './factories/shell-tool.js';
 export { createScratchTools } from './factories/scratch-tools.js';
 export { createGitHubTools } from './factories/github-tools.js';

@@ -165,8 +165,11 @@ test('cheapModelFor returns CHEAP_MODELS entry for mistral', () => {
   assert.equal(cheapModelFor('mistral'), CHEAP_MODELS.mistral);
 });
 
-test('cheapModelFor falls back to PROVIDER_DEFAULTS model for ollama (no cheap model defined)', () => {
-  // ollama has no entry in CHEAP_MODELS
+test('cheapModelFor returns undefined for local providers (no cheap tier exists)', () => {
+  // Local servers have no cheaper sibling to fall back to — the caller has to
+  // decide what that means, which is why an explicit `fast` tier matters most
+  // for llama.cpp/Ollama setups.
   assert.equal(CHEAP_MODELS.ollama, undefined);
-  assert.equal(cheapModelFor('ollama'), PROVIDER_DEFAULTS.ollama.model);
+  assert.equal(cheapModelFor('ollama'), undefined);
+  assert.equal(cheapModelFor('llamacpp'), undefined);
 });

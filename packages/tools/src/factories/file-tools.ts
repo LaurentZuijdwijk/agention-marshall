@@ -55,17 +55,15 @@ function hashContent(content: string): string {
   return createHash('sha256').update(content).digest('hex').slice(0, 16);
 }
 
-export function createFileTools(config: ToolConfig, dedupeCache?: DedupeCache): Tool<string>[] {
-  const { workspaceRoot, approval, limits = {} } = config;
-  const maxFileBytes = limits.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
-  const maxSearchResults = limits.maxSearchResults ?? MAX_SEARCH_RESULTS;
+// ── builders ──────────────────────────────────────────────────────────────────
 
-  // Tracks files read this session — guards write_file / edit_file on existing files.
-  const readFiles = new Set<string>();
-
-  // ── read-only tools ───────────────────────────────────────────────────────
-
-  const read_file = new Tool<string>({
+function buildReadFile(
+  workspaceRoot: string,
+  maxFileBytes: number,
+  readFiles: Set<string>,
+  dedupeCache?: DedupeCache,
+): Tool<string> {
+  return new Tool<string>({
     name: 'read_file',
     description:
       'Read a file within the workspace. Returns content with line numbers. ' +
@@ -111,8 +109,10 @@ export function createFileTools(config: ToolConfig, dedupeCache?: DedupeCache): 
       }
     },
   });
+}
 
-  const list_dir = new Tool<string>({
+function buildListDir(workspaceRoot: string): Tool<string> {
+  return new Tool<string>({
     name: 'list_dir',
     description:
       'List the files and directories inside a workspace directory. ' +
@@ -140,8 +140,10 @@ export function createFileTools(config: ToolConfig, dedupeCache?: DedupeCache): 
       }
     },
   });
+}
 
-  const search = new Tool<string>({
+function buildSearch(workspaceRoot: string, maxSearchResults: number): Tool<string> {
+  return new Tool<string>({
     name: 'search',
     description:
       'Search for a regex pattern across files in the workspace. ' +
@@ -191,8 +193,36 @@ export function createFileTools(config: ToolConfig, dedupeCache?: DedupeCache): 
       }
     },
   });
+}
 
-  // ── state-changing tools (behind approval + write guard) ──────────────────
+// ── public factories ──────────────────────────────────────────────────────────
+
+/** Read-only file tools for use in context sub-agents. */
+export function createReadOnlyFileTools(
+  workspaceRoot: string,
+  limits: ToolConfig['limits'] = {},
+  dedupeCache?: DedupeCache,
+): Tool<string>[] {
+  const maxFileBytes = limits?.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
+  const maxSearchResults = limits?.maxSearchResults ?? MAX_SEARCH_RESULTS;
+  return [
+    buildReadFile(workspaceRoot, maxFileBytes, new Set(), dedupeCache),
+    buildListDir(workspaceRoot),
+    buildSearch(workspaceRoot, maxSearchResults),
+  ];
+}
+
+export function createFileTools(config: ToolConfig, dedupeCache?: DedupeCache): Tool<string>[] {
+  const { workspaceRoot, approval, limits = {} } = config;
+  const maxFileBytes = limits.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
+  const maxSearchResults = limits.maxSearchResults ?? MAX_SEARCH_RESULTS;
+
+  // Shared set: read_file populates it; write_file/edit_file check it.
+  const readFiles = new Set<string>();
+
+  const read_file = buildReadFile(workspaceRoot, maxFileBytes, readFiles, dedupeCache);
+  const list_dir = buildListDir(workspaceRoot);
+  const search = buildSearch(workspaceRoot, maxSearchResults);
 
   const write_file_spec: ToolSpec = {
     name: 'write_file',

@@ -43,7 +43,7 @@ interface ToolConfig {
 interface Limits {
   maxFileBytes?: number;       // default 256 KiB
   maxOutputBytes?: number;     // default 64 KiB per shell stream
-  timeoutMs?: number;          // default 30 s
+  timeoutMs?: number;          // default 120 s
   maxSearchResults?: number;   // default 200
 }
 

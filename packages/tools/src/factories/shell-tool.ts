@@ -42,8 +42,9 @@ export function createShellTool(config: ToolConfig) {
     name: 'run_shell',
     description:
       'Run a shell command inside the workspace directory. ' +
-      'The command runs with a scrubbed environment, a timeout, and ' +
-      'capped output. Returns stdout, stderr, and exit code.',
+      'The command runs with a scrubbed environment, a 120 s timeout, and ' +
+      'capped output. Returns stdout, stderr, and exit code. Long suites ' +
+      '(full test runs, builds) should be scoped down or paged to fit.',
     inputSchema: {
       type: 'object',
       properties: {

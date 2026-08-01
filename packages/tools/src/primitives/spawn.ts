@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 
-export const DEFAULT_TIMEOUT_MS = 30_000;
+export const DEFAULT_TIMEOUT_MS = 120_000;
 export const DEFAULT_MAX_OUTPUT_BYTES = 64 * 1024; // 64 KiB per stream
 
 const ALLOWED_ENV_KEYS: ReadonlySet<string> = new Set([

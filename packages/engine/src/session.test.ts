@@ -138,3 +138,60 @@ test('clear() resets hasSteering', async () => {
   await session.clear();
   assert.equal(session.hasSteering, false);
 });
+
+// ---------------------------------------------------------------------------
+// plan() / review()
+// ---------------------------------------------------------------------------
+
+test('hasPendingPlan is false on a new session', () => {
+  const root = tempRoot();
+  const session = makeSession(root, makeClient());
+  assert.equal(session.hasPendingPlan, false);
+});
+
+test('plan() while a run is already in progress emits an error event', async () => {
+  const root = tempRoot();
+  const events: OutputEvent[] = [];
+  const client = makeClient(events);
+  const session = makeSession(root, client);
+
+  const first = session.run('task one').catch(() => {});
+  const second = session.plan('plan this').catch(() => {});
+
+  await Promise.all([first, second]);
+
+  const errorEvents = events.filter(
+    (e): e is Extract<OutputEvent, { type: 'error' }> => e.type === 'error',
+  );
+  const concurrencyError = errorEvents.find((e) =>
+    e.message.toLowerCase().includes('already running'),
+  );
+  assert.ok(concurrencyError, 'expected an "already running" error event');
+});
+
+test('review() while a run is already in progress emits an error event', async () => {
+  const root = tempRoot();
+  const events: OutputEvent[] = [];
+  const client = makeClient(events);
+  const session = makeSession(root, client);
+
+  const first = session.run('task one').catch(() => {});
+  const second = session.review().catch(() => {});
+
+  await Promise.all([first, second]);
+
+  const errorEvents = events.filter(
+    (e): e is Extract<OutputEvent, { type: 'error' }> => e.type === 'error',
+  );
+  const concurrencyError = errorEvents.find((e) =>
+    e.message.toLowerCase().includes('already running'),
+  );
+  assert.ok(concurrencyError, 'expected an "already running" error event');
+});
+
+test('clear() resets hasPendingPlan', async () => {
+  const root = tempRoot();
+  const session = makeSession(root, makeClient());
+  await session.clear();
+  assert.equal(session.hasPendingPlan, false);
+});
