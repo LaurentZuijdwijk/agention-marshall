@@ -30,7 +30,7 @@ const MODEL_PRESETS: Record<Provider, string[]> = {
   mistral:    ['mistral-large-latest', 'mistral-small-latest', 'codestral-latest'],
   ollama:     ['llama3.2', 'codellama', 'qwen2.5', 'deepseek-r1'],
   llamacpp:   [],
-  openrouter: ['anthropic/claude-sonnet-4.6', 'openai/gpt-4o', 'meta-llama/llama-3.1-70b-instruct'],
+  openrouter: [],
 };
 
 const CUSTOM = '(custom…)';

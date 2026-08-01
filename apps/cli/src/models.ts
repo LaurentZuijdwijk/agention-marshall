@@ -215,6 +215,12 @@ const OPENROUTER_KEEP_FAMILIES = [
   'anthropic/', 'openai/', 'google/', 'deepseek/', 'moonshotai/', 'z-ai/',
   'qwen/', 'minimax/', 'x-ai/', 'mistralai/', 'meta-llama/', 'openrouter/',
 ];
+// Previously the pinned openrouter defaults; now excluded from the picker.
+const OPENROUTER_REMOVE = new Set([
+  'anthropic/claude-sonnet-4.6',
+  'openai/gpt-4o',
+  'meta-llama/llama-3.1-70b-instruct',
+]);
 const OPENROUTER_MAX = 60;
 
 export function parseOpenRouterModels(payload: unknown, pinned: string[] = []): ModelInfo[] {
@@ -236,6 +242,7 @@ export function parseOpenRouterModels(payload: unknown, pinned: string[] = []): 
     // Meta-routers price at -1 and just forward elsewhere.
     if (entry.pricing?.prompt === '-1') continue;
     if (!OPENROUTER_KEEP_FAMILIES.some(f => id.startsWith(f))) continue;
+    if (OPENROUTER_REMOVE.has(id)) continue;
 
     seen.add(id);
     const info: ModelInfo = { id };

@@ -295,6 +295,12 @@ describe('parseOpenRouterModels', () => {
     assert.deepEqual(ids, [OR_OLDER.id, OR_CODING.id]);
   });
 
+  it('drops the removed pinned defaults', () => {
+    const id = 'anthropic/claude-sonnet-4.6';
+    const removed = parseOpenRouterModels({ data: [OR_CODING, { ...OR_NO_TOOLS, id }] }).map(m => m.id);
+    assert.ok(!removed.includes(id), `${id} should be excluded`);
+  });
+
   it('carries context and extra input modalities', () => {
     const [m] = parseOpenRouterModels(payload);
     assert.equal(m.context, 1000000);
