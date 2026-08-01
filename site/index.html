@@ -1,0 +1,679 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>marshall — a coding agent that lives in your terminal</title>
+<meta name="description" content="Marshall is a terminal coding assistant built on Agention. Multi-agent planner/coder/reviewer loop, human-in-the-loop approvals, any provider — Claude, OpenAI, Gemini, OpenRouter or local models.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>◆</text></svg>">
+<style>
+  :root {
+    /* — straight from apps/cli/src/theme.ts — */
+    --brand-from: #8B5CF6;
+    --brand-to:   #22D3EE;
+    --accent: #A78BFA;
+    --user:   #5EEAD4;
+    --tool:   #F472B6;
+    --code:   #7DD3FC;
+    --ok:     #34D399;
+    --warn:   #FBBF24;
+    --error:  #F87171;
+    --muted:  #6B7280;
+    --faint:  #4B5563;
+    --text:   #E5E7EB;
+    --bg:     #0B0D10;
+    --bg-2:   #10131A;
+    --border: #1F2430;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 15px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+
+  /* subtle CRT-ish vignette + scanline shimmer, kept very quiet */
+  body::before {
+    content: "";
+    position: fixed; inset: 0;
+    pointer-events: none;
+    background:
+      radial-gradient(1200px 500px at 50% -10%, rgba(139,92,246,.10), transparent 60%),
+      radial-gradient(900px 500px at 85% 110%, rgba(34,211,238,.07), transparent 60%);
+    z-index: 0;
+  }
+  main { position: relative; z-index: 1; }
+
+  .wrap { max-width: 920px; margin: 0 auto; padding: 0 24px; }
+
+  /* ── gradient text ─────────────────────────────────────────── */
+  .grad {
+    background: linear-gradient(90deg, var(--brand-from), var(--brand-to));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  /* ── nav ───────────────────────────────────────────────────── */
+  nav {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 10;
+    backdrop-filter: blur(10px);
+    background: rgba(11,13,16,.72);
+    border-bottom: 1px solid var(--border);
+  }
+  nav .wrap {
+    display: flex; align-items: center; gap: 18px;
+    height: 52px;
+  }
+  nav .logo { font-weight: 700; letter-spacing: .5px; }
+  nav a { color: var(--muted); text-decoration: none; font-size: 13px; }
+  nav a:hover { color: var(--text); }
+  nav .spacer { flex: 1; }
+  nav .gh {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 12px;
+    color: var(--text);
+  }
+  nav .gh:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* ── hero ──────────────────────────────────────────────────── */
+  header.hero { padding: 140px 0 40px; }
+
+  /* The CLI's block-letter wordmark (apps/cli/src/Banner.tsx), painted with
+     the same banded gradient, reveal wipe and white shimmer sweep. */
+  .ascii-logo {
+    font-size: clamp(4px, 1.55vw, 13px);
+    line-height: 1.15;
+    letter-spacing: 0;
+    white-space: pre;
+    user-select: none;
+  }
+  .ascii-logo .band { transition: none; }
+  .ascii-rule {
+    font-size: clamp(4px, 1.55vw, 13px);
+    line-height: 1;
+    white-space: pre;
+    user-select: none;
+    margin-top: 6px;
+  }
+  .wordmark-cursor {
+    display: inline-block;
+    width: .6em; height: 1em;
+    transform: translateY(.12em);
+    background: linear-gradient(180deg, var(--brand-from), var(--brand-to));
+    animation: blink 1.1s steps(1) infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  .tagline {
+    margin-top: 18px;
+    font-size: clamp(16px, 2.6vw, 21px);
+    color: var(--muted);
+    max-width: 620px;
+  }
+  .tagline b { color: var(--text); font-weight: 600; }
+
+  .cta { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 34px; align-items: center; }
+  .install {
+    border: 1px solid var(--border);
+    background: var(--bg-2);
+    border-radius: 8px;
+    padding: 12px 18px;
+    color: var(--user);
+    user-select: all;
+    font-size: 14px;
+  }
+  .install .prompt { color: var(--accent); user-select: none; }
+  .btn {
+    display: inline-block;
+    border-radius: 8px;
+    padding: 12px 20px;
+    font-size: 14px;
+    font-weight: 600;
+    text-decoration: none;
+    color: #08110f;
+    background: linear-gradient(90deg, var(--brand-from), var(--brand-to));
+  }
+  .btn.ghost {
+    background: transparent;
+    color: var(--text);
+    border: 1px solid var(--border);
+  }
+  .btn.ghost:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* ── terminal ──────────────────────────────────────────────── */
+  .term {
+    margin: 56px 0 20px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--bg-2);
+    box-shadow: 0 30px 80px -30px rgba(139,92,246,.25), 0 10px 40px rgba(0,0,0,.5);
+    overflow: hidden;
+  }
+  .term-bar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    color: var(--faint);
+    font-size: 12px;
+  }
+  .dot { width: 10px; height: 10px; border-radius: 50%; }
+  .dot.r { background: #3a2b2b; } .dot.y { background: #3a3423; } .dot.g { background: #24352c; }
+  .term-bar .title { margin-left: 8px; }
+  .term-body {
+    padding: 18px 20px 22px;
+    font-size: 13.5px;
+    line-height: 1.75;
+    min-height: 380px;
+    white-space: pre-wrap;
+  }
+  .term-body .p   { color: var(--accent); font-weight: 700; }
+  .term-body .u   { color: var(--user); font-weight: 700; }
+  .term-body .a   { color: var(--accent); }
+  .term-body .t   { color: var(--tool); }
+  .term-body .m   { color: var(--muted); }
+  .term-body .f   { color: var(--faint); }
+  .term-body .ok  { color: var(--ok); }
+  .term-body .w   { color: var(--warn); }
+  .term-body .c   { color: var(--code); }
+  .caret {
+    display: inline-block; width: 8px; height: 15px;
+    background: var(--brand-to);
+    vertical-align: -2px;
+    animation: blink 1s steps(1) infinite;
+  }
+
+  /* ── sections ──────────────────────────────────────────────── */
+  section { padding: 72px 0 8px; }
+  h2 {
+    font-size: 13px;
+    letter-spacing: .25em;
+    text-transform: uppercase;
+    color: var(--faint);
+    margin-bottom: 8px;
+  }
+  h3 { font-size: clamp(22px, 3.4vw, 30px); font-weight: 700; margin-bottom: 14px; }
+  .lede { color: var(--muted); max-width: 640px; margin-bottom: 36px; }
+  .lede b { color: var(--text); font-weight: 600; }
+
+  .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+  .card {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--bg-2);
+    padding: 20px;
+    transition: border-color .2s, transform .2s;
+  }
+  .card:hover { border-color: #2c3547; transform: translateY(-2px); }
+  .card .glyph { font-size: 18px; margin-bottom: 10px; }
+  .card h4 { font-size: 15px; margin-bottom: 6px; }
+  .card p { color: var(--muted); font-size: 13.5px; }
+  .card code { color: var(--code); }
+
+  /* ── loop diagram ──────────────────────────────────────────── */
+  .loop {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 14px;
+  }
+  .stage {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px;
+    background: var(--bg-2);
+    position: relative;
+  }
+  .stage .n { color: var(--faint); font-size: 12px; }
+  .stage h4 { margin: 4px 0 6px; }
+  .stage p { color: var(--muted); font-size: 13px; }
+  .stage.plan  { border-top: 2px solid var(--accent); }
+  .stage.code  { border-top: 2px solid var(--tool); }
+  .stage.rev   { border-top: 2px solid var(--user); }
+
+  /* ── providers ─────────────────────────────────────────────── */
+  .providers { display: flex; flex-wrap: wrap; gap: 10px; }
+  .chip {
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 8px 16px;
+    background: var(--bg-2);
+    color: var(--muted);
+    font-size: 13px;
+  }
+  .chip b { color: var(--text); font-weight: 600; }
+  .chip .faint { color: var(--faint); }
+
+  /* ── commands table ────────────────────────────────────────── */
+  .cmds { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--bg-2); }
+  .cmds .row {
+    display: grid;
+    grid-template-columns: 180px 1fr;
+    gap: 16px;
+    padding: 11px 18px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13.5px;
+  }
+  .cmds .row:last-child { border-bottom: 0; }
+  .cmds .row:hover { background: #131826; }
+  .cmds .k { color: var(--accent); }
+  .cmds .d { color: var(--muted); }
+  @media (max-width: 560px) { .cmds .row { grid-template-columns: 1fr; gap: 2px; } }
+
+  /* ── big CTA / footer ──────────────────────────────────────── */
+  .big-cta {
+    margin: 90px 0 40px;
+    text-align: center;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 56px 24px;
+    background:
+      radial-gradient(500px 200px at 50% 0%, rgba(139,92,246,.12), transparent 70%),
+      var(--bg-2);
+  }
+  .big-cta h3 { margin-bottom: 10px; }
+  .big-cta .install { display: inline-block; margin-top: 20px; }
+
+  footer {
+    border-top: 1px solid var(--border);
+    padding: 28px 0 46px;
+    color: var(--faint);
+    font-size: 12.5px;
+    display: flex; flex-wrap: wrap; gap: 14px;
+  }
+  footer a { color: var(--muted); text-decoration: none; }
+  footer a:hover { color: var(--text); }
+  footer .spacer { flex: 1; }
+
+  ::selection { background: rgba(139,92,246,.35); }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <span class="logo grad">marshall</span>
+    <a href="#how">how it works</a>
+    <a href="#providers">providers</a>
+    <a href="#commands">commands</a>
+    <span class="spacer"></span>
+    <a class="gh" href="https://github.com/LaurentZuijdwijk/agention-marshall">github ↗</a>
+  </div>
+</nav>
+
+<main>
+
+<!-- ── hero ─────────────────────────────────────────────────────────── -->
+<header class="hero">
+  <div class="wrap">
+    <div id="hero-logo"></div>
+    <p class="tagline">
+      A coding agent that <b>lives in your terminal</b>. Describe the change —
+      a planner/coder/reviewer loop reads, edits and runs your project,
+      and <b>nothing happens without your approval</b>.
+    </p>
+    <div class="cta">
+      <span class="install"><span class="prompt">❯ </span>npm install -g @marshall/cli</span>
+      <a class="btn" href="https://github.com/LaurentZuijdwijk/agention-marshall">get started</a>
+      <a class="btn ghost" href="#how">how it works</a>
+    </div>
+
+    <!-- live-feeling terminal demo; scripted below -->
+    <div class="term" id="term">
+      <div class="term-bar">
+        <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+        <span class="title">marshall · ~/projects/storefront</span>
+      </div>
+      <div class="term-body" id="term-body"></div>
+    </div>
+  </div>
+</header>
+
+<!-- ── the loop ─────────────────────────────────────────────────────── -->
+<section id="how">
+  <div class="wrap">
+    <h2>how it works</h2>
+    <h3>Three agents, one <span class="grad">feedback loop</span></h3>
+    <p class="lede">
+      Not a single autocomplete on steroids — a <b>planner</b> breaks the task down,
+      a <b>coder</b> executes with a safe tool belt, and a <b>reviewer</b> inspects
+      the diff before you're asked to ship it.
+    </p>
+    <div class="loop">
+      <div class="stage plan">
+        <span class="n">01</span>
+        <h4>◆ planner</h4>
+        <p>Turns "add rate limiting to the API" into an ordered, concrete plan. Runs on your deep tier.</p>
+      </div>
+      <div class="stage code">
+        <span class="n">02</span>
+        <h4>● coder</h4>
+        <p>Reads, edits, runs tests — every write and shell command gated behind an approval you can audit.</p>
+      </div>
+      <div class="stage rev">
+        <span class="n">03</span>
+        <h4>✓ reviewer</h4>
+        <p>Second opinion on the actual diff. Loops with the coder until it holds up — never rubber-stamps.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── features ─────────────────────────────────────────────────────── -->
+<section>
+  <div class="wrap">
+    <h2>why marshall</h2>
+    <h3>Batteries in, <span class="grad">guardrails on</span></h3>
+    <p class="lede">The boring parts — safety, memory, context management — are engineered in, not bolted on.</p>
+    <div class="grid">
+      <div class="card">
+        <div class="glyph" style="color:var(--ok)">✓</div>
+        <h4>Approval for every mutation</h4>
+        <p>Diffs and commands render before they run. Approve once, always-allow per session, or deny — <code>esc</code> denies everything pending.</p>
+      </div>
+      <div class="card">
+        <div class="glyph" style="color:var(--tool)">◆</div>
+        <h4>Two model tiers</h4>
+        <p>A frontier model reasons; a cheap or local model fetches and summarises. <code>/model fast</code> points the grunt work at Ollama and your bill drops.</p>
+      </div>
+      <div class="card">
+        <div class="glyph" style="color:var(--user)">↪</div>
+        <h4>Interrupt &amp; steer</h4>
+        <p><code>esc</code> stops at the next safe boundary — no half-written files (atomic writes) — and your next message course-corrects instead of restarting.</p>
+      </div>
+      <div class="card">
+        <div class="glyph" style="color:var(--code)">▲</div>
+        <h4>Sandboxed tools</h4>
+        <p>File tools are hard-jailed to the workspace; shell runs with a scrubbed env, timeouts, output caps and a command policy.</p>
+      </div>
+      <div class="card">
+        <div class="glyph" style="color:var(--warn)">·</div>
+        <h4>Memory that doesn't leak tokens</h4>
+        <p>Rolling compression with pinned goals, tool-result masking, read dedup — plus <code>AGENTS.md</code> project memory loaded at session start.</p>
+      </div>
+      <div class="card">
+        <div class="glyph" style="color:var(--accent)">❯</div>
+        <h4>Feels like a terminal, because it is one</h4>
+        <p>Streaming tokens, ctrl-r for live reasoning, markdown rendering, slash-command autocomplete. Built on Ink.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── providers ────────────────────────────────────────────────────── -->
+<section id="providers">
+  <div class="wrap">
+    <h2>providers</h2>
+    <h3>Your keys, your models, <span class="grad">your call</span></h3>
+    <p class="lede">Hosted frontier or fully local — switch any time with <b>/model</b>. First run walks you through it.</p>
+    <div class="providers">
+      <span class="chip"><b>claude</b> <span class="faint">· ANTHROPIC_API_KEY</span></span>
+      <span class="chip"><b>openai</b> <span class="faint">· OPENAI_API_KEY</span></span>
+      <span class="chip"><b>gemini</b> <span class="faint">· GEMINI_API_KEY</span></span>
+      <span class="chip"><b>mistral</b> <span class="faint">· MISTRAL_API_KEY</span></span>
+      <span class="chip"><b>openrouter</b> <span class="faint">· 200+ models, one key</span></span>
+      <span class="chip"><b>ollama</b> <span class="faint">· no key needed</span></span>
+      <span class="chip"><b>llama.cpp</b> <span class="faint">· no key needed</span></span>
+    </div>
+  </div>
+</section>
+
+<!-- ── commands ─────────────────────────────────────────────────────── -->
+<section id="commands">
+  <div class="wrap">
+    <h2>commands</h2>
+    <h3>Small surface, <span class="grad">muscle memory</span></h3>
+    <p class="lede"></p>
+    <div class="cmds">
+      <div class="row"><span class="k">/model</span><span class="d">pick deep + fast models; wizard probes local servers and lists what's actually loaded</span></div>
+      <div class="row"><span class="k">/plan &lt;task&gt;</span><span class="d">get a plan before touching code — used as context for the task</span></div>
+      <div class="row"><span class="k">/review</span><span class="d">second opinion on the current workspace state</span></div>
+      <div class="row"><span class="k">/tokens</span><span class="d">show ↑ in / ↓ out / duration after each response</span></div>
+      <div class="row"><span class="k">/stream</span><span class="d">toggle live token streaming</span></div>
+      <div class="row"><span class="k">/clear</span><span class="d">reset history, caches and scratch notes</span></div>
+      <div class="row"><span class="k">ctrl-r</span><span class="d">toggle live chain-of-thought on thinking models</span></div>
+      <div class="row"><span class="k">esc / esc esc</span><span class="d">interrupt &amp; steer / force-quit</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ── big cta ──────────────────────────────────────────────────────── -->
+<section>
+  <div class="wrap">
+    <div class="big-cta">
+      <h2>get started</h2>
+      <h3>Your terminal is <span class="grad">already open</span></h3>
+      <p class="lede" style="margin: 0 auto; max-width: 480px;">Node 22+, one npm install, thirty seconds of setup wizard.</p>
+      <span class="install"><span class="prompt">❯ </span>npm install -g @marshall/cli &amp;&amp; marshall</span>
+      <div style="margin-top: 26px;">
+        <a class="btn" href="https://github.com/LaurentZuijdwijk/agention-marshall">star on github</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap" style="display:flex; gap:14px; flex-wrap:wrap;">
+    <span>◆ <span class="grad">marshall</span> — built on <a href="https://docs.agention.ai">agention</a></span>
+    <span class="spacer" style="flex:1"></span>
+    <a href="https://github.com/LaurentZuijdwijk/agention-marshall">github</a>
+    <span>·</span>
+    <span>MIT licensed</span>
+  </div>
+</footer>
+
+<script>
+// ── wordmark ──────────────────────────────────────────────────────────────
+// The exact banner from apps/cli/src/Banner.tsx: block-letter logo painted
+// with the brand gradient in 18 bands, revealed left→right with a white
+// shimmer riding the edge, plus the gradient rule that grows underneath.
+(function () {
+  const host = document.getElementById('hero-logo');
+  if (!host) return;
+
+  const LOGO = [
+    '███╗   ███╗ █████╗ ██████╗ ███████╗██╗  ██╗ █████╗ ██╗     ██╗     ',
+    '████╗ ████║██╔══██╗██╔══██╗██╔════╝██║  ██║██╔══██╗██║     ██║     ',
+    '██╔████╔██║███████║██████╔╝███████╗███████║███████║██║     ██║     ',
+    '██║╚██╔╝██║██╔══██║██╔══██╗╚════██║██╔══██║██╔══██║██║     ██║     ',
+    '██║ ╚═╝ ██║██║  ██║██║  ██║███████║██║  ██║██║  ██║███████╗███████╗',
+    '╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚══════╝',
+  ];
+  const BANDS = 18;
+  const FROM = [0x8B, 0x5C, 0xF6];  // #8B5CF6
+  const TO   = [0x22, 0xD3, 0xEE];  // #22D3EE
+  const mix = (a, b, t) =>
+    `rgb(${a.map((x, i) => Math.round(x + (b[i] - x) * Math.max(0, Math.min(1, t)))).join(',')})`;
+  const brand = t => mix(FROM, TO, t);
+
+  const width = LOGO[0].length;
+  const band = Math.ceil(width / BANDS);
+
+  const pre = document.createElement('div');
+  pre.className = 'ascii-logo';
+  const rule = document.createElement('div');
+  rule.className = 'ascii-rule';
+  host.appendChild(pre);
+  host.appendChild(rule);
+
+  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  function paint(reveal, sweep) {
+    const shown = Math.round(reveal * width);
+    const glowRadius = width * 0.18;
+    pre.innerHTML = '';
+    rule.innerHTML = '';
+
+    for (const row of LOGO) {
+      const line = document.createElement('div');
+      for (let b = 0; b < Math.ceil(width / band); b++) {
+        const start = b * band;
+        const seg = row.slice(start, start + band);
+        const visible = Math.max(0, Math.min(seg.length, shown - start));
+        const masked = seg.slice(0, visible) + ' '.repeat(seg.length - visible);
+        const centre = start + seg.length / 2;
+        let color = brand(centre / width);
+        const dist = Math.abs(centre - sweep);
+        if (dist < glowRadius) color = blend(color, dist, glowRadius);
+        const span = document.createElement('span');
+        span.className = 'band';
+        span.style.color = color;
+        span.textContent = masked;
+        line.appendChild(span);
+      }
+      pre.appendChild(line);
+    }
+
+    // gradient rule, growing with the reveal
+    const drawn = Math.round(reveal * width);
+    const rline = document.createElement('div');
+    for (let b = 0; b < Math.ceil(width / band); b++) {
+      const start = b * band;
+      const len = Math.min(band, width - start);
+      const visible = Math.max(0, Math.min(len, drawn - start));
+      const span = document.createElement('span');
+      span.style.color = brand((start + len / 2) / width);
+      span.textContent = '━'.repeat(visible) + ' '.repeat(len - visible);
+      rline.appendChild(span);
+    }
+    rule.appendChild(rline);
+  }
+
+  // blend a css rgb() string toward white by 1 - dist/radius
+  function blend(rgbStr, dist, radius) {
+    const m = rgbStr.match(/\d+/g).map(Number);
+    const t = 1 - dist / radius;
+    return mix(m, [255, 255, 255], t);
+  }
+
+  if (reduced) { paint(1, -width); return; }
+
+  // reveal wipe (0→1 over ~900ms), then one shimmer sweep across, then still
+  const DURATION = 900;
+  const t0 = performance.now();
+  function frame(now) {
+    const t = Math.min(1, (now - t0) / DURATION);
+    const eased = 1 - Math.pow(1 - t, 3);
+    paint(eased, eased * width);
+    if (t < 1) { requestAnimationFrame(frame); return; }
+    // shimmer pass
+    const s0 = performance.now();
+    const SWEEP = 1400;
+    function shimmer(now2) {
+      const s = (now2 - s0) / SWEEP;
+      if (s >= 1) { paint(1, -width); return; }
+      paint(1, s * width * 1.4 - width * 0.2);
+      requestAnimationFrame(shimmer);
+    }
+    requestAnimationFrame(shimmer);
+  }
+
+  const io = new IntersectionObserver((entries) => {
+    if (entries[0].isIntersecting) { io.disconnect(); requestAnimationFrame(frame); }
+  }, { threshold: 0.1 });
+  io.observe(host);
+})();
+</script>
+
+<script>
+// ── scripted terminal demo ──────────────────────────────────────────────
+// Replays a realistic session in a loop: user prompt, tool calls with
+// approval, a streamed answer and the usage line. Pure DOM, no deps.
+(function () {
+  const body = document.getElementById('term-body');
+  if (!body) return;
+
+  const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  const line = (html) => { const d = document.createElement('div'); d.innerHTML = html; body.appendChild(d); };
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const speed = reduced ? 0 : 1;
+
+  async function type(el, text, cls, cps) {
+    const span = document.createElement('span');
+    if (cls) span.className = cls;
+    el.appendChild(span);
+    for (const ch of text) {
+      span.textContent += ch;
+      await sleep((1000 / cps) * speed);
+    }
+    return span;
+  }
+
+  async function run() {
+    body.innerHTML = '';
+
+    // user prompt
+    let d = document.createElement('div');
+    d.innerHTML = '<span class="p">❯ </span>';
+    body.appendChild(d);
+    await type(d, 'add input validation to the signup form', 'u', 28 * speed || 28);
+    await sleep(500 * speed);
+
+    // plan
+    line('<span class="f">│ </span><span class="a">◆ planner</span> <span class="f">· 4 steps</span>');
+    await sleep(350 * speed);
+    line('<span class="f">│   1. read src/components/SignupForm.tsx</span>');
+    line('<span class="f">│   2. add zod schema + field errors</span>');
+    line('<span class="f">│   3. wire submit handler</span>');
+    line('<span class="f">│   4. run the test suite</span>');
+    await sleep(500 * speed);
+
+    // tool calls + approvals
+    const tools = [
+      ['read_file',  'src/components/SignupForm.tsx', null],
+      ['edit_file',  'src/components/SignupForm.tsx', '±42 lines'],
+      ['write_file', 'src/validation/signup.ts', '+28 lines'],
+      ['run_shell',  'npm test -- SignupForm', '12 passed'],
+    ];
+    for (const [name, arg, note] of tools) {
+      line(`<span class="t">● ${esc(name)}</span>  <span class="m">${esc(arg)}</span>` +
+           (name === 'read_file'
+             ? ''
+             : ` <span class="ok">✓ approved</span>`) +
+           (note ? ` <span class="f">· ${esc(note)}</span>` : ''));
+      await sleep(420 * speed);
+    }
+    line('<span class="f">  usage · ↑8 214  ↓1 036  · 9.4s</span>');
+    await sleep(400 * speed);
+
+    // streamed answer
+    d = document.createElement('div');
+    d.innerHTML = '<span class="a">◆ </span>';
+    body.appendChild(d);
+    await type(d, 'Done. SignupForm now validates email, password strength and ' +
+      'matching confirmation client-side with zod, shows inline errors, and the ' +
+      'suite passes — 12/12.', null, 60 * speed || 60);
+
+    // idle prompt
+    await sleep(700 * speed);
+    d = document.createElement('div');
+    d.innerHTML = '<span class="p">❯ </span>';
+    body.appendChild(d);
+    const caret = document.createElement('span');
+    caret.className = 'caret';
+    d.appendChild(caret);
+
+    await sleep(4200 * speed || 4200);
+    run();
+  }
+
+  // Only animate while visible — saves battery and avoids layout thrash.
+  const io = new IntersectionObserver((entries) => {
+    if (entries[0].isIntersecting) { io.disconnect(); run(); }
+  }, { threshold: 0.2 });
+  io.observe(body);
+})();
+</script>
+
+</body>
+</html>
