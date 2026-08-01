@@ -381,7 +381,7 @@
       <div class="card">
         <div class="glyph" style="color:var(--tool)">◆</div>
         <h4>Two model tiers</h4>
-        <p>A frontier model reasons; a cheap or local model fetches and summarises. <code>/model fast</code> points the grunt work at Ollama and your bill drops.</p>
+        <p>A frontier model reasons; a cheap or local model fetches and summarises. <code>/model fast</code> points the grunt work at llama.cpp or Ollama and your bill (and latency) drop.</p>
       </div>
       <div class="card">
         <div class="glyph" style="color:var(--user)">↪</div>
@@ -412,16 +412,22 @@
   <div class="wrap">
     <h2>providers</h2>
     <h3>Your keys, your models, <span class="grad">your call</span></h3>
-    <p class="lede">Hosted frontier or fully local — switch any time with <b>/model</b>. First run walks you through it.</p>
+    <p class="lede">Hosted frontier, a single OpenRouter key, or fully local — switch any time with <b>/model</b>. First run walks you through it.</p>
     <div class="providers">
       <span class="chip"><b>claude</b> <span class="faint">· ANTHROPIC_API_KEY</span></span>
       <span class="chip"><b>openai</b> <span class="faint">· OPENAI_API_KEY</span></span>
       <span class="chip"><b>gemini</b> <span class="faint">· GEMINI_API_KEY</span></span>
       <span class="chip"><b>mistral</b> <span class="faint">· MISTRAL_API_KEY</span></span>
-      <span class="chip"><b>openrouter</b> <span class="faint">· 200+ models, one key</span></span>
-      <span class="chip"><b>ollama</b> <span class="faint">· no key needed</span></span>
-      <span class="chip"><b>llama.cpp</b> <span class="faint">· no key needed</span></span>
+      <span class="chip"><b>openrouter</b> <span class="faint">· live model list, one key</span></span>
+      <span class="chip"><b>llama.cpp</b> <span class="faint">· local · no key needed</span></span>
+      <span class="chip"><b>ollama</b> <span class="faint">· local · no key needed</span></span>
     </div>
+    <p class="lede" style="margin-top:22px;">
+      <b>llama.cpp</b> isn't an afterthought — it's a first-class provider. Point it at any
+      OpenAI-compatible <code>llama-server</code> and marshall probes the router to see which
+      model is actually <b>loaded</b>, not just what's on disk, so you're never surprised by a
+      lazy cold start mid-task. Same treatment for Ollama — resident models listed first.
+    </p>
   </div>
 </section>
 
@@ -432,7 +438,7 @@
     <h3>Small surface, <span class="grad">muscle memory</span></h3>
     <p class="lede"></p>
     <div class="cmds">
-      <div class="row"><span class="k">/model</span><span class="d">pick deep + fast models; wizard probes local servers and lists what's actually loaded</span></div>
+      <div class="row"><span class="k">/model</span><span class="d">pick deep + fast models; wizard lists OpenRouter's live catalogue or probes local servers for what's actually loaded</span></div>
       <div class="row"><span class="k">/plan &lt;task&gt;</span><span class="d">get a plan before touching code — used as context for the task</span></div>
       <div class="row"><span class="k">/review</span><span class="d">second opinion on the current workspace state</span></div>
       <div class="row"><span class="k">/tokens</span><span class="d">show ↑ in / ↓ out / duration after each response</span></div>

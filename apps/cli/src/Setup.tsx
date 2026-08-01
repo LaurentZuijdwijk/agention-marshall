@@ -6,7 +6,7 @@ import type { Provider, Tier } from '@marshall/engine';
 import { C, G, brand } from './theme.js';
 import { traceRender } from './renderTrace.js';
 import {
-  parseLlamaCppModels, applyLlamaCppProps, parseOllamaModels,
+  parseLlamaCppModels, applyLlamaCppProps, parseOllamaModels, parseOpenRouterModels,
   formatContext, formatBytes, windowRange,
 } from './models.js';
 import type { ModelInfo } from './models.js';
@@ -78,6 +78,12 @@ async function fetchLocalModels(host: string): Promise<ModelInfo[]> {
   return [];
 }
 
+/** OpenRouter's public catalogue — no key required, already curated. */
+async function fetchOpenRouterModels(pinned: string[]): Promise<ModelInfo[]> {
+  const listed = await getJson('https://openrouter.ai/api/v1/models');
+  return listed ? parseOpenRouterModels(listed, pinned) : [];
+}
+
 // ── title ─────────────────────────────────────────────────────────────────────
 
 const WORDMARK = 'marshall';
@@ -117,8 +123,9 @@ function Hint({ children }: { children: React.ReactNode }) {
 /** Sentinel row offered when picking the fast tier — means "don't tier at all". */
 const SAME_AS_DEEP = '(same as deep)';
 
-function ProviderSelect({ onSelect, offerSameAsDeep }: {
+function ProviderSelect({ onSelect, onBack, offerSameAsDeep }: {
   onSelect: (p: Provider | typeof SAME_AS_DEEP) => void;
+  onBack: () => void;
   offerSameAsDeep?: boolean;
 }) {
   const rows: Array<{ value: Provider | typeof SAME_AS_DEEP; hint: string }> = offerSameAsDeep
@@ -131,6 +138,7 @@ function ProviderSelect({ onSelect, offerSameAsDeep }: {
     if (key.upArrow)   { setCursor(c => (c - 1 + rows.length) % rows.length); return; }
     if (key.downArrow) { setCursor(c => (c + 1) % rows.length); return; }
     if (key.return)    { onSelect(rows[cursor].value); return; }
+    if (key.escape)    { onBack(); return; }
   });
 
   return (
@@ -202,7 +210,7 @@ function ModelSelect({
   onBack: () => void;
 }) {
   traceRender('ModelSelect', provider);
-  const fetchesModels = provider === 'ollama' || provider === 'llamacpp';
+  const fetchesModels = provider === 'ollama' || provider === 'llamacpp' || provider === 'openrouter';
   const presets = (): ModelInfo[] => MODEL_PRESETS[provider].map(id => ({ id }));
 
   // null = still probing the server
@@ -213,6 +221,19 @@ function ModelSelect({
 
   useEffect(() => {
     if (!fetchesModels) return;
+
+    if (provider === 'openrouter') {
+      fetchOpenRouterModels(MODEL_PRESETS.openrouter).then(fetched => {
+        if (fetched.length > 0) {
+          setModels(fetched);
+          setFetchNote(`${fetched.length} coding-capable models from openrouter.ai`);
+        } else {
+          setModels(presets());
+          setFetchNote('openrouter.ai unreachable — showing defaults');
+        }
+      });
+      return;
+    }
 
     fetchLocalModels(host).then(fetched => {
       if (fetched.length > 0) {
@@ -377,6 +398,11 @@ export interface SetupProps {
   deepLabel?: string;
   /** `model === null` means "same as deep" — clear any fast override. */
   onComplete: (provider: Provider | null, model: string | null, host?: string, apiKey?: string) => void;
+  /**
+   * Cancel the wizard outright (ESC from the provider step). Returns to the
+   * default chat screen instead of proceeding — how a `/model` was aborted.
+   */
+  onExit?: () => void;
 }
 
 /** What each tier is *for*, so the choice isn't guesswork. */
@@ -385,7 +411,7 @@ const TIER_BLURB: Record<Tier, string> = {
   fast: 'reads files, searches and summarises for the deep model',
 };
 
-export function Setup({ initial, tier = 'deep', deepLabel, onComplete }: SetupProps) {
+export function Setup({ initial, tier = 'deep', deepLabel, onComplete, onExit }: SetupProps) {
   const [step, setStep] = useState<Step>({ name: 'provider' });
   traceRender('Setup', `step=${step.name}`);
   const [hostInput, setHostInput] = useState('');
@@ -421,6 +447,7 @@ export function Setup({ initial, tier = 'deep', deepLabel, onComplete }: SetupPr
         </Box>
         <ProviderSelect
           offerSameAsDeep={tier === 'fast'}
+          onBack={onExit ?? (() => {})}
           onSelect={(p) => {
             if (p === SAME_AS_DEEP) { onComplete(null, null); return; }
             if (providerHasHost(p)) {
@@ -431,7 +458,7 @@ export function Setup({ initial, tier = 'deep', deepLabel, onComplete }: SetupPr
             }
           }}
         />
-        <Hint>{`↑↓ move ${G.bullet} enter select`}</Hint>
+        <Hint>{`↑↓ move ${G.bullet} enter select${onExit ? ` ${G.bullet} esc cancel` : ''}`}</Hint>
       </Box>
     );
   }

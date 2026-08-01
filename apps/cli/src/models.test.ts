@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  parseLlamaCppModels, applyLlamaCppProps, parseOllamaModels,
+  parseLlamaCppModels, applyLlamaCppProps, parseOllamaModels, parseOpenRouterModels,
   formatContext, formatParams, formatBytes, windowRange,
 } from './models.js';
 
@@ -225,5 +225,85 @@ describe('windowRange', () => {
   it('never scrolls past either end', () => {
     assert.deepEqual(windowRange(17, 0, 9), { start: 0, end: 9 });
     assert.deepEqual(windowRange(17, 16, 9), { start: 8, end: 17 });
+  });
+});
+
+// ── openrouter ────────────────────────────────────────────────────────────────
+
+const OR_CODING = {
+  id: 'anthropic/claude-sonnet-5',
+  created: 1782843083,
+  context_length: 1000000,
+  architecture: { input_modalities: ['text', 'image', 'file'], output_modalities: ['text'] },
+  supported_parameters: ['max_tokens', 'tools', 'temperature'],
+  pricing: { prompt: '0.000002', completion: '0.00001' },
+};
+const OR_OLDER = {
+  id: 'deepseek/deepseek-v4-flash',
+  created: 1777000666,
+  context_length: 1048576,
+  architecture: { input_modalities: ['text'], output_modalities: ['text'] },
+  supported_parameters: ['tools'],
+  pricing: { prompt: '0.00000014', completion: '0.00000028' },
+};
+const OR_IMAGE_GEN = {
+  id: 'google/gemini-3.1-flash-image',
+  created: 1781754065,
+  architecture: { input_modalities: ['image', 'text'], output_modalities: ['image', 'text'] },
+  supported_parameters: ['max_tokens'],
+  pricing: { prompt: '0.0000005', completion: '0.000003' },
+};
+const OR_ROUTER = {
+  id: 'openrouter/auto',
+  created: 1699401600,
+  architecture: { input_modalities: ['text'], output_modalities: ['text'] },
+  supported_parameters: ['tools'],
+  pricing: { prompt: '-1', completion: '-1' },
+};
+const OR_NO_TOOLS = {
+  id: 'qwen/qwen3-8b',
+  created: 1745876632,
+  architecture: { input_modalities: ['text'], output_modalities: ['text'] },
+  supported_parameters: ['temperature'],
+  pricing: { prompt: '0.0000001', completion: '0.0000004' },
+};
+const OR_ROLEPLAY = {
+  id: 'thedrummer/cydonia-24b-v4.1',
+  created: 1758931878,
+  architecture: { input_modalities: ['text'], output_modalities: ['text'] },
+  supported_parameters: ['tools'],
+  pricing: { prompt: '0.0000003', completion: '0.0000005' },
+};
+
+describe('parseOpenRouterModels', () => {
+  const payload = { data: [OR_CODING, OR_OLDER, OR_IMAGE_GEN, OR_ROUTER, OR_NO_TOOLS, OR_ROLEPLAY] };
+
+  it('keeps text-out tool-calling models from headline families', () => {
+    const ids = parseOpenRouterModels(payload).map(m => m.id);
+    assert.deepEqual(ids, [OR_CODING.id, OR_OLDER.id]);
+  });
+
+  it('drops image generation, meta-routers, non-tool and off-family models', () => {
+    const ids = parseOpenRouterModels(payload).map(m => m.id);
+    for (const dropped of [OR_IMAGE_GEN.id, OR_ROUTER.id, OR_NO_TOOLS.id, OR_ROLEPLAY.id]) {
+      assert.ok(!ids.includes(dropped), `${dropped} should be filtered out`);
+    }
+  });
+
+  it('sorts pinned presets first, then newest first', () => {
+    const ids = parseOpenRouterModels(payload, [OR_OLDER.id]).map(m => m.id);
+    assert.deepEqual(ids, [OR_OLDER.id, OR_CODING.id]);
+  });
+
+  it('carries context and extra input modalities', () => {
+    const [m] = parseOpenRouterModels(payload);
+    assert.equal(m.context, 1000000);
+    assert.equal(m.contextSource, 'configured');
+    assert.deepEqual(m.extraModalities, ['image', 'file']);
+  });
+
+  it('returns an empty list for an unrecognised payload', () => {
+    assert.deepEqual(parseOpenRouterModels({}), []);
+    assert.deepEqual(parseOpenRouterModels(null), []);
   });
 });

@@ -685,6 +685,7 @@ export function App({
           initial={{ provider: seed.provider, model: seed.model, host: seed.host }}
           onComplete={(p: Provider | null, m: string | null, h?: string, k?: string) =>
             handleSetupComplete(tier, chain, p, m, h, k)}
+          onExit={() => setMode({ type: 'idle' })}
         />
       </Box>
     );

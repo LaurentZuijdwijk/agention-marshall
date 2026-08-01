@@ -199,6 +199,68 @@ export function parseOllamaModels(tags: unknown, running?: unknown): ModelInfo[]
   return models;
 }
 
+// ── openrouter ────────────────────────────────────────────────────────────────
+
+/**
+ * Parse OpenRouter's /api/v1/models catalogue. No auth needed.
+ *
+ * The full list is ~340 entries, much of it image/audio generation,
+ * roleplay fine-tunes and dated snapshots — not useful in a coding-agent
+ * picker. We keep text-out models that can call tools, drop routers and
+ * preview/beta variants, prefer the vendor's headline families, and cap the
+ * result so the list stays navigable. Anything missing is one "(custom…)"
+ * away.
+ */
+const OPENROUTER_KEEP_FAMILIES = [
+  'anthropic/', 'openai/', 'google/', 'deepseek/', 'moonshotai/', 'z-ai/',
+  'qwen/', 'minimax/', 'x-ai/', 'mistralai/', 'meta-llama/', 'openrouter/',
+];
+const OPENROUTER_MAX = 60;
+
+export function parseOpenRouterModels(payload: unknown, pinned: string[] = []): ModelInfo[] {
+  const data = (payload as { data?: unknown })?.data;
+  if (!Array.isArray(data)) return [];
+
+  const seen = new Set<string>();
+  const models: ModelInfo[] = [];
+  for (const raw of data) {
+    const entry = raw as Record<string, any>;
+    if (typeof entry?.id !== 'string' || entry.id === '') continue;
+    const id: string = entry.id;
+    if (seen.has(id)) continue; // :free variants share a canonical slug
+
+    const supported: unknown[] = Array.isArray(entry.supported_parameters) ? entry.supported_parameters : [];
+    if (!supported.includes('tools')) continue;
+    const outputs: unknown[] = entry.architecture?.output_modalities ?? [];
+    if (!outputs.includes('text') || outputs.some(o => o !== 'text')) continue;
+    // Meta-routers price at -1 and just forward elsewhere.
+    if (entry.pricing?.prompt === '-1') continue;
+    if (!OPENROUTER_KEEP_FAMILIES.some(f => id.startsWith(f))) continue;
+
+    seen.add(id);
+    const info: ModelInfo = { id };
+    if (typeof entry.context_length === 'number' && entry.context_length > 0) {
+      info.context = entry.context_length;
+      info.contextSource = 'configured';
+    }
+    const inputs: unknown[] = entry.architecture?.input_modalities ?? [];
+    const extra = inputs.filter((m): m is string => typeof m === 'string' && m !== 'text');
+    if (extra.length > 0) info.extraModalities = extra;
+    models.push(info);
+  }
+
+  // Presets first (they're the recommended defaults), then newest first —
+  // `created` is a unix timestamp and freshest families matter most here.
+  const pinnedSet = new Set(pinned);
+  const withCreated = models.map(m => {
+    const raw = (data as any[]).find(e => e?.id === m.id);
+    return { m, created: typeof raw?.created === 'number' ? raw.created : 0 };
+  });
+  withCreated.sort((a, b) =>
+    Number(pinnedSet.has(b.m.id)) - Number(pinnedSet.has(a.m.id)) || b.created - a.created);
+  return withCreated.slice(0, OPENROUTER_MAX).map(x => x.m);
+}
+
 // ── list windowing ────────────────────────────────────────────────────────────
 
 /**

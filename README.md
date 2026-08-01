@@ -133,4 +133,4 @@ npm test          # run all workspace tests
 
 ## Out of scope
 
-True OS-level isolation, network egress control, multi-repo workspaces, editors beyond the reference VS Code extension, exposing this assistant *as* an MCP server, and non-Claude providers (the config seam is there; swap-in is future work).
+True OS-level isolation, network egress control, multi-repo workspaces, editors beyond the reference VS Code extension, and exposing this assistant *as* an MCP server.
