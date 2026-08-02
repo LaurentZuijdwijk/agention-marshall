@@ -22,27 +22,14 @@
   "dependencies": {
     "@agentionai/agents": "^1.0.0",
     "@anthropic-ai/sdk": "^0.71.2",
-    "@agentionai/marshall-tools": "*"
+    "@agentionai/marshall-tools": "*",
+    "openai": "^6.42.0",
+    "@google/generative-ai": "^0.24.0",
+    "@mistralai/mistralai": "^1.13.0"
   },
   "devDependencies": {
     "@types/node": "^25.0.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"
-  },
-  "peerDependencies": {
-    "openai": ">=4",
-    "@google/generative-ai": ">=0.2",
-    "@mistralai/mistralai": ">=0.4"
-  },
-  "peerDependenciesMeta": {
-    "openai": {
-      "optional": true
-    },
-    "@google/generative-ai": {
-      "optional": true
-    },
-    "@mistralai/mistralai": {
-      "optional": true
-    }
   }
 }
