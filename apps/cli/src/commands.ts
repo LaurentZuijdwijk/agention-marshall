@@ -7,7 +7,7 @@
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import type { AgentProfile } from '@marshall/engine';
+import type { AgentProfile } from '@agentionai/marshall-engine';
 import type { Approvals } from './hooks/useApprovals.js';
 import type { PreferencesController } from './hooks/usePreferences.js';
 import type { Transcript } from './hooks/useTranscript.js';

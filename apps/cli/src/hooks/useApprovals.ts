@@ -1,5 +1,5 @@
 import { useRef } from 'react';
-import type { ApprovalRequest, ApprovalDecision } from '@marshall/tools';
+import type { ApprovalRequest, ApprovalDecision } from '@agentionai/marshall-tools';
 
 interface PendingApproval {
   request: ApprovalRequest;

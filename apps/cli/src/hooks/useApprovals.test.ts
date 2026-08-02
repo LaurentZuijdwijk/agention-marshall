@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createApprovalQueue } from './useApprovals.js';
-import type { ApprovalRequest } from '@marshall/tools';
+import type { ApprovalRequest } from '@agentionai/marshall-tools';
 
 const req = (name: string): ApprovalRequest =>
   ({ toolName: name, description: name, detail: '' } as ApprovalRequest);

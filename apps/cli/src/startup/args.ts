@@ -8,7 +8,7 @@
 // rest of startup then reads plain optional strings.
 
 import { parseArgs } from 'node:util';
-import { PROVIDER_DEFAULTS } from '@marshall/engine';
+import { PROVIDER_DEFAULTS } from '@agentionai/marshall-engine';
 
 const OPTIONS = {
   provider:         { type: 'string',  short: 'p' },

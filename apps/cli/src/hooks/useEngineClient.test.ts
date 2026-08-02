@@ -2,8 +2,8 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createEngineClient } from './useEngineClient.js';
 import type { TranscriptPort, TurnOutcome } from './useEngineClient.js';
-import type { OutputEvent } from '@marshall/engine';
-import type { ApprovalRequest } from '@marshall/tools';
+import type { OutputEvent } from '@agentionai/marshall-engine';
+import type { ApprovalRequest } from '@agentionai/marshall-tools';
 
 interface Pushed { role: string; content: string; extra?: Record<string, unknown> }
 

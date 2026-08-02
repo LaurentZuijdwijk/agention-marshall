@@ -8,8 +8,8 @@
 // Pure and free of process state, so the precedence rules can be tested without
 // a filesystem or an argv.
 
-import type { AgentProfile, Provider } from '@marshall/engine';
-import { PROVIDER_DEFAULTS } from '@marshall/engine';
+import type { AgentProfile, Provider } from '@agentionai/marshall-engine';
+import { PROVIDER_DEFAULTS } from '@agentionai/marshall-engine';
 import { savedDeepProfile, savedProviders } from '../services/config-store.js';
 import type { SavedConfig } from '../services/config-store.js';
 import type { CliFlags } from './args.js';

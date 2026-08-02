@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Limits, CommandPolicy } from '@marshall/tools';
+import type { Limits, CommandPolicy } from '@agentionai/marshall-tools';
 
 export type Provider = 'claude' | 'openai' | 'gemini' | 'mistral' | 'ollama' | 'llamacpp' | 'openrouter';
 

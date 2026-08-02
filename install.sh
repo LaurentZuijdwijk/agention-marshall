@@ -14,8 +14,8 @@ if [ "$node_major" -lt "$REQUIRED_NODE_MAJOR" ]; then
   exit 1
 fi
 
-echo "installing @marshall/cli..."
-if ! npm install -g @marshall/cli; then
+echo "installing @agentionai/marshall-cli..."
+if ! npm install -g @agentionai/marshall-cli; then
   echo "" >&2
   echo "error: global install failed." >&2
   echo "  - If the package was not found, it may not be published yet — see the README for running from source." >&2

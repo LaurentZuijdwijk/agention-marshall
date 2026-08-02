@@ -4,8 +4,8 @@
 // `approval` and `setup` are mutually exclusive, and the states that carry data
 // (the pending approval, the login in flight) carry it with them.
 
-import type { Tier } from '@marshall/engine';
-import type { ApprovalRequest } from '@marshall/tools';
+import type { Tier } from '@agentionai/marshall-engine';
+import type { ApprovalRequest } from '@agentionai/marshall-tools';
 import type { LoginSession } from './login.js';
 
 export type Mode =

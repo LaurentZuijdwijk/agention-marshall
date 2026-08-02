@@ -1,5 +1,5 @@
-import type { AgentProfile, EngineConfig } from '@marshall/engine';
-import { DEFAULT_COMMAND_POLICY } from '@marshall/tools';
+import type { AgentProfile, EngineConfig } from '@agentionai/marshall-engine';
+import { DEFAULT_COMMAND_POLICY } from '@agentionai/marshall-tools';
 
 /**
  * One row in the benchmark matrix: a main agent profile, plus an optional

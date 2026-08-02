@@ -26,7 +26,7 @@ function tail(output: string): string {
   return summaryStart >= 0 ? lines.slice(summaryStart).join(' | ') : lines.slice(-6).join(' | ');
 }
 
-/** Runs the real @marshall/engine package's own test suite (TS, via tsx) inside a
+/** Runs the real @agentionai/marshall-engine package's own test suite (TS, via tsx) inside a
  *  copied repo snapshot — used by the real-repo task. */
 async function runEngineTests(workspaceDir: string): Promise<CheckResult> {
   const engineDir = join(workspaceDir, 'packages', 'engine');
@@ -83,7 +83,7 @@ export const TASKS: BenchTask[] = [
     // fixture. Built by copying the working repo (see conversation notes) with
     // node_modules symlinked back to the original to avoid a full reinstall.
     fixtureDir: '/tmp/marshall-realrepo-baseline',
-    prompt: "The @marshall/engine package's test suite (packages/engine) has one failing test. Find it, understand why it fails, and fix it so the full suite passes. Don't delete or skip the failing test to make it pass.",
+    prompt: "The @agentionai/marshall-engine package's test suite (packages/engine) has one failing test. Find it, understand why it fails, and fix it so the full suite passes. Don't delete or skip the failing test to make it pass.",
     check: runEngineTests,
   },
 ];

@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
-import { Session } from '@marshall/engine';
-import type { AgentProfile, ClientInterface, Provider } from '@marshall/engine';
+import { Session } from '@agentionai/marshall-engine';
+import type { AgentProfile, ClientInterface, Provider } from '@agentionai/marshall-engine';
 import { saveConfig } from '../services/config-store.js';
 
 /**

@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { homedir } from 'node:os';
 import { Box, Static, useApp, useStdout } from 'ink';
-import { Session } from '@marshall/engine';
-import type { AgentProfile, Provider, Tier } from '@marshall/engine';
-import type { ApprovalDecision } from '@marshall/tools';
+import { Session } from '@agentionai/marshall-engine';
+import type { AgentProfile, Provider, Tier } from '@agentionai/marshall-engine';
+import type { ApprovalDecision } from '@agentionai/marshall-tools';
 import { Setup } from './view/Setup.js';
 import { Banner } from './view/Banner.js';
 import type { HeaderMeta } from './view/Banner.js';

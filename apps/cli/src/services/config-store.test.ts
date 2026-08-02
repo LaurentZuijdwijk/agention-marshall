@@ -8,7 +8,7 @@ import {
   saveConfig, configPath,
 } from './config-store.js';
 import type { SavedProviderEntry } from './config-store.js';
-import type { AgentProfile } from '@marshall/engine';
+import type { AgentProfile } from '@agentionai/marshall-engine';
 
 const LOCAL: AgentProfile = { provider: 'llamacpp', model: 'qwen', host: 'http://192.168.1.248:8080' };
 const ROUTER: AgentProfile = { provider: 'openrouter', model: 'deepseek/v4', apiKey: 'or-key' };

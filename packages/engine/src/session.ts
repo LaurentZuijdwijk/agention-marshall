@@ -12,9 +12,9 @@ import {
   createScratchTools,
   createGitHubTools,
   createDedupeCache,
-} from '@marshall/tools';
-import type { ToolConfig, DedupeCache } from '@marshall/tools';
-import type { ApprovalDecision, ApprovalRequest } from '@marshall/tools';
+} from '@agentionai/marshall-tools';
+import type { ToolConfig, DedupeCache } from '@agentionai/marshall-tools';
+import type { ApprovalDecision, ApprovalRequest } from '@agentionai/marshall-tools';
 import {
   createAgent,
   CONTEXT_AGENT_PROMPT,

@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
-import type { OutputEvent, ClientInterface } from '@marshall/engine';
-import type { ApprovalRequest, ApprovalDecision } from '@marshall/tools';
+import type { OutputEvent, ClientInterface } from '@agentionai/marshall-engine';
+import type { ApprovalRequest, ApprovalDecision } from '@agentionai/marshall-tools';
 import { formatToolInput } from '../format.js';
 import { G } from '../view/theme.js';
 import type { Message, MessageRole } from '../view/message.js';

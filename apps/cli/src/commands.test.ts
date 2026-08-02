@@ -5,7 +5,7 @@ import type { CommandDeps, CommandSession } from './commands.js';
 import type { Transcript } from './hooks/useTranscript.js';
 import type { Mode } from './mode.js';
 import type { Message } from './view/message.js';
-import type { AgentProfile } from '@marshall/engine';
+import type { AgentProfile } from '@agentionai/marshall-engine';
 
 // ── fakes ─────────────────────────────────────────────────────────────────────
 

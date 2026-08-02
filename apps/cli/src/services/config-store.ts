@@ -1,7 +1,7 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import type { AgentProfile } from '@marshall/engine';
+import type { AgentProfile } from '@agentionai/marshall-engine';
 
 // ── the on-disk shape ─────────────────────────────────────────────────────────
 //

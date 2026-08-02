@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { TextInput } from './TextInput.js';
-import { PROVIDER_DEFAULTS } from '@marshall/engine';
-import type { Provider, Tier } from '@marshall/engine';
+import { PROVIDER_DEFAULTS } from '@agentionai/marshall-engine';
+import type { Provider, Tier } from '@agentionai/marshall-engine';
 import { C, G, brand } from './theme.js';
 import { traceRender } from '../renderTrace.js';
 import {

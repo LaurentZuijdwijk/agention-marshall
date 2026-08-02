@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Box, Text, useInput } from 'ink';
-import type { ApprovalRequest, ApprovalDecision } from '@marshall/tools';
+import type { ApprovalRequest, ApprovalDecision } from '@agentionai/marshall-tools';
 import { C, G } from './theme.js';
 
 // ── approval select ────────────────────────────────────────────────────────────

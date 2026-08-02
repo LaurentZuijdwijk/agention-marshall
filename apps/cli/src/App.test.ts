@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 // This package is ESM — `__dirname` doesn't exist here.
 const here = dirname(fileURLToPath(import.meta.url));
-import { Session } from '@marshall/engine';
+import { Session } from '@agentionai/marshall-engine';
 import React from 'react';
 import { App } from './App.js';
 import { render } from 'ink';

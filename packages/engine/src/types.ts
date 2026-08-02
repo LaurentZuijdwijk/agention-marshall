@@ -1,4 +1,4 @@
-import type { ApprovalRequest, ApprovalDecision } from '@marshall/tools';
+import type { ApprovalRequest, ApprovalDecision } from '@agentionai/marshall-tools';
 
 export type { ApprovalRequest, ApprovalDecision };
 
