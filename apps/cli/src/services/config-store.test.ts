@@ -1,11 +1,11 @@
-import { describe, it } from 'node:test';
+import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, statSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import {
   buildConfig, upsertProvider, loadConfig, savedDeepProfile, savedProviders, savedHosts,
-  saveConfig, configPath,
+  saveConfig, configPath, globalConfigPath,
 } from './config-store.js';
 import type { SavedProviderEntry } from './config-store.js';
 import type { AgentProfile } from '@agentionai/marshall-engine';
@@ -18,6 +18,21 @@ function write(root: string, contents: unknown): void {
   mkdirSync(join(root, '.marshall'), { recursive: true });
   writeFileSync(configPath(root), JSON.stringify(contents));
 }
+function writeGlobal(contents: unknown): void {
+  mkdirSync(dirname(globalConfigPath()), { recursive: true });
+  writeFileSync(globalConfigPath(), JSON.stringify(contents));
+}
+
+// Every test gets its own $XDG_CONFIG_HOME so the global config never touches
+// the real developer machine, and tests can't see each other's state.
+const originalXdg = process.env.XDG_CONFIG_HOME;
+beforeEach(() => {
+  process.env.XDG_CONFIG_HOME = mkdtempSync(join(tmpdir(), 'xdg-'));
+});
+afterEach(() => {
+  if (originalXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+  else process.env.XDG_CONFIG_HOME = originalXdg;
+});
 
 describe('upsertProvider', () => {
   it('inserts a provider that is not yet known', () => {
@@ -84,17 +99,41 @@ describe('loadConfig', () => {
     assert.deepEqual(loadConfig(ws()), {});
   });
 
-  it('survives a corrupt file rather than crashing startup', () => {
+  it('creates the global config on first run', () => {
+    loadConfig(ws());
+    assert.deepEqual(JSON.parse(readFileSync(globalConfigPath(), 'utf8')), {});
+  });
+
+  it('survives a corrupt project-local file rather than crashing startup', () => {
     const root = ws();
     mkdirSync(join(root, '.marshall'), { recursive: true });
     writeFileSync(configPath(root), '{ not json');
     assert.deepEqual(loadConfig(root), {});
   });
 
-  it('survives a file that parses to a non-object', () => {
+  it('survives a project-local file that parses to a non-object', () => {
     const root = ws();
     write(root, 'just a string');
     assert.deepEqual(loadConfig(root), {});
+  });
+
+  it('reads settings from the global config when there is no project override', () => {
+    writeGlobal({ provider: 'claude', model: 'opus' });
+    assert.deepEqual(loadConfig(ws()), { provider: 'claude', model: 'opus' });
+  });
+
+  it('deep-merges a project-local override on top of the global config, project winning', () => {
+    writeGlobal({
+      provider: 'claude', apiKey: 'global-secret', models: { fast: { provider: 'claude', model: 'haiku' } },
+    });
+    const root = ws();
+    write(root, { provider: 'openrouter', model: 'deepseek/v4' });
+
+    const merged = loadConfig(root);
+    assert.equal(merged.provider, 'openrouter', 'project value wins');
+    assert.equal(merged.model, 'deepseek/v4', 'project value wins');
+    assert.equal(merged.apiKey, 'global-secret', 'global-only fields survive the merge');
+    assert.deepEqual(merged.models?.fast, { provider: 'claude', model: 'haiku' }, 'untouched nested global fields survive');
   });
 });
 
@@ -122,40 +161,41 @@ describe('reading tiers back', () => {
 });
 
 describe('saveConfig', () => {
-  it('round-trips through the reader', async () => {
-    const root = ws();
-    await saveConfig(root, ROUTER, LOCAL);
-    const back = loadConfig(root);
+  it('round-trips through the reader, via the global config', async () => {
+    await saveConfig(ROUTER, LOCAL);
+    const back = loadConfig(ws());
     assert.equal(savedDeepProfile(back).model, 'deepseek/v4');
     assert.deepEqual(savedHosts(back), { llamacpp: 'http://192.168.1.248:8080' });
   });
 
   it('preserves a provider entry written by an earlier session', async () => {
-    const root = ws();
-    write(root, { providers: [{ provider: 'ollama', host: 'http://localhost:11434' }] });
-    await saveConfig(root, ROUTER, undefined);
-    assert.equal(savedHosts(loadConfig(root)).ollama, 'http://localhost:11434');
+    writeGlobal({ providers: [{ provider: 'ollama', host: 'http://localhost:11434' }] });
+    await saveConfig(ROUTER, undefined);
+    assert.equal(savedHosts(loadConfig(ws())).ollama, 'http://localhost:11434');
   });
 
   it('switching provider keeps the previous provider’s host', async () => {
-    const root = ws();
-    await saveConfig(root, LOCAL, undefined);          // using llama.cpp
-    await saveConfig(root, ROUTER, undefined);         // switch to OpenRouter
-    const hosts = savedHosts(loadConfig(root));
+    await saveConfig(LOCAL, undefined);          // using llama.cpp
+    await saveConfig(ROUTER, undefined);         // switch to OpenRouter
+    const hosts = savedHosts(loadConfig(ws()));
     assert.equal(hosts.llamacpp, 'http://192.168.1.248:8080', 'the llama.cpp host must survive the switch');
   });
 
   it('writes 0600, since the file can hold an API key', async () => {
-    const root = ws();
-    await saveConfig(root, ROUTER, undefined);
-    assert.equal(statSync(configPath(root)).mode & 0o777, 0o600);
+    await saveConfig(ROUTER, undefined);
+    assert.equal(statSync(globalConfigPath()).mode & 0o777, 0o600);
   });
 
   it('recovers from a corrupt existing file instead of throwing', async () => {
+    mkdirSync(dirname(globalConfigPath()), { recursive: true });
+    writeFileSync(globalConfigPath(), 'not json at all');
+    await saveConfig(ROUTER, undefined);
+    assert.equal(JSON.parse(readFileSync(globalConfigPath(), 'utf8')).provider, 'openrouter');
+  });
+
+  it('never writes to the project-local override', async () => {
     const root = ws();
-    mkdirSync(join(root, '.marshall'), { recursive: true });
-    writeFileSync(configPath(root), 'not json at all');
-    await saveConfig(root, ROUTER, undefined);
-    assert.equal(JSON.parse(readFileSync(configPath(root), 'utf8')).provider, 'openrouter');
+    await saveConfig(ROUTER, undefined);
+    assert.equal(existsSync(configPath(root)), false);
   });
 });

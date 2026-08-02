@@ -94,7 +94,7 @@ export function useSession(options: UseSessionOptions): SessionController {
         setSavedHosts(prev => ({ ...prev, [profile.provider as Provider]: profile.host }));
       }
     }
-    void saveConfig(workspaceRoot, deep, fast).catch(() => {});
+    void saveConfig(deep, fast).catch(() => {});
   };
 
   const applyProfiles = (deep: AgentProfile, fast: AgentProfile | undefined) => {
