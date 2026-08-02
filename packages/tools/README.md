@@ -1,4 +1,4 @@
-# @agention/marshall-tools
+# @agentionai/marshall-tools
 
 Reusable, safe-by-default tool implementations for the Marshall coding assistant. Provides Agention `Tool` instances for file operations, shell execution, a private scratch area, and GitHub — all scoped to a workspace directory with a human-in-the-loop approval gate on every state-changing action.
 
