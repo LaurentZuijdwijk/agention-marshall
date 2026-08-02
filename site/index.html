@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>marshall — a coding agent that lives in your terminal</title>
-<meta name="description" content="Marshall is a terminal coding assistant built on Agention. A planner/coder/reviewer loop reads, edits and runs your project — with an approval gate on every write. Claude, OpenAI, Gemini, Mistral, OpenRouter, or fully local via llama.cpp and Ollama.">
+<title>marshall — a local-first coding agent in your terminal</title>
+<meta name="description" content="Marshall is a local-first terminal coding assistant built on Agention. Your code stays on your machine. A planner/coder/reviewer loop reads, edits and runs your project — with an approval gate on every write. Run fully local via llama.cpp or Ollama, or connect any cloud provider.">
 <link rel="canonical" href="https://marshall.agention.ai/">
 <meta name="color-scheme" content="dark">
 <meta name="theme-color" content="#0B0D10">
@@ -14,16 +14,16 @@
      deployed from /site via GitHub Pages. og:image must stay an absolute URL. -->
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="marshall">
-<meta property="og:title" content="marshall — a coding agent that lives in your terminal">
-<meta property="og:description" content="A planner/coder/reviewer loop that reads, edits and runs your project. Nothing mutates without your approval. Any provider — hosted or fully local.">
+<meta property="og:title" content="marshall — a local-first coding agent in your terminal">
+<meta property="og:description" content="A planner/coder/reviewer loop that reads, edits and runs your project. Your code stays on your machine. Nothing mutates without your approval. Run fully local or connect any cloud provider.">
 <meta property="og:url" content="https://marshall.agention.ai/">
 <meta property="og:image" content="https://marshall.agention.ai/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="marshall — a coding agent that lives in your terminal">
+<meta property="og:image:alt" content="marshall — a local-first coding agent in your terminal">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="marshall — a coding agent that lives in your terminal">
-<meta name="twitter:description" content="A planner/coder/reviewer loop that reads, edits and runs your project. Nothing mutates without your approval.">
+<meta name="twitter:title" content="marshall — a local-first coding agent in your terminal">
+<meta name="twitter:description" content="A planner/coder/reviewer loop that reads, edits and runs your project. Your code stays on your machine. Nothing mutates without your approval.">
 <meta name="twitter:image" content="https://marshall.agention.ai/og.png">
 
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>◆</text></svg>">
@@ -422,10 +422,10 @@
 <!-- ── hero ─────────────────────────────────────────────────────────── -->
 <header class="hero">
   <div class="wrap">
-    <h1 class="sr-only">marshall — a coding agent that lives in your terminal</h1>
+    <h1 class="sr-only">marshall — a local-first coding agent in your terminal</h1>
     <div id="hero-logo" aria-hidden="true"></div>
     <p class="tagline">
-      A coding agent that <b>lives in your terminal</b>. Describe the change —
+      A coding agent that <b>runs on your machine</b>. Your code never leaves —
       a planner/coder/reviewer loop reads, edits and runs your project,
       and <b>nothing happens without your approval</b>.
     </p>
@@ -488,14 +488,19 @@
     <p class="lede">The boring parts — safety, memory, context management — are engineered in, not bolted on.</p>
     <div class="grid">
       <div class="card">
+        <div class="glyph" style="color:var(--ok)" aria-hidden="true">🔒</div>
+        <h4>Your code stays on your machine</h4>
+        <p>Run fully local with llama.cpp or Ollama — zero network calls, zero telemetry. When you do connect a cloud provider, only the prompt travels, never your source files.</p>
+      </div>
+      <div class="card">
         <div class="glyph" style="color:var(--ok)" aria-hidden="true">✓</div>
         <h4>Approval for every mutation</h4>
         <p><code>write_file</code>, <code>edit_file</code> and <code>run_shell</code> render their diff or command before they run. Approve once, always-allow for the session, or deny — <code>esc</code> denies everything pending.</p>
       </div>
       <div class="card">
         <div class="glyph" style="color:var(--tool)" aria-hidden="true">◆</div>
-        <h4>Two model tiers</h4>
-        <p>A frontier model reasons; a cheap or local model fetches and summarises. <code>/model fast</code> points the grunt work at llama.cpp or Ollama and your bill (and latency) drop.</p>
+        <h4>Mix local &amp; cloud</h4>
+        <p>Pair a paid model for deep reasoning with a local model for context fetching and tool calls. <code>/model deep claude</code> + <code>/model fast ollama</code> — the best of both, lower cost, lower latency.</p>
       </div>
       <div class="card">
         <div class="glyph" style="color:var(--user)" aria-hidden="true">↪</div>
@@ -528,13 +533,14 @@
     <h3>Your keys, your models, <span class="grad">your call</span></h3>
     <p class="lede">Hosted frontier, a single OpenRouter key, or fully local — switch any time with <b>/model</b>. First run walks you through it, and <code>marshall login</code> signs in with a Claude account instead of a key.</p>
     <div class="providers">
+      <span class="chip"><b>openrouter</b> <span class="faint">· live model list, one key</span></span>
+      <span class="chip"><b>llama.cpp</b> <span class="faint">· local · no key needed</span></span>
+      <span class="chip"><b>ollama</b> <span class="faint">· local · no key needed</span></span>
+      <span class="chip"><b>openai compatible</b> <span class="faint">· custom URL · optional API key</span></span>
       <span class="chip"><b>claude</b> <span class="faint">· ANTHROPIC_API_KEY or login</span></span>
       <span class="chip"><b>openai</b> <span class="faint">· OPENAI_API_KEY</span></span>
       <span class="chip"><b>gemini</b> <span class="faint">· GEMINI_API_KEY</span></span>
       <span class="chip"><b>mistral</b> <span class="faint">· MISTRAL_API_KEY</span></span>
-      <span class="chip"><b>openrouter</b> <span class="faint">· live model list, one key</span></span>
-      <span class="chip"><b>llama.cpp</b> <span class="faint">· local · no key needed</span></span>
-      <span class="chip"><b>ollama</b> <span class="faint">· local · no key needed</span></span>
     </div>
     <p class="lede" style="margin-top:22px;">
       <b>llama.cpp</b> isn't an afterthought — it's a first-class provider. Point it at any
@@ -592,7 +598,7 @@
     <div class="big-cta">
       <h2>get started</h2>
       <h3>Your terminal is <span class="grad">already open</span></h3>
-      <p class="lede" style="margin: 0 auto; max-width: 480px;">Node 22+, one npm install, thirty seconds of setup wizard. No account required if you're running local models.</p>
+      <p class="lede" style="margin: 0 auto; max-width: 480px;">Node 22+, one npm install, thirty seconds of setup wizard. Run fully local — no account, no API keys, nothing leaves your machine.</p>
       <button class="install" type="button" data-copy="npm install -g @agentionai/marshall-cli && marshall">
         <span class="cmd"><span class="prompt" aria-hidden="true">❯ </span>npm install -g @agentionai/marshall-cli &amp;&amp; marshall</span>
         <span class="copy" aria-hidden="true">copy</span>
