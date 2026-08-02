@@ -18,6 +18,9 @@ const KEY = {
   enter:     '\r',
 };
 
+/** What a terminal in bracketed-paste mode actually puts on stdin. */
+const paste = (text: string) => `\u001B[200~${text}\u001B[201~`;
+
 function fakeStdout(sink: (chunk: string) => void): Writable {
   const stdout = new Writable({
     write(chunk, _encoding, cb) { sink(chunk.toString()); cb(); },
@@ -48,7 +51,12 @@ const tickTwice = async () => { await tick(); await tick(); };
  * A controlled TextInput, the way the App uses it: the parent owns the value.
  * `rewrite` lets a test act as the parent and replace the value mid-edit.
  */
-function mount(options: { initial?: string; mask?: string; placeholder?: string } = {}) {
+function mount(options: {
+  initial?: string;
+  mask?: string;
+  placeholder?: string;
+  onPaste?: (text: string) => string;
+} = {}) {
   let output = '';
   const submitted: string[] = [];
   let rewrite: (value: string) => void = () => {};
@@ -62,6 +70,7 @@ function mount(options: { initial?: string; mask?: string; placeholder?: string 
       value,
       mask: options.mask,
       placeholder: options.placeholder,
+      onPaste: options.onPaste,
       onChange: setValue,
       onSubmit: (v: string) => { submitted.push(v); setValue(''); },
     });
@@ -86,6 +95,8 @@ function mount(options: { initial?: string; mask?: string; placeholder?: string 
     /** Everything written so far, ANSI removed — Ink emits control sequences and
      *  text in separate chunks, so the last chunk alone is rarely the frame. */
     get screen() { return strip(output); },
+    /** With the control sequences left in, for assertions about terminal modes. */
+    get raw() { return output; },
     submitted,
     unmount: () => instance.unmount(),
   };
@@ -190,5 +201,115 @@ describe('TextInput', () => {
     await input.type('x');
     const after = input.screen.slice(input.screen.lastIndexOf('type a task') + 1);
     assert.match(after, /x/);
+  });
+
+  describe('paste', () => {
+    it('turns on bracketed paste mode', async () => {
+      // This is what makes the terminal wrap pasted text in markers, so it can
+      // be told apart from typing. Without it a paste is just keystrokes, and a
+      // chunk boundary landing on a line break submits the prompt mid-paste.
+      const input = mount(); active = input;
+      await tickTwice();
+
+      assert.match(input.raw, /\[\?2004h/);
+    });
+
+    it('keeps a multi-line paste whole, as newlines', async () => {
+      // The bug: terminals send line breaks in pasted text as CR, and a CR left
+      // in the value makes the terminal redraw each line over the last one.
+      const input = mount(); active = input;
+      await input.type(paste('first\rsecond\r\nthird'));
+
+      assert.equal(input.value, 'first\nsecond\nthird');
+      assert.ok(!input.value.includes('\r'), 'no carriage return may survive into the value');
+    });
+
+    it('does not submit on the newlines inside a paste', async () => {
+      const input = mount(); active = input;
+      await input.type(paste('one\rtwo'));
+
+      assert.deepEqual(input.submitted, [], 'a pasted line break is text, not enter');
+    });
+
+    it('still submits on a real enter after a paste', async () => {
+      const input = mount(); active = input;
+      await input.type(paste('one\rtwo'));
+      await input.type(KEY.enter);
+
+      assert.deepEqual(input.submitted, ['one\ntwo']);
+    });
+
+    it('inserts the paste at the cursor, not at the end', async () => {
+      const input = mount({ initial: 'ac' }); active = input;
+      await input.type(KEY.left);
+      await input.type(paste('b'));
+
+      assert.equal(input.value, 'abc');
+    });
+
+    it('inserts what onPaste returns, and reports the original to it', async () => {
+      const seen: string[] = [];
+      const input = mount({ onPaste: (text) => { seen.push(text); return '[collapsed]'; } });
+      active = input;
+      await input.type(paste('lots\rof\rlines'));
+
+      assert.deepEqual(seen, ['lots\nof\nlines'], 'onPaste sees normalised text, in full');
+      assert.equal(input.value, '[collapsed]');
+    });
+
+    it('normalises a paste that arrives as plain keystrokes', async () => {
+      // Terminals that ignore bracketed paste deliver the text through the
+      // ordinary input channel, where it is the CR that does the damage.
+      const input = mount(); active = input;
+      await input.type('alpha\rbeta');
+
+      assert.equal(input.value, 'alpha\nbeta');
+    });
+
+    it('routes an unbracketed multi-line paste through onPaste too', async () => {
+      const input = mount({ onPaste: () => '[collapsed]' }); active = input;
+      await input.type('alpha\rbeta');
+
+      assert.equal(input.value, '[collapsed]');
+    });
+
+    it('drops the line ending a copied line brings with it', async () => {
+      // Copying a line from a browser or a file takes its terminator too. In a
+      // single-value field that terminator is never wanted: the wizard's API key
+      // would be saved with a newline welded onto it.
+      const input = mount(); active = input;
+      await input.type(paste('sk-ant-secret\r'));
+
+      assert.equal(input.value, 'sk-ant-secret');
+      assert.deepEqual(input.submitted, [], 'and it still is not an enter');
+    });
+
+    it('drops a trailing line ending from an unbracketed paste too', async () => {
+      const input = mount(); active = input;
+      await input.type('sk-ant-secret\r');
+
+      assert.equal(input.value, 'sk-ant-secret');
+    });
+
+    it('keeps the line breaks inside the text, only the trailing ones go', async () => {
+      const input = mount(); active = input;
+      await input.type(paste('first\r\rsecond\r\r'));
+
+      assert.equal(input.value, 'first\n\nsecond');
+    });
+
+    it('ignores a paste that is nothing but line endings', async () => {
+      const input = mount({ initial: 'kept' }); active = input;
+      await input.type(paste('\r\r'));
+
+      assert.equal(input.value, 'kept');
+    });
+
+    it('leaves ordinary typing alone when onPaste is set', async () => {
+      const input = mount({ onPaste: () => '[collapsed]' }); active = input;
+      await input.type('a', 'b');
+
+      assert.equal(input.value, 'ab', 'single characters are not pastes');
+    });
   });
 });

@@ -21,6 +21,7 @@ import { useApprovals } from './hooks/useApprovals.js';
 import { useEngineClient } from './hooks/useEngineClient.js';
 import type { TranscriptPort } from './hooks/useEngineClient.js';
 import { usePreferences } from './hooks/usePreferences.js';
+import { usePasteBuffer } from './hooks/usePasteBuffer.js';
 import { useSession } from './hooks/useSession.js';
 import { useKeyBindings } from './hooks/useKeyBindings.js';
 import { startLogin, completeLogin } from './login.js';
@@ -102,6 +103,7 @@ export function App({
   const prefs = usePreferences();
   const transcript = useTranscript();
   const approvals = useApprovals();
+  const pasteBuffer = usePasteBuffer();
 
   // ── the header row ─────────────────────────────────────────────────────────
   const headerMeta = (deep: AgentProfile, fast?: AgentProfile): HeaderMeta => ({
@@ -238,8 +240,12 @@ export function App({
 
   // ── submitting ─────────────────────────────────────────────────────────────
   const handleSubmit = (value: string) => {
-    const text = value.trim();
+    // Expand before anything reads the text — the placeholder is a display
+    // device, and every branch below (login code, slash command, task) wants
+    // what the user actually pasted.
+    const text = pasteBuffer.expand(value).trim();
     setInput('');
+    pasteBuffer.clear();
     if (!text) return;
 
     if (mode.type === 'login-pending') {
@@ -340,6 +346,7 @@ export function App({
           kind={mode.type === 'login-pending' ? 'login' : steering ? 'steering' : 'task'}
           value={input}
           ghost={ghost}
+          onPaste={pasteBuffer.capture}
           onChange={setInput}
           onSubmit={handleSubmit}
         />
