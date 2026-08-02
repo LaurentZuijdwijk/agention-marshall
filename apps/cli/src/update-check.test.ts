@@ -36,7 +36,7 @@ describe('updateNotice', () => {
   it('names both versions and how to upgrade', () => {
     const notice = updateNotice('2.0.0', '1.0.0', '@agentionai/marshall-cli');
     assert.match(notice!, /1\.0\.0 → 2\.0\.0/);
-    assert.match(notice!, /npm install -g @marshall\/cli@latest/);
+    assert.match(notice!, /npm install -g @agentionai\/marshall-cli@latest/);
   });
 
   it('says nothing when there is nothing newer', () => {
