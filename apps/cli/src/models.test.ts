@@ -295,6 +295,12 @@ describe('parseOpenRouterModels', () => {
     assert.deepEqual(ids, [OR_OLDER.id, OR_CODING.id]);
   });
 
+  it('puts free models first within each tier', () => {
+    const freeOlder = { ...OR_OLDER, id: OR_OLDER.id + ':free' };
+    const data = [OR_CODING, freeOlder];
+    assert.deepEqual(parseOpenRouterModels({ data }).map(m => m.id), [freeOlder.id, OR_CODING.id]);
+  });
+
   it('drops the removed pinned defaults', () => {
     const id = 'anthropic/claude-sonnet-4.6';
     const removed = parseOpenRouterModels({ data: [OR_CODING, { ...OR_NO_TOOLS, id }] }).map(m => m.id);

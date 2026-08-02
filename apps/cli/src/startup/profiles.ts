@@ -1,0 +1,115 @@
+// ── resolving the model profiles ──────────────────────────────────────────────
+//
+// Three sources feed every profile, in this order: CLI flag → saved config →
+// default. The saved config itself has two layers (the current `models.deep` /
+// `models.fast` pair, and the flat pre-tier keys), which `config-store` already
+// flattens for us.
+//
+// Pure and free of process state, so the precedence rules can be tested without
+// a filesystem or an argv.
+
+import type { AgentProfile, Provider } from '@marshall/engine';
+import { PROVIDER_DEFAULTS } from '@marshall/engine';
+import { savedDeepProfile, savedProviders } from '../services/config-store.js';
+import type { SavedConfig } from '../services/config-store.js';
+import type { CliFlags } from './args.js';
+
+/** A startup problem the user can fix — reported as a message, not a stack. */
+export class StartupError extends Error {}
+
+export interface ResolvedProfiles {
+  /** The deep tier: the model that writes code, plans and reviews. */
+  agentProfile: AgentProfile;
+  /** The fast tier. Absent means no tiering — every role runs on the deep one. */
+  fastProfile?: AgentProfile;
+  contextAgentProfile?: AgentProfile;
+  plannerAgentProfile?: AgentProfile;
+  reviewerAgentProfile?: AgentProfile;
+  maxTokens?: number;
+}
+
+/**
+ * Local servers are cheap to run long and have no per-token cost, so they get a
+ * far larger output budget than the hosted default of 8192.
+ */
+const DEFAULT_MAX_TOKENS_BY_PROVIDER: Partial<Record<Provider, number>> = {
+  llamacpp: 32768,
+  ollama:   32768,
+};
+
+function checkProvider(name: string, label: string): Provider {
+  if (!Object.keys(PROVIDER_DEFAULTS).includes(name)) {
+    throw new StartupError(`Unknown ${label} "${name}". Valid: ${Object.keys(PROVIDER_DEFAULTS).join(', ')}`);
+  }
+  return name as Provider;
+}
+
+export function resolveProfiles(flags: CliFlags, config: SavedConfig): ResolvedProfiles {
+  const saved = savedDeepProfile(config);
+  // Per-provider last-used host/key — lets each provider keep its own settings
+  // as the user switches between them, instead of one flat host being overwritten.
+  const byProvider = savedProviders(config);
+
+  const provider = checkProvider(flags.provider ?? saved.provider ?? 'claude', 'provider');
+
+  const agentProfile: AgentProfile = {
+    provider,
+    // undefined when given neither on the CLI nor in saved config — that is what
+    // puts the App into the setup wizard on first run.
+    model:  flags.model ?? saved.model,
+    apiKey: flags.apiKey ?? saved.apiKey ?? byProvider[provider]?.apiKey,
+    host:   flags.host   ?? saved.host   ?? byProvider[provider]?.host,
+  };
+
+  return {
+    agentProfile,
+    fastProfile: resolveFastProfile(flags, config, provider, agentProfile),
+    // Role overrides reuse the deep tier's provider, key and host — only the
+    // model differs.
+    contextAgentProfile:  roleProfile(agentProfile, flags.contextModel),
+    plannerAgentProfile:  roleProfile(agentProfile, flags.plannerModel),
+    reviewerAgentProfile: roleProfile(agentProfile, flags.reviewerModel),
+    maxTokens: flags.maxTokens
+      ? parseInt(flags.maxTokens, 10)
+      : DEFAULT_MAX_TOKENS_BY_PROVIDER[provider],
+  };
+}
+
+/**
+ * The fast tier defaults to the deep tier's provider and host, since the common
+ * case is a smaller model on the same server — but every part can be set
+ * independently, so the two tiers can sit on entirely different providers
+ * (hosted deep, local fast).
+ */
+function resolveFastProfile(
+  flags: CliFlags,
+  config: SavedConfig,
+  provider: Provider,
+  deep: AgentProfile,
+): AgentProfile | undefined {
+  const saved = config.models?.fast;
+  // Validated before the model check, so a typo'd --fast-provider is reported
+  // even when it would not have produced a profile.
+  const fastProvider = checkProvider(flags.fastProvider ?? saved?.provider ?? provider, 'fast provider');
+
+  const model = flags.fastModel ?? saved?.model;
+  if (!model) return undefined;
+
+  const sameProvider = fastProvider === provider;
+
+  return {
+    provider: fastProvider,
+    model,
+    // Only inherit the key when the tiers share a provider — a local fast tier
+    // must not be handed a hosted provider's credentials.
+    apiKey: sameProvider ? (flags.apiKey ?? savedDeepProfile(config).apiKey) : saved?.apiKey,
+    host: flags.fastHost
+      ?? saved?.host
+      ?? savedProviders(config)[fastProvider]?.host
+      ?? (sameProvider ? deep.host : undefined),
+  };
+}
+
+function roleProfile(deep: AgentProfile, model: string | undefined): AgentProfile | undefined {
+  return model ? { ...deep, model } : undefined;
+}

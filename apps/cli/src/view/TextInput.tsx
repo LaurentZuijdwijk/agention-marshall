@@ -12,8 +12,34 @@
 // next keystroke inserts at the stale offset ("/mo" + "del" → "model/"…).
 
 import React, { useState } from 'react';
-import { Text, useInput } from 'ink';
+import { Text, useInput, usePaste } from 'ink';
 import chalk from 'chalk';
+
+/**
+ * Terminals send a line break inside pasted text as CR, not LF.
+ *
+ * A raw CR that reaches the rendered value is not inert: the terminal acts on
+ * it and returns to column 0, so every pasted line was drawn on top of the one
+ * before it — the paste looked shredded even though the value was intact.
+ * Normalising on the way in keeps CR out of the value entirely, which is the
+ * only place it can be fixed once and stay fixed.
+ */
+export function normalizeNewlines(text: string): string {
+  return text.replace(/\r\n?/g, '\n');
+}
+
+/**
+ * What actually gets inserted when text is pasted.
+ *
+ * Trailing newlines are dropped: they come from copying whole lines, not from
+ * anything the user meant to type. Keeping them would be actively wrong in the
+ * single-value fields — an API key pasted with its line ending used to submit
+ * the wizard, and once pastes stopped submitting it would have carried a
+ * newline into the saved config instead.
+ */
+export function normalizePaste(text: string): string {
+  return normalizeNewlines(text).replace(/\n+$/, '');
+}
 
 export interface TextInputProps {
   value: string;
@@ -22,6 +48,9 @@ export interface TextInputProps {
   showCursor?: boolean;
   /** Echo this instead of the real characters (secrets). */
   mask?: string;
+  /** Rewrite pasted text before it is inserted — used to stand a large paste
+   *  behind a short placeholder. Defaults to inserting it verbatim. */
+  onPaste?: (text: string) => string;
   onChange: (value: string) => void;
   onSubmit?: (value: string) => void;
 }
@@ -32,6 +61,7 @@ export function TextInput({
   focus = true,
   showCursor = true,
   mask,
+  onPaste,
   onChange,
   onSubmit,
 }: TextInputProps) {
@@ -65,13 +95,35 @@ export function TextInput({
     renderedValue = display.length > 0 ? '' : chalk.inverse(' ');
     let i = 0;
     for (const char of display) {
-      renderedValue += i === cursorOffset ? chalk.inverse(char) : char;
+      // Highlighting a line break paints the inverse block to the edge of the
+      // row on most terminals, so the cursor sitting on one is drawn as a space
+      // in front of the break instead — visible, and no full-width bar.
+      renderedValue += i === cursorOffset
+        ? (char === '\n' ? chalk.inverse(' ') + '\n' : chalk.inverse(char))
+        : char;
       i++;
     }
     if (display.length > 0 && cursorOffset === display.length) {
       renderedValue += chalk.inverse(' ');
     }
   }
+
+  const insertAtCursor = (text: string) => {
+    if (text === '') return;
+    const nextValue = value.slice(0, cursorOffset) + text + value.slice(cursorOffset);
+    setState({ cursorOffset: cursorOffset + text.length, value: nextValue });
+    onChange(nextValue);
+  };
+
+  // Mounting this enables the terminal's bracketed-paste mode, which is what
+  // makes a paste arrive whole and on its own channel. Without it the text came
+  // through `useInput` as ordinary keystrokes, so a CR in the middle of it was
+  // indistinguishable from the user pressing enter — a pasted block could submit
+  // itself halfway through.
+  usePaste((text) => {
+    const pasted = normalizePaste(text);
+    insertAtCursor(onPaste ? onPaste(pasted) : pasted);
+  }, { isActive: focus });
 
   useInput((input, key) => {
     if (
@@ -105,8 +157,14 @@ export function TextInput({
         nextCursorOffset--;
       }
     } else {
-      nextValue = value.slice(0, cursorOffset) + input + value.slice(cursorOffset);
-      nextCursorOffset += input.length;
+      // Fallback for terminals that ignore bracketed paste: the text lands here
+      // as one oversized keystroke. Newlines identify it as a paste, so it gets
+      // the same treatment rather than reaching the value raw.
+      const isPaste = /[\r\n]/.test(input);
+      const text = isPaste ? normalizePaste(input) : normalizeNewlines(input);
+      const inserted = isPaste && onPaste ? onPaste(text) : text;
+      nextValue = value.slice(0, cursorOffset) + inserted + value.slice(cursorOffset);
+      nextCursorOffset += inserted.length;
     }
 
     if (nextCursorOffset < 0) nextCursorOffset = 0;

@@ -5,7 +5,7 @@
  * tool input has one of these we show it verbatim instead of dumping JSON —
  * `read_file  src/App.tsx` reads far better than `read_file  {"path":"src/…`.
  */
-const PRIMARY_KEYS = ['command', 'path', 'file_path', 'pattern', 'query', 'url', 'task'];
+const PRIMARY_KEYS = ['command', 'path', 'file_path', 'pattern', 'query', 'url', 'task', 'instructions'];
 
 export function truncate(text: string, max: number): string {
   return text.length <= max ? text : text.slice(0, Math.max(0, max - 1)) + '…';
@@ -51,4 +51,31 @@ export function shortenPath(path: string, home?: string, max = 64): string {
 /** Split a `provider/model` style label so each half can be coloured. */
 export function splitModelLabel(provider: string, model?: string): [string, string] {
   return [provider, model ?? 'default'];
+}
+
+/**
+ * Keep only the last `maxRows` wrapped rows of `text`.
+ *
+ * Ink redraws the non-static region by rewinding the cursor, but only while
+ * that region fits the viewport. The moment it is taller, Ink falls back to
+ * clearing the terminal and reprinting all static output plus the frame — on
+ * *every* render. A streaming response re-renders per token, so once the live
+ * text outgrows the terminal that fallback fires hundreds of times and each
+ * reprint lands in scrollback, leaving the same paragraph stamped over and over.
+ *
+ * Clamping the live preview keeps the region under the viewport so Ink stays on
+ * the incremental path. Nothing is lost: the full text is pushed into <Static>
+ * once the response completes.
+ */
+export function clampToRows(text: string, columns: number, maxRows: number): string {
+  if (maxRows <= 0 || columns <= 0) return '';
+
+  const width = Math.max(1, columns);
+  const rows: string[] = [];
+  for (const line of text.split('\n')) {
+    if (line === '') { rows.push(''); continue; }
+    for (let i = 0; i < line.length; i += width) rows.push(line.slice(i, i + width));
+  }
+
+  return rows.length <= maxRows ? text : rows.slice(rows.length - maxRows).join('\n');
 }

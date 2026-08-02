@@ -16,8 +16,8 @@
     "test": "node --import tsx/esm --test 'src/**/*.test.ts'"
   },
   "dependencies": {
-    "@agentionai/agents": "latest",
-    "@anthropic-ai/sdk": "^0.39.0",
+    "@agentionai/agents": "^1.0.0",
+    "@anthropic-ai/sdk": "^0.71.2",
     "@marshall/tools": "*"
   },
   "devDependencies": {

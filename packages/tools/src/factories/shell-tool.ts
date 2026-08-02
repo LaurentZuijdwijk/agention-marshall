@@ -88,5 +88,6 @@ export function createShellTool(config: ToolConfig) {
       detail: `$ ${command}`,
     }),
     signal,
+    config.caller,
   );
 }

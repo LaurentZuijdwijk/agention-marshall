@@ -195,6 +195,7 @@ export function createGitHubTools(config: ToolConfig): Tool<string>[] {
       detail: `Title: ${title}\nBase: ${base ?? 'default'}\nDraft: ${draft ?? false}\n\n${body}`,
     }),
     config.signal,
+    config.caller,
   );
 
   const gh_comment = withApproval(
@@ -206,6 +207,7 @@ export function createGitHubTools(config: ToolConfig): Tool<string>[] {
       detail: String(body),
     }),
     config.signal,
+    config.caller,
   );
 
   return [gh_list_issues, gh_view_issue, gh_list_prs, gh_view_pr, gh_diff, gh_create_pr, gh_comment];

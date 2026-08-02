@@ -73,7 +73,8 @@ export interface EngineConfig {
   enableWebSearch?: boolean;
   /** @deprecated Use `roleProfiles.search`. Kept as an alias. */
   searchAgent?: AgentProfile;
-  /** Max output tokens per agent response. Default: 8192 */
+  /** Max output tokens per agent response. Omitted by default so the model's own
+   *  ceiling applies; Anthropic requires one, so claude falls back to 8192. */
   maxTokens?: number;
   /** Number of recent tool results to keep verbatim; older ones are masked. Default: 3 */
   maskingKeepRecent?: number;
@@ -158,6 +159,59 @@ export function resolveRoleProfile(config: EngineConfig, role: Role): AgentProfi
   return resolveTierProfile(config, tierForRole(config, role));
 }
 
+/**
+ * Whether the main agent gets a `context` tool.
+ *
+ * The context tool is what the fast tier is *for* — it's how file reading and
+ * summarising get off the expensive model — so configuring a fast tier enables
+ * it. Deliberately keyed on an explicit `models.fast` rather than
+ * `isDelegated(config, 'context')`: an unconfigured fast tier auto-degrades to a
+ * cheap same-provider model, and that shouldn't silently grow the toolbelt for
+ * someone who never opted into tiering.
+ */
+export function contextToolEnabled(config: EngineConfig): boolean {
+  return config.contextAgent !== undefined
+    || config.roleProfiles?.context !== undefined
+    || config.models?.fast !== undefined;
+}
+
+/**
+ * The profile to run web search on, or null when no configured model can.
+ *
+ * Search is backed by Anthropic's server-side tool, so it needs a claude
+ * profile. The `search` role defaults to the fast tier — which is precisely
+ * where a local model gets put — so prefer the role's own profile, fall back to
+ * deep when that can't search, and give up only if neither is claude.
+ */
+export function resolveSearchProfile(config: EngineConfig): AgentProfile | null {
+  const own = resolveRoleProfile(config, 'search');
+  if (own.provider === 'claude') return own;
+
+  const deep = resolveTierProfile(config, 'deep');
+  return deep.provider === 'claude' ? deep : null;
+}
+
+export interface RoleRouting {
+  role: Role;
+  provider: Provider;
+  model: string;
+  /** True when this role runs on something other than the deep model. */
+  delegated: boolean;
+}
+
+/** Where every role actually lands, after tiers, overrides and legacy fields. */
+export function routingSummary(config: EngineConfig): RoleRouting[] {
+  return (Object.keys(DEFAULT_ROLE_TIERS) as Role[]).map(role => {
+    const profile = resolveRoleProfile(config, role);
+    return {
+      role,
+      provider: profile.provider,
+      model: resolveModel(profile),
+      delegated: isDelegated(config, role),
+    };
+  });
+}
+
 /** True when a role resolves to something other than the deep model. */
 export function isDelegated(config: EngineConfig, role: Role): boolean {
   const deep = resolveTierProfile(config, 'deep');
@@ -168,6 +222,47 @@ export function isDelegated(config: EngineConfig, role: Role): boolean {
 }
 
 export const DEFAULT_MAX_TOKENS = 8192;
+
+/**
+ * Providers whose API *rejects* a request without an output cap. Anthropic is
+ * the only one; the OpenAI-compatible APIs treat `max_tokens` as optional.
+ */
+const REQUIRED_MAX_TOKENS: Partial<Record<Provider, number>> = {
+  claude: DEFAULT_MAX_TOKENS,
+};
+
+/**
+ * Cap applied when the user hasn't asked for one. Hosted providers are absent
+ * on purpose: omitting the field lets the model use its own maximum, which is
+ * what a long answer needs. Local servers get a ceiling anyway — without one
+ * they will happily generate until the context window is exhausted.
+ */
+const DEFAULT_MAX_TOKENS_BY_PROVIDER: Partial<Record<Provider, number>> = {
+  ...REQUIRED_MAX_TOKENS,
+  llamacpp: 32768,
+  ollama:   32768,
+};
+
+/**
+ * The output cap to send, or `undefined` to omit the field entirely.
+ *
+ * A fixed 8192 was turning legitimately long answers into failures — a
+ * whole-codebase `/review` died with "Response exceeded maximum token limit"
+ * because the provider stopped at the cap and reported `finish_reason: length`.
+ *
+ * Resolved per *profile*, not once per session: with a hosted deep tier and a
+ * local fast tier the right answer differs between them, so a single global
+ * number would either truncate the hosted model or uncap the local one.
+ *
+ * An explicit positive `configured` always wins. Pass 0 to force omission,
+ * which is still overridden for providers that require the field.
+ */
+export function resolveMaxTokens(profile: AgentProfile, configured?: number): number | undefined {
+  if (configured !== undefined) {
+    return configured > 0 ? configured : REQUIRED_MAX_TOKENS[profile.provider];
+  }
+  return DEFAULT_MAX_TOKENS_BY_PROVIDER[profile.provider];
+}
 
 /** Cheapest/fastest model per provider — used for the compression summariser. */
 export const CHEAP_MODELS: Partial<Record<Provider, string>> = {

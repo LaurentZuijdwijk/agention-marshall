@@ -1,6 +1,6 @@
 import { Tool } from '@agentionai/agents/core';
 import type { ToolInputSchema } from '@agentionai/agents/core';
-import type { ApprovalFn, ApprovalRequest, ToolSpec } from '../types.js';
+import type { ApprovalFn, ApprovalRequest, ToolCaller, ToolSpec } from '../types.js';
 
 const INTERRUPTED = 'Task interrupted — action was not taken.';
 
@@ -13,12 +13,16 @@ const INTERRUPTED = 'Task interrupted — action was not taken.';
  *
  * Also checks the AbortSignal before and after the approval prompt so that
  * an in-flight approval is cancelled immediately when the task is interrupted.
+ *
+ * `caller` is stamped on here rather than in each buildRequest: it is a property
+ * of the belt, not of the individual action.
  */
 export function withApproval(
   spec: ToolSpec,
   approval: ApprovalFn,
   buildRequest: (input: Record<string, unknown>) => ApprovalRequest,
   signal?: AbortSignal,
+  caller?: ToolCaller,
 ): Tool<string> {
   return new Tool<string>({
     name: spec.name,
@@ -27,7 +31,7 @@ export function withApproval(
     execute: async (input: Record<string, unknown>) => {
       if (signal?.aborted) return INTERRUPTED;
 
-      const request = buildRequest(input);
+      const request = { ...buildRequest(input), ...(caller ? { caller } : {}) };
       const decision = await approval(request);
 
       if (signal?.aborted) return INTERRUPTED;

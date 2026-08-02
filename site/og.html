@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>marshall — og card source</title>
+<!--
+  Source for og.png (1200×630). Not linked from the site; it exists so the
+  social card can be regenerated when the pitch changes:
+
+    google-chrome --headless=new --disable-gpu --hide-scrollbars \
+      --screenshot=site/og.png --window-size=1200,630 \
+      --default-background-color=00000000 site/og.html
+-->
+<style>
+  :root {
+    --brand-from: #8B5CF6;
+    --brand-to:   #22D3EE;
+    --accent: #A78BFA;
+    --user:   #5EEAD4;
+    --tool:   #F472B6;
+    --ok:     #34D399;
+    --muted:  #8A93A6;
+    --faint:  #737E96;
+    --text:   #E5E7EB;
+    --bg:     #0B0D10;
+    --bg-2:   #10131A;
+    --border: #1F2430;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1200px; height: 630px; }
+  body {
+    background:
+      radial-gradient(900px 420px at 22% -12%, rgba(139,92,246,.20), transparent 62%),
+      radial-gradient(760px 420px at 92% 118%, rgba(34,211,238,.15), transparent 62%),
+      var(--bg);
+    color: var(--text);
+    font-family: var(--mono);
+    padding: 66px 70px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    overflow: hidden;
+  }
+  .logo {
+    font-size: 21px;
+    line-height: 1.12;
+    white-space: pre;
+    background: linear-gradient(96deg, var(--brand-from) 5%, var(--brand-to) 95%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .rule {
+    margin-top: 14px;
+    height: 3px;
+    width: 836px;
+    border-radius: 2px;
+    background: linear-gradient(90deg, var(--brand-from), var(--brand-to));
+  }
+  .tagline {
+    margin-top: 34px;
+    font-size: 31px;
+    line-height: 1.45;
+    color: var(--muted);
+    max-width: 940px;
+  }
+  .tagline b { color: var(--text); font-weight: 600; }
+  .strip {
+    display: flex; align-items: center; gap: 18px;
+    font-size: 19px; color: var(--faint);
+  }
+  .pill {
+    border: 1px solid var(--border);
+    background: var(--bg-2);
+    border-radius: 999px;
+    padding: 10px 20px;
+    color: var(--user);
+  }
+  .pill .p { color: var(--accent); }
+  .spacer { flex: 1; }
+  .stages { display: flex; gap: 14px; align-items: center; color: var(--muted); font-size: 19px; }
+  .stages .s { display: flex; align-items: center; gap: 8px; }
+  .stages .arrow { color: var(--faint); }
+</style>
+</head>
+<body>
+
+<div>
+  <div class="logo">███╗   ███╗ █████╗ ██████╗ ███████╗██╗  ██╗ █████╗ ██╗     ██╗
+████╗ ████║██╔══██╗██╔══██╗██╔════╝██║  ██║██╔══██╗██║     ██║
+██╔████╔██║███████║██████╔╝███████╗███████║███████║██║     ██║
+██║╚██╔╝██║██╔══██║██╔══██╗╚════██║██╔══██║██╔══██║██║     ██║
+██║ ╚═╝ ██║██║  ██║██║  ██║███████║██║  ██║██║  ██║███████╗███████╗
+╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚══════╝</div>
+  <div class="rule"></div>
+  <div class="tagline">
+    A coding agent that <b>lives in your terminal</b>.<br>
+    Plan, code, review — and <b>nothing happens without your approval</b>.
+  </div>
+</div>
+
+<div class="strip">
+  <span class="pill"><span class="p">❯ </span>npm install -g @marshall/cli</span>
+  <span class="spacer"></span>
+  <span class="stages">
+    <span class="s" style="color:var(--accent)">◆ planner</span>
+    <span class="arrow">→</span>
+    <span class="s" style="color:var(--tool)">● coder</span>
+    <span class="arrow">→</span>
+    <span class="s" style="color:var(--ok)">✓ reviewer</span>
+  </span>
+</div>
+
+</body>
+</html>
