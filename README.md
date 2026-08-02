@@ -1,6 +1,6 @@
 # agention-marshall
 
-A terminal-based coding assistant built on [Agention](https://docs.agention.ai) and Claude. Takes natural-language tasks and uses a multi-agent planner/coder/reviewer loop to read, edit, and run code inside your project — with human-in-the-loop approval for every state-changing action.
+A terminal-based coding assistant built on [Agention](https://docs.agention.ai). Takes natural-language tasks and uses a multi-agent planner/coder/reviewer loop to read, edit, and run code inside your project — with human-in-the-loop approval for every state-changing action.
 
 ## Structure
 

@@ -1,5 +1,11 @@
 # @agentionai/marshall-cli
 
+## 0.6.1
+
+### Patch Changes
+
+- Add a package README (installation, providers, commands, keybindings, and global/project config) so it renders on the npm package page.
+
 ## 0.6.0
 
 ### Minor Changes
