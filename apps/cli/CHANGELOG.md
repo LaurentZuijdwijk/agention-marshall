@@ -1,5 +1,11 @@
 # @agentionai/marshall-cli
 
+## 0.6.0
+
+### Minor Changes
+
+- Move credentials and provider/model settings to a global user config at `~/.config/marshall/config.json` (or `$XDG_CONFIG_HOME/marshall/config.json`), created on first run. An optional project-local `.marshall/config.json` is deep-merged on top so a repo can pin its own model/provider without touching global credentials — session logs and task notes stay project-local as before.
+
 ## 0.5.0
 
 ### Minor Changes
