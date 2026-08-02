@@ -1,5 +1,11 @@
 # @agentionai/marshall-cli
 
+## 0.5.0
+
+### Minor Changes
+
+- feat: add @path file completion and inline expansion, formatToolName for readable tool labels, open weights site rebrand
+
 ## 0.4.0
 
 ### Minor Changes

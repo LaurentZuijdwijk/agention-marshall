@@ -30,6 +30,7 @@ import { startLogin, completeLogin } from './login.js';
 import type { LoginSession } from './login.js';
 import { runSlashCommand } from './commands.js';
 import { SLASH_COMMANDS } from './slashCommands.js';
+import { completeAtPath, expandFileMentions } from './fileCompletion.js';
 import type { Mode } from './mode.js';
 import { traceRender } from './renderTrace.js';
 
@@ -179,10 +180,15 @@ export function App({
   };
 
   // ── keys ───────────────────────────────────────────────────────────────────
+  // Tab completes two things: a slash command being typed, and the `@path`
+  // under the cursor one directory segment at a time.
   const ghost = useMemo(() => {
-    if (mode.type !== 'idle' || !input.startsWith('/') || input.length < 2) return '';
-    const match = SLASH_COMMANDS.find(cmd => cmd.startsWith(input) && cmd !== input);
-    return match ? match.slice(input.length) : '';
+    if (mode.type !== 'idle') return '';
+    if (input.startsWith('/') && input.length >= 2) {
+      const match = SLASH_COMMANDS.find(cmd => cmd.startsWith(input) && cmd !== input);
+      return match ? match.slice(input.length) : '';
+    }
+    return completeAtPath(input, process.cwd());
   }, [input, mode.type]);
 
   useKeyBindings({
@@ -295,7 +301,20 @@ export function App({
     transcript.push('user', text);
     setSteering(false);
     setMode({ type: 'running' });
-    session?.run(text, images).catch((err) => {
+    // Inline every `@path` that resolves, so the model sees the contents rather
+    // than a path it would have to spend a read_file call on. Files that
+    // cannot be inlined stay as typed — the agent can still reach them.
+    const expanded = expandFileMentions(text, workspaceRoot);
+    if (expanded.mentions.length > 0) {
+      const notes = expanded.mentions.map(m =>
+        m.outcome === 'ok'
+          ? `${m.token} inlined (${m.bytes} B)`
+          : m.outcome === 'too-large'
+            ? `${m.token} too large to inline — the agent can read_file it`
+            : `${m.token} is binary — left as a path`);
+      transcript.push('info', notes.join(' · '));
+    }
+    session?.run(expanded.text, images).catch((err) => {
       transcript.push('error', err instanceof Error ? err.message : String(err));
       setMode({ type: 'idle' });
     });

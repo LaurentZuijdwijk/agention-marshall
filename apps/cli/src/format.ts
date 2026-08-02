@@ -7,6 +7,12 @@
  */
 const PRIMARY_KEYS = ['command', 'path', 'file_path', 'pattern', 'query', 'url', 'task', 'instructions'];
 
+/** Turn a `snake_case` tool identifier into a readable label: `edit_file` → `Edit file`. */
+export function formatToolName(name: string): string {
+  const [first, ...rest] = name.split('_');
+  return [first.charAt(0).toUpperCase() + first.slice(1), ...rest].join(' ');
+}
+
 export function truncate(text: string, max: number): string {
   return text.length <= max ? text : text.slice(0, Math.max(0, max - 1)) + '…';
 }

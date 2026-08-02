@@ -1,7 +1,18 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { formatToolInput, shortenPath, truncate, clampToRows, windowRange } from './format.js';
+import { formatToolInput, formatToolName, shortenPath, truncate, clampToRows, windowRange } from './format.js';
 import { mix, brand } from './view/theme.js';
+
+describe('formatToolName', () => {
+  it('title-cases a snake_case tool identifier', () => {
+    assert.equal(formatToolName('edit_file'), 'Edit file');
+    assert.equal(formatToolName('run_shell'), 'Run shell');
+  });
+
+  it('leaves a single-word name capitalised', () => {
+    assert.equal(formatToolName('context'), 'Context');
+  });
+});
 
 describe('formatToolInput', () => {
   it('returns an empty string for empty or non-object input', () => {

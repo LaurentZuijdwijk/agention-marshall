@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import type { OutputEvent, ClientInterface } from '@agentionai/marshall-engine';
 import type { ApprovalRequest, ApprovalDecision } from '@agentionai/marshall-tools';
-import { formatToolInput } from '../format.js';
+import { formatToolInput, formatToolName } from '../format.js';
 import { G } from '../view/theme.js';
 import type { Message, MessageRole } from '../view/message.js';
 
@@ -74,7 +74,7 @@ export function createEngineClient(port: TranscriptPort): ClientInterface {
           // own presentation — this is the thing that makes the multi-agent loop
           // legible rather than something you have to take on faith.
           port.push(event.subagent ? 'agent' : 'tool', formatToolInput(event.input), {
-            title: event.toolName,
+            title: formatToolName(event.toolName),
             ...(event.subagent ? { note: event.subagent.model, delegated: event.subagent.delegated } : {}),
             ...(event.parent ? { parent: event.parent } : {}),
             ...(event.caller ? { caller: event.caller } : {}),

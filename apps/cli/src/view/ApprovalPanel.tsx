@@ -85,8 +85,7 @@ export function ApprovalPanel({ request, pending, onSelect }: {
       </Box>
 
       <Box marginTop={1}>
-        <Text color={C.tool} bold>{request.toolName}</Text>
-        <Text color={C.muted}>  {request.description}</Text>
+        <Text color={C.tool} bold>{request.description}</Text>
       </Box>
 
       {/* Whose action this is. With work fanned out across tiers, "approve this

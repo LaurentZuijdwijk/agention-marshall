@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>marshall — a local-first coding agent in your terminal</title>
-<meta name="description" content="Marshall is a local-first terminal coding assistant built on Agention. Your code stays on your machine. A planner/coder/reviewer loop reads, edits and runs your project — with an approval gate on every write. Run fully local via llama.cpp or Ollama, or connect any cloud provider.">
+<title>marshall — a coding agent built for open weights</title>
+<meta name="description" content="Marshall is a terminal coding agent designed around open-weight models and local inference. llama.cpp and Ollama are first-class providers — no key, no account, no cloud. A planner/coder/reviewer loop reads, edits and runs your project, with an approval gate on every write. Mix in a hosted model only where you want one.">
 <link rel="canonical" href="https://marshall.agention.ai/">
 <meta name="color-scheme" content="dark">
 <meta name="theme-color" content="#0B0D10">
@@ -14,16 +14,16 @@
      deployed from /site via GitHub Pages. og:image must stay an absolute URL. -->
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="marshall">
-<meta property="og:title" content="marshall — a local-first coding agent in your terminal">
-<meta property="og:description" content="A planner/coder/reviewer loop that reads, edits and runs your project. Your code stays on your machine. Nothing mutates without your approval. Run fully local or connect any cloud provider.">
+<meta property="og:title" content="marshall — a coding agent built for open weights">
+<meta property="og:description" content="llama.cpp and Ollama as first-class providers, not a fallback. A planner/coder/reviewer loop that reads, edits and runs your project on models you host yourself. Nothing mutates without your approval.">
 <meta property="og:url" content="https://marshall.agention.ai/">
 <meta property="og:image" content="https://marshall.agention.ai/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="marshall — a local-first coding agent in your terminal">
+<meta property="og:image:alt" content="marshall — a coding agent built for open weights">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="marshall — a local-first coding agent in your terminal">
-<meta name="twitter:description" content="A planner/coder/reviewer loop that reads, edits and runs your project. Your code stays on your machine. Nothing mutates without your approval.">
+<meta name="twitter:title" content="marshall — a coding agent built for open weights">
+<meta name="twitter:description" content="llama.cpp and Ollama as first-class providers, not a fallback. A planner/coder/reviewer loop that runs on models you host yourself. Nothing mutates without your approval.">
 <meta name="twitter:image" content="https://marshall.agention.ai/og.png">
 
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>◆</text></svg>">
@@ -296,6 +296,11 @@
     transition: border-color .2s, transform .2s;
   }
   .card:hover { border-color: #2c3547; transform: translateY(-2px); }
+
+  /* The open-weights block is four pillars, not a feed. At the 920px wrap the
+     default minmax(260px) gives three columns and orphans the fourth — force a
+     2×2 by raising the floor, and let min() collapse it to one on mobile. */
+  #local .grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); }
   .card .glyph { font-size: 18px; margin-bottom: 10px; }
   .card h4 { font-size: 15px; margin-bottom: 6px; }
   .card p { color: var(--muted); font-size: 13.5px; }
@@ -409,6 +414,7 @@
 <nav>
   <div class="wrap">
     <span class="logo grad">marshall</span>
+    <a class="sections" href="#local">open weights</a>
     <a class="sections" href="#how">how it works</a>
     <a class="sections" href="#providers">providers</a>
     <a class="sections" href="#commands">commands</a>
@@ -422,12 +428,13 @@
 <!-- ── hero ─────────────────────────────────────────────────────────── -->
 <header class="hero">
   <div class="wrap">
-    <h1 class="sr-only">marshall — a local-first coding agent in your terminal</h1>
+    <h1 class="sr-only">marshall — a coding agent built for open weights</h1>
     <div id="hero-logo" aria-hidden="true"></div>
     <p class="tagline">
-      A coding agent that <b>runs on your machine</b>. Your code never leaves —
-      a planner/coder/reviewer loop reads, edits and runs your project,
-      and <b>nothing happens without your approval</b>.
+      A coding agent built for <b>open weights</b>. Point it at llama.cpp or
+      Ollama and the whole planner/coder/reviewer loop runs on <b>your own
+      hardware</b> — no key, no account, no cloud. Nothing is written without
+      your approval.
     </p>
     <div class="cta">
       <button class="install" type="button" data-copy="npm install -g @agentionai/marshall-cli">
@@ -443,12 +450,48 @@
     <div class="term" id="term" aria-hidden="true">
       <div class="term-bar">
         <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
-        <span class="title">marshall · ~/projects/storefront</span>
+        <span class="title">marshall · ~/projects/storefront · llamacpp @ 192.168.1.248:8080</span>
       </div>
       <div class="term-body" id="term-body"></div>
     </div>
   </div>
 </header>
+
+<!-- ── open weights ─────────────────────────────────────────────────── -->
+<section id="local">
+  <div class="wrap">
+    <h2>open weights first</h2>
+    <h3>Built for the models <span class="grad">you can run yourself</span></h3>
+    <p class="lede">
+      Most coding agents bolt local inference on as a downgrade path. Marshall is
+      designed around it: <b>llama.cpp and Ollama are first-class providers</b>,
+      they sit at the top of the setup wizard, and everything below exists because a
+      30B model on your own GPU needs different handling than a frontier API.
+    </p>
+    <div class="grid">
+      <div class="card">
+        <div class="glyph" style="color:var(--ok)" aria-hidden="true">◇</div>
+        <h4>No key, no account, no cloud</h4>
+        <p><code>marshall --provider llamacpp</code> and you're working. Nothing to sign up for, no telemetry, no vendor who can deprecate your model out from under you — the only call that leaves your machine is a version check against the npm registry.</p>
+      </div>
+      <div class="card">
+        <div class="glyph" style="color:var(--code)" aria-hidden="true">◉</div>
+        <h4>It knows what's actually loaded</h4>
+        <p>The picker reads llama.cpp's router and Ollama's <code>/api/ps</code> for live state — which models are <b>resident right now</b>, the real runtime context vs. what a preset merely asks for, the trained ceiling, quant and file size. Loaded models sort first, so you don't eat a cold reload mid-task.</p>
+      </div>
+      <div class="card">
+        <div class="glyph" style="color:var(--warn)" aria-hidden="true">◧</div>
+        <h4>Written for small context windows</h4>
+        <p>Rolling compression with pinned goals, tool-result masking and read dedup keep a session inside a modest window instead of overflowing it on the third file. Local servers also get an output ceiling — without one they'll happily generate until the window is gone.</p>
+      </div>
+      <div class="card">
+        <div class="glyph" style="color:var(--tool)" aria-hidden="true">⊞</div>
+        <h4>Mix local and paid, per role</h4>
+        <p><b>deep</b> and <b>fast</b> are full profiles — each with its own provider, host and key, so they can be different vendors. Put a frontier model on <b>deep</b> (planning, coding, review) and a local one on <b>fast</b> (reading files, searching, summarising history): the bulk of the tokens never leaves your machine or hits your bill, and you pay only for the reasoning. Or run both local, on two different servers. <code>/model deep</code>, <code>/model fast</code>, <code>/model off</code>.</p>
+      </div>
+    </div>
+  </div>
+</section>
 
 <!-- ── the loop ─────────────────────────────────────────────────────── -->
 <section id="how">
@@ -477,6 +520,12 @@
         <p>Second opinion on the actual diff. Loops with the coder until it holds up — never rubber-stamps.</p>
       </div>
     </div>
+    <p class="lede" style="margin-top:22px;">
+      All three run on the <b>deep</b> tier. Everything around them — fetching context,
+      searching, compressing history — runs on <b>fast</b>. That's the seam the two tiers
+      are cut along, and it's why pointing <code>fast</code> at a local model takes most of
+      the token volume off a paid API without touching the quality of the decisions.
+    </p>
   </div>
 </section>
 
@@ -488,24 +537,19 @@
     <p class="lede">The boring parts — safety, memory, context management — are engineered in, not bolted on.</p>
     <div class="grid">
       <div class="card">
-        <div class="glyph" style="color:var(--ok)" aria-hidden="true">🔒</div>
-        <h4>Your code stays on your machine</h4>
-        <p>Run fully local with llama.cpp or Ollama — zero network calls, zero telemetry. When you do connect a cloud provider, only the prompt travels, never your source files.</p>
-      </div>
-      <div class="card">
         <div class="glyph" style="color:var(--ok)" aria-hidden="true">✓</div>
         <h4>Approval for every mutation</h4>
         <p><code>write_file</code>, <code>edit_file</code> and <code>run_shell</code> render their diff or command before they run. Approve once, always-allow for the session, or deny — <code>esc</code> denies everything pending.</p>
       </div>
       <div class="card">
         <div class="glyph" style="color:var(--tool)" aria-hidden="true">◆</div>
-        <h4>Mix local &amp; cloud</h4>
-        <p>Pair a paid model for deep reasoning with a local model for context fetching and tool calls. <code>/model deep claude</code> + <code>/model fast ollama</code> — the best of both, lower cost, lower latency.</p>
+        <h4>Any OpenAI-compatible server</h4>
+        <p>vLLM, SGLang, LM Studio, TabbyAPI, an internal gateway — if it speaks <code>/v1/chat/completions</code>, point <code>--host</code> at it. No plugin, no adapter, no waiting for someone to add your runtime.</p>
       </div>
       <div class="card">
         <div class="glyph" style="color:var(--user)" aria-hidden="true">↪</div>
         <h4>Interrupt &amp; steer</h4>
-        <p><code>esc</code> stops at the next safe boundary — no half-written files (atomic writes) — and your next message course-corrects instead of restarting.</p>
+        <p><code>esc</code> stops at the next safe boundary — no half-written files (atomic writes) — and your next message course-corrects instead of restarting. Worth a lot when a local model is three minutes into the wrong idea.</p>
       </div>
       <div class="card">
         <div class="glyph" style="color:var(--code)" aria-hidden="true">▲</div>
@@ -513,14 +557,19 @@
         <p>File tools are jailed to the workspace — <code>..</code> traversal and escaping symlinks are rejected. Shell runs with a scrubbed env, timeouts, output caps and a command policy.</p>
       </div>
       <div class="card">
-        <div class="glyph" style="color:var(--warn)" aria-hidden="true">·</div>
-        <h4>Memory that doesn't leak tokens</h4>
-        <p>Rolling compression with pinned goals, tool-result masking, read dedup — plus <code>AGENTS.md</code> project memory loaded at session start.</p>
+        <div class="glyph" style="color:var(--warn)" aria-hidden="true">☰</div>
+        <h4>Project memory</h4>
+        <p><code>AGENTS.md</code> in your workspace holds conventions, architecture notes and prior decisions, loaded into the system prompt at session start — the cheapest way to make a smaller model behave like it knows your codebase.</p>
       </div>
       <div class="card">
         <div class="glyph" style="color:var(--accent)" aria-hidden="true">❯</div>
         <h4>Knows your repo's paperwork</h4>
-        <p>Built-in <code>gh_*</code> tools read issues, pull requests and diffs, and open a PR when the work is done — so "fix #482" is a whole task, not a lookup.</p>
+        <p>Built-in <code>gh_*</code> tools read issues, pull requests and diffs, leave comments, and open a PR when the work is done — so "fix #482" is a whole task, not a lookup.</p>
+      </div>
+      <div class="card">
+        <div class="glyph" style="color:var(--ok)" aria-hidden="true">○</div>
+        <h4>Open source, all the way down</h4>
+        <p>MIT licensed, and the engine is headless with a stdio JSON-RPC transport — the terminal is just one client. Open weights on an open agent, with no hosted service in the middle.</p>
       </div>
     </div>
   </div>
@@ -530,23 +579,24 @@
 <section id="providers">
   <div class="wrap">
     <h2>providers</h2>
-    <h3>Your keys, your models, <span class="grad">your call</span></h3>
-    <p class="lede">Hosted frontier, a single OpenRouter key, or fully local — switch any time with <b>/model</b>. First run walks you through it, and <code>marshall login</code> signs in with a Claude account instead of a key.</p>
+    <h3>Your weights, your hardware, <span class="grad">your call</span></h3>
+    <p class="lede">The setup wizard leads with the three it can query live — <b>llama.cpp</b>, <b>Ollama</b> and <b>OpenRouter</b> — which is also where the open-weight models are. The hosted names are there when you want them, never assumed, and nothing stops you pairing two vendors: one on <b>deep</b>, another on <b>fast</b>. Switch any time with <b>/model</b>; nothing is baked in at install.</p>
     <div class="providers">
-      <span class="chip"><b>openrouter</b> <span class="faint">· live model list, one key</span></span>
-      <span class="chip"><b>llama.cpp</b> <span class="faint">· local · no key needed</span></span>
-      <span class="chip"><b>ollama</b> <span class="faint">· local · no key needed</span></span>
-      <span class="chip"><b>openai compatible</b> <span class="faint">· custom URL · optional API key</span></span>
+      <span class="chip"><b>llama.cpp</b> <span class="faint">· local · no key · probes what's loaded</span></span>
+      <span class="chip"><b>ollama</b> <span class="faint">· local · no key · resident models first</span></span>
+      <span class="chip"><b>openai compatible</b> <span class="faint">· vLLM, LM Studio, … · <code>--host</code></span></span>
+      <span class="chip"><b>openrouter</b> <span class="faint">· live catalogue · free tiers ranked first</span></span>
       <span class="chip"><b>claude</b> <span class="faint">· ANTHROPIC_API_KEY or login</span></span>
       <span class="chip"><b>openai</b> <span class="faint">· OPENAI_API_KEY</span></span>
       <span class="chip"><b>gemini</b> <span class="faint">· GEMINI_API_KEY</span></span>
       <span class="chip"><b>mistral</b> <span class="faint">· MISTRAL_API_KEY</span></span>
     </div>
     <p class="lede" style="margin-top:22px;">
-      <b>llama.cpp</b> isn't an afterthought — it's a first-class provider. Point it at any
-      OpenAI-compatible <code>llama-server</code> and marshall probes the router to see which
-      model is actually <b>loaded</b>, not just what's on disk, so you're never surprised by a
-      lazy cold start mid-task. Same treatment for Ollama — resident models listed first.
+      No GPU at home? <b>OpenRouter</b> is the next best thing, and the picker is tuned for it:
+      the ~340-entry catalogue is filtered down to models that can <b>actually call tools</b>
+      — DeepSeek, Qwen, Kimi, GLM, MiniMax, Llama, Mistral alongside the hosted frontier
+      names — with <code>:free</code> variants sorted to the top so trying a new open-weight
+      release costs nothing.
     </p>
   </div>
 </section>
@@ -585,6 +635,14 @@
       (container / microVM) is planned; only the executor behind the tool changes.
     </div>
     <div class="note">
+      <b>A local model still has to be good at tool calling.</b> Marshall gives every provider the
+      same tool belt, but the model decides whether it uses it well — the OpenRouter picker filters
+      to models that advertise tool support, and for a local server that's on you to pick. Some
+      capabilities are simply hosted-only: web search rides Anthropic's server-side tool, and
+      Ollama silently drops images, so marshall refuses an image attachment there rather than
+      answering about something the model never saw.
+    </div>
+    <div class="note">
       <b>One workspace, one terminal.</b> No multi-repo sessions, and no editor integration yet —
       a reference VS Code extension is on the roadmap, driven by the engine's stdio JSON-RPC
       transport. The engine itself is headless and has no idea a terminal exists.
@@ -597,8 +655,8 @@
   <div class="wrap">
     <div class="big-cta">
       <h2>get started</h2>
-      <h3>Your terminal is <span class="grad">already open</span></h3>
-      <p class="lede" style="margin: 0 auto; max-width: 480px;">Node 22+, one npm install, thirty seconds of setup wizard. Run fully local — no account, no API keys, nothing leaves your machine.</p>
+      <h3>Your GPU is <span class="grad">already warm</span></h3>
+      <p class="lede" style="margin: 0 auto; max-width: 520px;">Node 22+, one npm install, thirty seconds of setup wizard. If <code>llama-server</code> or <code>ollama</code> is already running, marshall finds it — no account, no API key, no cloud.</p>
       <button class="install" type="button" data-copy="npm install -g @agentionai/marshall-cli && marshall">
         <span class="cmd"><span class="prompt" aria-hidden="true">❯ </span>npm install -g @agentionai/marshall-cli &amp;&amp; marshall</span>
         <span class="copy" aria-hidden="true">copy</span>
@@ -772,6 +830,10 @@ document.querySelectorAll('.install[data-copy]').forEach(btn => {
   const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   const SCRIPT = {
+    tiers: [
+      'deep · Qwen3-Coder-30B-A3B · Q5_K_M · 128k · loaded',
+      'fast · Gemma-4-E4B · Q6_K · 32k · loaded',
+    ],
     prompt: 'add input validation to the signup form',
     plan: [
       '1. read src/components/SignupForm.tsx',
@@ -800,6 +862,7 @@ document.querySelectorAll('.install[data-copy]').forEach(btn => {
   // with zero-length sleeps would spin the main thread forever.
   function renderStatic() {
     body.innerHTML = '';
+    for (const t of SCRIPT.tiers) line(`<span class="f">${esc(t)}</span>`);
     line(`<span class="p">❯ </span><span class="u">${esc(SCRIPT.prompt)}</span>`);
     line('<span class="f">│ </span><span class="a">◆ planner</span> <span class="f">· 4 steps</span>');
     for (const step of SCRIPT.plan) line(`<span class="f">│   ${esc(step)}</span>`);
@@ -840,6 +903,7 @@ document.querySelectorAll('.install[data-copy]').forEach(btn => {
     // self-call would grow an await chain for the life of the page.
     for (;;) {
       body.innerHTML = '';
+      for (const t of SCRIPT.tiers) line(`<span class="f">${esc(t)}</span>`);
 
       let d = document.createElement('div');
       d.innerHTML = '<span class="p">❯ </span>';
@@ -891,7 +955,7 @@ document.querySelectorAll('.install[data-copy]').forEach(btn => {
   "name": "marshall",
   "applicationCategory": "DeveloperApplication",
   "operatingSystem": "macOS, Linux, Windows",
-  "description": "A terminal coding assistant built on Agention. A planner/coder/reviewer loop reads, edits and runs your project, with human approval on every state-changing action.",
+  "description": "A terminal coding agent designed around open-weight models and local inference. llama.cpp and Ollama are first-class providers, needing no API key or account. A planner/coder/reviewer loop reads, edits and runs your project, with human approval on every state-changing action.",
   "url": "https://marshall.agention.ai/",
   "codeRepository": "https://github.com/LaurentZuijdwijk/agention-marshall",
   "license": "https://opensource.org/licenses/MIT",
