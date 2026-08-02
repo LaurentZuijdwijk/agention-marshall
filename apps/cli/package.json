@@ -1,6 +1,6 @@
 {
   "name": "@marshall/cli",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "bin": {
     "marshall": "./dist/index.js"
@@ -8,8 +8,12 @@
   "engines": {
     "node": ">=22"
   },
-  "files": ["dist"],
-  "publishConfig": { "access": "public" },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "dev": "tsx src/index.tsx",
     "prepare": "tsc && node scripts/postbuild.mjs",
@@ -22,7 +26,6 @@
     "dotenv": "^16.6.1",
     "chalk": "^5.3.0",
     "ink": "^7.1.1",
-
     "react": "^19.2.0"
   },
   "devDependencies": {

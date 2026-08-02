@@ -1,6 +1,6 @@
 {
   "name": "@marshall/engine",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "exports": {
     ".": {
@@ -8,8 +8,12 @@
       "types": "./dist/index.d.ts"
     }
   },
-  "files": ["dist"],
-  "publishConfig": { "access": "public" },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "prepare": "tsc",
     "typecheck": "tsc --noEmit",
@@ -31,8 +35,14 @@
     "@mistralai/mistralai": ">=0.4"
   },
   "peerDependenciesMeta": {
-    "openai": { "optional": true },
-    "@google/generative-ai": { "optional": true },
-    "@mistralai/mistralai": { "optional": true }
+    "openai": {
+      "optional": true
+    },
+    "@google/generative-ai": {
+      "optional": true
+    },
+    "@mistralai/mistralai": {
+      "optional": true
+    }
   }
 }
