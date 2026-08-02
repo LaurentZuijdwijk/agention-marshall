@@ -28,15 +28,6 @@ export interface ResolvedProfiles {
   maxTokens?: number;
 }
 
-/**
- * Local servers are cheap to run long and have no per-token cost, so they get a
- * far larger output budget than the hosted default of 8192.
- */
-const DEFAULT_MAX_TOKENS_BY_PROVIDER: Partial<Record<Provider, number>> = {
-  llamacpp: 32768,
-  ollama:   32768,
-};
-
 function checkProvider(name: string, label: string): Provider {
   if (!Object.keys(PROVIDER_DEFAULTS).includes(name)) {
     throw new StartupError(`Unknown ${label} "${name}". Valid: ${Object.keys(PROVIDER_DEFAULTS).join(', ')}`);
@@ -69,9 +60,12 @@ export function resolveProfiles(flags: CliFlags, config: SavedConfig): ResolvedP
     contextAgentProfile:  roleProfile(agentProfile, flags.contextModel),
     plannerAgentProfile:  roleProfile(agentProfile, flags.plannerModel),
     reviewerAgentProfile: roleProfile(agentProfile, flags.reviewerModel),
-    maxTokens: flags.maxTokens
-      ? parseInt(flags.maxTokens, 10)
-      : DEFAULT_MAX_TOKENS_BY_PROVIDER[provider],
+    // Only set when the user asked for it. This is one number for the whole
+    // session, so filling it in from a default would pin every tier to whatever
+    // suits the deep provider — a local deep tier used to hand its 32768 to a
+    // hosted fast tier. Left undefined, the engine's resolveMaxTokens picks per
+    // profile, which is the case it exists for.
+    maxTokens: flags.maxTokens ? parseInt(flags.maxTokens, 10) : undefined,
   };
 }
 

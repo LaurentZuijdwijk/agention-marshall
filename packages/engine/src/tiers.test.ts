@@ -296,6 +296,17 @@ test('the cap is per profile, so a hosted deep and local fast differ', () => {
   assert.equal(resolveMaxTokens(resolveRoleProfile(config, 'context')), 32768);
 });
 
+test('a session-wide cap flattens that difference — which is why nobody sets one by default', () => {
+  // EngineConfig.maxTokens is one number for every tier, so passing it turns
+  // off the per-profile resolution above. The CLI used to fill it in from the
+  // deep provider's default, which handed a local tier's 32768 to a hosted one.
+  const config = base({ agent: KIMI, models: { deep: KIMI, fast: LOCAL } });
+  const sessionWide = 32768;
+  assert.equal(resolveMaxTokens(resolveRoleProfile(config, 'coder'), sessionWide), 32768,
+    'the hosted tier no longer omits the field');
+  assert.equal(resolveMaxTokens(resolveRoleProfile(config, 'context'), sessionWide), 32768);
+});
+
 test('claude still gets a cap, since Anthropic rejects requests without one', () => {
   assert.equal(resolveMaxTokens({ provider: 'claude' }), DEFAULT_MAX_TOKENS);
 });
