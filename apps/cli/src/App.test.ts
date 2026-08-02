@@ -81,7 +81,7 @@ function mkTemp(): string {
 
 // ── mock Session ───────────────────────────────────────────────────────────────
 
-let mockRun: ((text: string) => Promise<void>) | null = null;
+let mockRun: ((text: string, images: unknown[]) => Promise<void>) | null = null;
 let mockInterrupt: (() => void) | null = null;
 let mockClear: (() => Promise<string>) | null = null;
 let mockMessages: any[] = [];
@@ -89,8 +89,8 @@ let mockMessages: any[] = [];
 class MockSession {
   opts: any;
   constructor(opts: any) { this.opts = opts; }
-  run(text: string): Promise<void> {
-    if (mockRun) return mockRun(text);
+  run(text: string, images: unknown[] = []): Promise<void> {
+    if (mockRun) return mockRun(text, images);
     return Promise.resolve();
   }
   interrupt(): void { mockInterrupt?.(); }
@@ -301,6 +301,59 @@ describe('App component', () => {
         `expected the idle prompt, got: ${JSON.stringify(capturedOutput.slice(0, 200))}`,
       );
       assert.ok(!capturedOutput.includes('choose a provider'));
+    } finally {
+      instance.unmount();
+    }
+  });
+
+  it('attaches a clipboard image on ctrl-V and sends it with the task', async () => {
+    // The terminal cannot deliver image bytes — bracketed paste carries
+    // characters — so ctrl-V reads the OS clipboard instead. This drives that
+    // whole path: keystroke, label in the prompt, bytes on session.run().
+    const png = Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      Buffer.alloc(4096),
+    ]);
+    const sent: Array<{ text: string; images: unknown[] }> = [];
+    mockRun = async (text, images) => { sent.push({ text, images }); };
+
+    const ws = mkTemp();
+    const stream = fakeStdout(chunk => { capturedOutput += chunk; });
+    const stdin = fakeStdin();
+
+    const instance = render(
+      React.createElement(App, {
+        workspaceRoot: ws,
+        agentProfile: { provider: 'claude' as const, model: 'claude-sonnet-4-6' },
+        SessionCtor: MockSession as any,
+        startLoginCtor: mockStartLogin,
+        completeLoginCtor: mockCompleteLogin,
+        readClipboardImageCtor: () =>
+          ({ image: { data: png.toString('base64'), mimeType: 'image/png' as const } }),
+      } as any),
+      { stdout: stream, stdin, patchConsole: false, exitOnCtrlG: false },
+    );
+
+    try {
+      await waitFor(() => capturedOutput.includes('type a task'));
+
+      stdin.push('why is this wrong?');
+      await waitFor(() => capturedOutput.includes('why is this wrong?'));
+
+      stdin.push('\u0016'); // ctrl-V
+      await waitFor(() => capturedOutput.includes('[image #1]'));
+      assert.match(capturedOutput, /attached \[image #1\] — 4 KB png/,
+        'the row says what was attached and how big it is');
+
+      stdin.push('\r');
+      await waitFor(() => sent.length > 0);
+
+      assert.equal(sent[0].text, 'why is this wrong? [image #1]',
+        'the label stays in the text, so the model can refer to it');
+      assert.equal(sent[0].images.length, 1);
+      const image = sent[0].images[0] as { data: string; mimeType: string };
+      assert.equal(image.mimeType, 'image/png');
+      assert.ok(Buffer.from(image.data, 'base64').equals(png), 'the bytes survive the round trip');
     } finally {
       instance.unmount();
     }

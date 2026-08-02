@@ -75,6 +75,7 @@ export const HELP = `commands:
 
 Esc              — interrupt running task (enters steering mode)
 Ctrl-R           — toggle live reasoning (providers that stream chain-of-thought)
+Ctrl-V           — attach the image on your clipboard to the next message
 Esc Esc          — force-quit
 Esc (approval)   — deny all pending and interrupt
 Ctrl-C           — interrupt, or quit when nothing is running

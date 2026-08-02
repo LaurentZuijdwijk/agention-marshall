@@ -22,6 +22,8 @@ import { useEngineClient } from './hooks/useEngineClient.js';
 import type { TranscriptPort } from './hooks/useEngineClient.js';
 import { usePreferences } from './hooks/usePreferences.js';
 import { usePasteBuffer } from './hooks/usePasteBuffer.js';
+import { useAttachments, describeImage } from './hooks/useAttachments.js';
+import { readClipboardImage } from './services/clipboard.js';
 import { useSession } from './hooks/useSession.js';
 import { useKeyBindings } from './hooks/useKeyBindings.js';
 import { startLogin, completeLogin } from './login.js';
@@ -69,6 +71,7 @@ interface AppInjectables {
   SetupCtor?: React.ComponentType<any>;
   startLoginCtor?: () => LoginSession;
   completeLoginCtor?: (code: string, session: LoginSession) => Promise<void>;
+  readClipboardImageCtor?: typeof readClipboardImage;
 }
 
 export function App({
@@ -88,6 +91,7 @@ export function App({
   SetupCtor = Setup,
   startLoginCtor = startLogin,
   completeLoginCtor = completeLogin,
+  readClipboardImageCtor = readClipboardImage,
 }: AppProps & AppInjectables) {
   traceRender('App');
   const { exit } = useApp();
@@ -104,6 +108,7 @@ export function App({
   const transcript = useTranscript();
   const approvals = useApprovals();
   const pasteBuffer = usePasteBuffer();
+  const attachments = useAttachments();
 
   // ── the header row ─────────────────────────────────────────────────────────
   const headerMeta = (deep: AgentProfile, fast?: AgentProfile): HeaderMeta => ({
@@ -189,6 +194,19 @@ export function App({
       if (!on) transcript.takeReasoning();
       transcript.push('info', on ? 'reasoning shown (ctrl-r to hide)' : 'reasoning hidden');
     },
+    attachImage: () => {
+      const result = readClipboardImageCtor();
+      if ('error' in result) {
+        transcript.push('info', result.error);
+        return;
+      }
+      // The label goes into the prompt so the user can write around it, and so
+      // a second image is something they can refer to by name.
+      const label = attachments.add(result.image);
+      const before = input.trimEnd();
+      setInput(before === '' ? label : `${before} ${label}`);
+      transcript.push('info', `attached ${label} — ${describeImage(result.image)}`);
+    },
     quit,
     interrupt: () => session?.interrupt(),
     interruptApproval: () => {
@@ -244,8 +262,12 @@ export function App({
     // device, and every branch below (login code, slash command, task) wants
     // what the user actually pasted.
     const text = pasteBuffer.expand(value).trim();
+    // Read off the submitted text, so an image whose label the user deleted is
+    // dropped rather than sent invisibly.
+    const images = attachments.attachedTo(text);
     setInput('');
     pasteBuffer.clear();
+    attachments.clear();
     if (!text) return;
 
     if (mode.type === 'login-pending') {
@@ -270,7 +292,7 @@ export function App({
     transcript.push('user', text);
     setSteering(false);
     setMode({ type: 'running' });
-    session?.run(text).catch((err) => {
+    session?.run(text, images).catch((err) => {
       transcript.push('error', err instanceof Error ? err.message : String(err));
       setMode({ type: 'idle' });
     });

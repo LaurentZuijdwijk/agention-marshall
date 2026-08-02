@@ -8,6 +8,8 @@ export interface KeyBindings {
   hasCompletion: boolean;
   acceptCompletion(): void;
   toggleReasoning(): void;
+  /** Ctrl-V while the prompt is accepting input: attach the clipboard image. */
+  attachImage(): void;
   quit(): void;
   /** Esc while work is in flight. */
   interrupt(): void;
@@ -37,6 +39,14 @@ export function useKeyBindings(bindings: KeyBindings): void {
   // OpenRouter thinking models; silent no-op elsewhere).
   useInput((input, key) => {
     if (key.ctrl && input === 'r') bindings.toggleReasoning();
+  });
+
+  // Ctrl-V reads the image off the system clipboard. It is a separate key from
+  // paste because the terminal cannot deliver one: bracketed paste carries
+  // characters, so image bytes never reach stdin at all. Idle only — attaching
+  // to a prompt that is not accepting input would go nowhere.
+  useInput((input, key) => {
+    if (key.ctrl && input === 'v' && mode.type === 'idle') bindings.attachImage();
   });
 
   // ── interrupt / quit ───────────────────────────────────────────────────────
