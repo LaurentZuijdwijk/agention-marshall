@@ -28,6 +28,8 @@ import {
 } from './agent-factory.js';
 import { agentTool } from './agent-tool.js';
 import { runAgent } from './streaming.js';
+import { checkAttachments, buildInput } from './images.js';
+import type { ImageAttachment } from './images.js';
 import { describeAgentError } from './errors.js';
 import { resolveRoleProfile, isDelegated, resolveModel, contextToolEnabled, routingSummary, resolveSearchProfile } from './config.js';
 import type { EngineConfig, AgentProfile, Role } from './config.js';
@@ -455,9 +457,19 @@ export class Session {
     return decision;
   }
 
-  async run(task: string): Promise<void> {
+  async run(task: string, images: ImageAttachment[] = []): Promise<void> {
     if (this.controller) {
       this.client.onOutput({ type: 'error', message: 'A task is already running.' });
+      return;
+    }
+
+    // Before anything is spent. The refusals this catches are ones where the
+    // request would otherwise succeed and mislead — ollama drops images on the
+    // floor, so without this the model answers about something it never saw.
+    const refusal = checkAttachments(resolveRoleProfile(this.config, 'coder'), images);
+    if (refusal) {
+      this.client.onOutput({ type: 'error', message: refusal });
+      this.log(`REFUSED ${refusal}`);
       return;
     }
 
@@ -495,7 +507,10 @@ export class Session {
     let detachToolResult: (() => void) | null = null;
     const startMs = Date.now();
 
-    this.log(`TASK ${JSON.stringify(task)}`);
+    const attached = images.length > 0
+      ? ` +${images.length} image${images.length > 1 ? 's' : ''}`
+      : '';
+    this.log(`TASK ${JSON.stringify(task)}${attached}`);
 
     // Captured locally (not read from this.controller later) because the underlying
     // agent SDK has no cancellation hook: a real interrupt can only stop us *awaiting*
@@ -566,7 +581,7 @@ export class Session {
       // do nothing until the model's current turn (and any tool-blocked retries it
       // attempts afterward) finished on its own, which can take minutes on local models.
       const response = await new Promise<string>((resolve, reject) => {
-        runAgent(agent, effectiveTask, chunk => {
+        runAgent(agent, buildInput(effectiveTask, images), chunk => {
           if (signal.aborted) return;
           this.client.onOutput(chunk.type === 'reasoning'
             ? { type: 'reasoning', text: chunk.content }
