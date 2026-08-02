@@ -27,6 +27,7 @@ import {
   REVIEWER_TOOL_GUIDANCE,
 } from './agent-factory.js';
 import { agentTool } from './agent-tool.js';
+import { runAgent } from './streaming.js';
 import { describeAgentError } from './errors.js';
 import { resolveRoleProfile, isDelegated, resolveModel, contextToolEnabled, routingSummary, resolveSearchProfile } from './config.js';
 import type { EngineConfig, AgentProfile, Role } from './config.js';
@@ -551,16 +552,6 @@ export class Session {
       // the detach in `finally` each turn stacks another listener on those five.
       detachToolResult = this.attachToolListeners(agent, tools, signal);
 
-      agent.on('token', (text: unknown) => {
-        if (signal.aborted) return;
-        if (typeof text === 'string') this.client.onOutput({ type: 'token', text });
-      });
-
-      agent.on('reasoning', (text: unknown) => {
-        if (signal.aborted) return;
-        if (typeof text === 'string') this.client.onOutput({ type: 'reasoning', text });
-      });
-
       agent.on(AgentEvent.ERROR, (err: unknown) => {
         if (signal.aborted) return;
         errorReported = true;
@@ -571,11 +562,16 @@ export class Session {
 
       this.client.onOutput({ type: 'thinking' });
       // Race instead of a plain await: the agent SDK has no cancellation hook, so
-      // agent.execute() itself won't reject on abort — without this race, Esc would
+      // the run itself won't reject on abort — without this race, Esc would
       // do nothing until the model's current turn (and any tool-blocked retries it
       // attempts afterward) finished on its own, which can take minutes on local models.
       const response = await new Promise<string>((resolve, reject) => {
-        agent.execute(effectiveTask).then(resolve, reject);
+        runAgent(agent, effectiveTask, chunk => {
+          if (signal.aborted) return;
+          this.client.onOutput(chunk.type === 'reasoning'
+            ? { type: 'reasoning', text: chunk.content }
+            : { type: 'token', text: chunk.content });
+        }).then(resolve, reject);
         signal.addEventListener('abort', () => {
           reject(new DOMException('Task interrupted by user', 'AbortError'));
         }, { once: true });
