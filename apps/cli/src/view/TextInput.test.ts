@@ -171,6 +171,24 @@ describe('TextInput', () => {
     assert.equal(input.value, '/m');
   });
 
+  it('ignores ctrl- chords, which belong to the app', async () => {
+    // ctrl-V used to type a "v" here while also attaching the clipboard image
+    // in the App. Both wrote the value for the same keystroke, the App's write
+    // lost the race, and the [image #1] label it had just inserted vanished —
+    // so the image was dropped at submit with nothing on screen to explain it.
+    const input = mount({ initial: 'hi' }); active = input;
+    await input.type('\u0016', '\u0012', '\u0001'); // ctrl-V, ctrl-R, ctrl-A
+
+    assert.equal(input.value, 'hi', 'no chord may leave a character behind');
+  });
+
+  it('ignores alt- chords for the same reason', async () => {
+    const input = mount({ initial: 'hi' }); active = input;
+    await input.type('\u001Bb', '\u001Bf'); // alt-b, alt-f (word motion)
+
+    assert.equal(input.value, 'hi');
+  });
+
   it('puts the cursor at the end when the parent rewrites the value', async () => {
     // The autocomplete path: the App appends the ghost text itself. If the
     // cursor stayed where it was, the next keystroke would land mid-word —
@@ -211,7 +229,7 @@ describe('TextInput', () => {
       const input = mount(); active = input;
       await tickTwice();
 
-      assert.match(input.raw, /\[\?2004h/);
+      assert.match(input.raw, /\[\?2004h/);
     });
 
     it('keeps a multi-line paste whole, as newlines', async () => {

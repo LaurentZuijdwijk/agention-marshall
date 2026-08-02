@@ -6,6 +6,8 @@ import type { AgentProfile, Provider } from './config.js';
 
 const png = (data = 'AAAA'): ImageAttachment => ({ data, mimeType: 'image/png' });
 const on = (provider: Provider): AgentProfile => ({ provider });
+/** Base64 text for an image of `bytes` decoded size. */
+const base64Of = (bytes: number) => 'x'.repeat(Math.ceil(bytes * 4 / 3));
 
 describe('checkAttachments', () => {
   it('says nothing when there is nothing attached', () => {
@@ -37,14 +39,21 @@ describe('checkAttachments', () => {
   });
 
   it('refuses an image over the size limit, and says which one', () => {
-    const huge = png('x'.repeat(MAX_IMAGE_BYTES + 1));
-    const refusal = checkAttachments(on('claude'), [png(), huge]);
+    const refusal = checkAttachments(on('claude'), [png(), png(base64Of(6 * 1024 * 1024))]);
     assert.match(refusal ?? '', /^Image 2 is /);
-    assert.match(refusal ?? '', /5MB limit/);
+    assert.match(refusal ?? '', /6\.0 MB, over the 5 MB limit/,
+      'the size quoted is the decoded one the client already showed the user');
   });
 
-  it('accepts an image exactly at the limit', () => {
-    assert.equal(checkAttachments(on('claude'), [png('x'.repeat(MAX_IMAGE_BYTES))]), null);
+  it('accepts an image just under the limit', () => {
+    // The cap is on the image, not the base64 that carries it. Measured the
+    // other way this 5MB screenshot would be "6.7MB" and refused against a
+    // limit the message claims is 5MB.
+    assert.equal(checkAttachments(on('claude'), [png(base64Of(MAX_IMAGE_BYTES - 1))]), null);
+  });
+
+  it('refuses one just over', () => {
+    assert.match(checkAttachments(on('claude'), [png(base64Of(MAX_IMAGE_BYTES + 8))]) ?? '', /over the/);
   });
 });
 

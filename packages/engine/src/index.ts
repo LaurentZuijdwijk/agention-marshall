@@ -5,7 +5,7 @@ export {
 } from './config.js';
 export type { OutputEvent, ClientInterface, EditorContext } from './types.js';
 export type { ImageAttachment } from './images.js';
-export { checkAttachments, IMAGE_MIME_TYPES, MAX_IMAGE_BYTES } from './images.js';
+export { checkAttachments, decodedBytes, IMAGE_MIME_TYPES, MAX_IMAGE_BYTES } from './images.js';
 export type { ModelInfo } from './models.js';
 export {
   parseLlamaCppModels, applyLlamaCppProps, parseOllamaModels, parseOpenRouterModels,

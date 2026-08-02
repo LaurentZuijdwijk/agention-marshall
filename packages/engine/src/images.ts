@@ -14,10 +14,19 @@ export const IMAGE_MIME_TYPES: ImageMimeType[] = [
 
 /**
  * Anthropic rejects images over 5MB and it is the tightest of the providers we
- * talk to, so one limit covers all of them. Measured on the base64 text, which
- * is what actually goes over the wire.
+ * talk to, so one limit covers all of them.
+ *
+ * Measured on the decoded image, not the base64 that carries it. Providers
+ * publish their limits that way, and it is also the number a user can check
+ * against the file on disk — a cap on the encoded text would reject a 3.8MB
+ * screenshot while claiming a 5MB limit.
  */
 export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+
+/** Size of the image itself; base64 inflates it by 4/3 in transit. */
+export function decodedBytes(data: string): number {
+  return Math.floor(data.length * 3 / 4);
+}
 
 /**
  * Why a provider cannot carry an attached image, or null when it can.
@@ -54,9 +63,12 @@ export function checkAttachments(
     if (!IMAGE_MIME_TYPES.includes(image.mimeType)) {
       return `Image ${i + 1} is a ${image.mimeType}, which no provider accepts. Use PNG, JPEG, GIF or WebP.`;
     }
-    if (image.data.length > MAX_IMAGE_BYTES) {
-      const mb = (image.data.length / 1024 / 1024).toFixed(1);
-      return `Image ${i + 1} is ${mb}MB, over the ${MAX_IMAGE_BYTES / 1024 / 1024}MB limit. Crop or scale it down first.`;
+    const bytes = decodedBytes(image.data);
+    if (bytes > MAX_IMAGE_BYTES) {
+      // Same units the client used when it announced the attachment, so the
+      // refusal names the size the user already saw rather than a bigger one.
+      const mb = (bytes / 1024 / 1024).toFixed(1);
+      return `Image ${i + 1} is ${mb} MB, over the ${MAX_IMAGE_BYTES / 1024 / 1024} MB limit. Crop or scale it down first.`;
     }
   }
 

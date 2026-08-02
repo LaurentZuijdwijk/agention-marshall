@@ -202,9 +202,12 @@ export function App({
       }
       // The label goes into the prompt so the user can write around it, and so
       // a second image is something they can refer to by name.
+      // Trailing space because the cursor lands after the label: without it the
+      // next thing typed runs into it, and `[image #1]what do you think?` is
+      // what the model would be asked to read.
       const label = attachments.add(result.image);
       const before = input.trimEnd();
-      setInput(before === '' ? label : `${before} ${label}`);
+      setInput(before === '' ? `${label} ` : `${before} ${label} `);
       transcript.push('info', `attached ${label} — ${describeImage(result.image)}`);
     },
     quit,

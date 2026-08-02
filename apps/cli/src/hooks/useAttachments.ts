@@ -1,4 +1,5 @@
 import { useRef } from 'react';
+import { decodedBytes } from '@agentionai/marshall-engine';
 import type { ImageAttachment } from '@agentionai/marshall-engine';
 
 /**
@@ -25,9 +26,10 @@ export function labelFor(id: number): string {
   return `[image #${id}]`;
 }
 
-/** Base64 inflates by 4/3; report what was on the clipboard, not what we send. */
+/** Reports the image, not the base64 it inflates to — and shares the engine's
+ *  measure, so the size shown here is the one a refusal would quote back. */
 export function describeImage(image: ImageAttachment): string {
-  const bytes = Math.floor(image.data.length * 3 / 4);
+  const bytes = decodedBytes(image.data);
   const size = bytes >= 1024 * 1024
     ? `${(bytes / 1024 / 1024).toFixed(1)} MB`
     : `${Math.max(1, Math.round(bytes / 1024))} KB`;

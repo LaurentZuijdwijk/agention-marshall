@@ -126,10 +126,17 @@ export function TextInput({
   }, { isActive: focus });
 
   useInput((input, key) => {
+    // Every ctrl- and alt- chord belongs to the app, not to the text. Only
+    // ctrl-C used to be excluded, so the rest fell through to the insert branch
+    // below and typed their letter: ctrl-V both attached the clipboard image
+    // *and* wrote a "v", and the two writes to the value raced — the one that
+    // lost was the App's, taking the [image #1] label with it, so the image was
+    // silently dropped at submit. ctrl-R had the same shape, quieter.
     if (
       key.upArrow ||
       key.downArrow ||
-      (key.ctrl && input === 'c') ||
+      key.ctrl ||
+      key.meta ||
       key.tab ||
       (key.shift && key.tab)
     ) {
