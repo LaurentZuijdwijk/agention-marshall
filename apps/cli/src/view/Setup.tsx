@@ -13,14 +13,20 @@ import { windowRange } from '../format.js';
 
 // ── data ──────────────────────────────────────────────────────────────────────
 
+/**
+ * Offered in this order on purpose. The three providers whose model list is
+ * fetched live come first — they are the ones where the wizard does real work
+ * rather than showing a hardcoded preset, and openrouter and llamacpp are where
+ * most sessions actually land.
+ */
 const PROVIDERS: Array<{ value: Provider; hint: string }> = [
+  { value: 'openrouter', hint: 'OPENROUTER_API_KEY' },
+  { value: 'llamacpp',   hint: 'no key needed'      },
+  { value: 'ollama',     hint: 'no key needed'      },
   { value: 'claude',     hint: 'ANTHROPIC_API_KEY' },
   { value: 'openai',     hint: 'OPENAI_API_KEY'    },
   { value: 'gemini',     hint: 'GEMINI_API_KEY'     },
   { value: 'mistral',    hint: 'MISTRAL_API_KEY'    },
-  { value: 'ollama',     hint: 'no key needed'      },
-  { value: 'llamacpp',   hint: 'no key needed'      },
-  { value: 'openrouter', hint: 'OPENROUTER_API_KEY' },
 ];
 
 const MODEL_PRESETS: Record<Provider, string[]> = {
