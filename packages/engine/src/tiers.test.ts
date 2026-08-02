@@ -7,6 +7,11 @@ import {
   isDelegated,
   DEFAULT_ROLE_TIERS,
   CHEAP_MODELS,
+  contextToolEnabled,
+  routingSummary,
+  resolveSearchProfile,
+  resolveMaxTokens,
+  DEFAULT_MAX_TOKENS,
 } from './config.js';
 import type { EngineConfig, AgentProfile } from './config.js';
 
@@ -177,4 +182,130 @@ test('isDelegated compares resolved models, not the raw field', () => {
     models: { deep: { provider: 'claude' }, fast: { provider: 'claude', model: 'claude-sonnet-4-6' } },
   });
   assert.equal(isDelegated(config, 'context'), false);
+});
+
+// ---------------------------------------------------------------------------
+// contextToolEnabled — configuring a fast tier is what turns tiering on
+// ---------------------------------------------------------------------------
+
+test('no tier config means no context tool', () => {
+  assert.equal(contextToolEnabled(base()), false);
+});
+
+test('an explicit fast tier enables the context tool', () => {
+  assert.equal(contextToolEnabled(base({ models: { deep: KIMI, fast: LOCAL } })), true);
+});
+
+test('a deep-only models block does not enable it', () => {
+  assert.equal(contextToolEnabled(base({ models: { deep: LOCAL } })), false);
+});
+
+test('an auto-degraded fast tier does not enable it', () => {
+  // claude has a CHEAP_MODELS entry, so resolveTierProfile('fast') differs from
+  // deep — but the user never asked for tiering, so the toolbelt must not grow.
+  const config = base({ agent: { provider: 'claude' } });
+  assert.notEqual(resolveTierProfile(config, 'fast').model, resolveTierProfile(config, 'deep').model);
+  assert.equal(contextToolEnabled(config), false);
+});
+
+test('the legacy contextAgent field still enables it', () => {
+  assert.equal(contextToolEnabled(base({ contextAgent: LOCAL })), true);
+});
+
+test('a context roleProfiles pin enables it', () => {
+  assert.equal(contextToolEnabled(base({ roleProfiles: { context: LOCAL } })), true);
+});
+
+// ---------------------------------------------------------------------------
+// routingSummary — what the session logs, and what the UI tags
+// ---------------------------------------------------------------------------
+
+test('routingSummary covers every role exactly once', () => {
+  const roles = routingSummary(base()).map(r => r.role).sort();
+  assert.deepEqual(roles, Object.keys(DEFAULT_ROLE_TIERS).sort());
+});
+
+test('routingSummary splits deep and fast roles across providers', () => {
+  const byRole = Object.fromEntries(
+    routingSummary(base({ models: { deep: KIMI, fast: LOCAL } })).map(r => [r.role, r]),
+  );
+  assert.equal(byRole.coder.model, KIMI.model);
+  assert.equal(byRole.coder.delegated, false);
+  assert.equal(byRole.context.model, LOCAL.model);
+  assert.equal(byRole.context.provider, 'llamacpp');
+  assert.equal(byRole.context.delegated, true);
+});
+
+test('routingSummary reports nothing delegated when there is no fast tier', () => {
+  assert.ok(routingSummary(base({ agent: LOCAL })).every(r => r.delegated === false));
+});
+
+// ---------------------------------------------------------------------------
+// resolveSearchProfile — web search is claude-only and must survive a local
+// fast tier, since that is the setup the tiering feature exists for
+// ---------------------------------------------------------------------------
+
+const CLAUDE: AgentProfile = { provider: 'claude', model: 'claude-opus-4-6', apiKey: 'k' };
+
+test('search uses the fast tier when it can search', () => {
+  const fastClaude: AgentProfile = { provider: 'claude', model: 'claude-haiku-4-5-20251001', apiKey: 'k' };
+  const config = base({ agent: CLAUDE, models: { deep: CLAUDE, fast: fastClaude } });
+  assert.deepEqual(resolveSearchProfile(config), fastClaude);
+});
+
+test('search falls back to deep when the fast tier is local', () => {
+  const config = base({ agent: CLAUDE, models: { deep: CLAUDE, fast: LOCAL } });
+  assert.deepEqual(resolveSearchProfile(config), CLAUDE);
+});
+
+test('search is unavailable when no tier is claude', () => {
+  assert.equal(resolveSearchProfile(base({ agent: LOCAL, models: { deep: LOCAL, fast: LOCAL } })), null);
+  assert.equal(resolveSearchProfile(base()), null, 'openrouter deep cannot search either');
+});
+
+// ---------------------------------------------------------------------------
+// /plan and /review run on the deep tier — they are deciding roles, and a
+// "llama.cpp error" from them is really OpenRouter, which shares the class
+// ---------------------------------------------------------------------------
+
+test('planner and reviewer stay on deep even with a local fast tier', () => {
+  const config = base({ agent: KIMI, models: { deep: KIMI, fast: LOCAL } });
+  assert.deepEqual(resolveRoleProfile(config, 'planner'), KIMI);
+  assert.deepEqual(resolveRoleProfile(config, 'reviewer'), KIMI);
+  assert.equal(isDelegated(config, 'reviewer'), false, '/review must not be tagged as delegated');
+});
+
+// ---------------------------------------------------------------------------
+// resolveMaxTokens — a fixed cap was turning long-but-valid answers into
+// "Response exceeded maximum token limit"
+// ---------------------------------------------------------------------------
+
+test('hosted providers send no cap, so the model uses its own ceiling', () => {
+  assert.equal(resolveMaxTokens(KIMI), undefined);
+  assert.equal(resolveMaxTokens({ provider: 'openai' }), undefined);
+});
+
+test('local servers keep a ceiling — uncapped they generate until context runs out', () => {
+  assert.equal(resolveMaxTokens(LOCAL), 32768);
+  assert.equal(resolveMaxTokens({ provider: 'ollama' }), 32768);
+});
+
+test('the cap is per profile, so a hosted deep and local fast differ', () => {
+  const config = base({ agent: KIMI, models: { deep: KIMI, fast: LOCAL } });
+  assert.equal(resolveMaxTokens(resolveRoleProfile(config, 'coder')), undefined);
+  assert.equal(resolveMaxTokens(resolveRoleProfile(config, 'context')), 32768);
+});
+
+test('claude still gets a cap, since Anthropic rejects requests without one', () => {
+  assert.equal(resolveMaxTokens({ provider: 'claude' }), DEFAULT_MAX_TOKENS);
+});
+
+test('an explicit cap wins everywhere', () => {
+  assert.equal(resolveMaxTokens(KIMI, 32000), 32000);
+  assert.equal(resolveMaxTokens({ provider: 'claude' }, 32000), 32000);
+});
+
+test('zero means omit, but claude keeps its required fallback', () => {
+  assert.equal(resolveMaxTokens(KIMI, 0), undefined);
+  assert.equal(resolveMaxTokens({ provider: 'claude' }, 0), DEFAULT_MAX_TOKENS);
 });

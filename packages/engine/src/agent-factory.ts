@@ -1,8 +1,9 @@
+import { AgentEvent } from '@agentionai/agents/core';
 import type { Tool } from '@agentionai/agents/core';
 import type { History } from '@agentionai/agents/core';
 import type { BaseAgent } from '@agentionai/agents/core';
 import type { BuiltInTool } from '@agentionai/agents/core';
-import { resolveAuth, resolveModel, DEFAULT_MAX_TOKENS, PROVIDER_DEFAULTS } from './config.js';
+import { resolveAuth, resolveModel, resolveMaxTokens, PROVIDER_DEFAULTS } from './config.js';
 import type { AgentProfile } from './config.js';
 
 const PROJECT_MEMORY_HEADER = '\n\n## Project memory (AGENTS.md)\n\n';
@@ -41,7 +42,32 @@ concrete problems (bugs, missed requirements, inconsistencies). Do not edit anyt
 export const CONTEXT_TOOL_GUIDANCE =
   '\n\nPrefer the `context` tool over read_file/list_dir/search for exploring, understanding, or ' +
   'summarizing the codebase — it runs on a separate, faster model, so offloading discovery to it ' +
-  'is cheaper than reading it all yourself. Reserve read_file for files you are about to edit.';
+  'is cheaper than reading it all yourself. Reserve read_file for files you are about to edit.' +
+  '\n\nWhen a question spans several independent areas — different directories, packages or ' +
+  'subsystems — issue multiple `context` calls in a single turn, one per area, rather than one ' +
+  'broad call or several sequential ones. They run in parallel on independent agents, so the ' +
+  'whole survey costs about as much wall-clock time as its slowest part. Give each call a ' +
+  'self-contained brief: it cannot see the others, the conversation, or your plan.';
+
+/**
+ * Context guidance for /plan and /review, which never edit.
+ *
+ * The coder's version says to reserve read_file for files you are about to
+ * change — which for a reviewer means "never", and a reviewer that judges code
+ * from someone else's summaries is a worse reviewer. So delegation here is
+ * scoped to breadth: survey wide with `context`, then read the specific files
+ * the verdict actually rests on.
+ */
+export const SURVEY_TOOL_GUIDANCE =
+  '\n\nUse the `context` tool to survey breadth — it runs on a separate, faster model, so ' +
+  'mapping out a directory or subsystem through it is much cheaper than reading every file ' +
+  'yourself. When the scope spans several directories or packages, issue one `context` call ' +
+  'per area in a single turn: they run in parallel on independent agents, so the whole survey ' +
+  'costs about as much time as its slowest part. Give each call a self-contained brief — it ' +
+  'cannot see the others or this conversation.' +
+  '\n\nThen read the specific files your conclusions actually rest on with read_file. Do not ' +
+  'assert a bug, or sign off on correctness, based only on a summary — verify that claim ' +
+  'against the real source first.';
 
 export const PLANNER_TOOL_GUIDANCE =
   '\n\nFor multi-step or multi-file tasks, call the `planner` tool first to get a concrete plan before making changes.';
@@ -70,7 +96,7 @@ export async function createAgent(
 ): Promise<BaseAgent<string, string>> {
   const {
     name = 'Marshall',
-    maxTokens = DEFAULT_MAX_TOKENS,
+    maxTokens,
     projectMemory,
     extraInstructions,
     systemPrompt,
@@ -83,6 +109,9 @@ export async function createAgent(
     prompt +
     (extraInstructions ?? '') +
     (projectMemory ? PROJECT_MEMORY_HEADER + projectMemory : '');
+  // Omitted entirely when the provider doesn't require it, so the model's own
+  // ceiling applies instead of an arbitrary cap that truncates long answers.
+  const cap = resolveMaxTokens(profile, maxTokens);
   const base = {
     id: name.toLowerCase(),
     name,
@@ -90,53 +119,70 @@ export async function createAgent(
     apiKey,
     model,
     tools,
-    maxTokens,
+    ...(cap !== undefined ? { maxTokens: cap } : {}),
   };
 
-  switch (profile.provider) {
-    case 'claude': {
-      const { ClaudeAgent } = await import('@agentionai/agents/claude');
-      return new ClaudeAgent({
-        ...base,
-        ...(authType === 'oauth' ? { authType } : {}),
-        ...(builtInTools?.length ? { builtInTools } : {}),
-      }, history);
-    }
-    case 'openai': {
-      const { OpenAiAgent } = await import('@agentionai/agents/openai');
-      return new OpenAiAgent(base, history);
-    }
-    case 'gemini': {
-      const { GeminiAgent } = await import('@agentionai/agents/gemini');
-      return new GeminiAgent(base, history);
-    }
-    case 'mistral': {
-      const { MistralAgent } = await import('@agentionai/agents/mistral');
-      return new MistralAgent(base, history);
-    }
-    case 'ollama': {
-      const { OllamaAgent } = await import('@agentionai/agents/ollama');
-      const ollamaHost = profile.host ?? 'http://localhost:11434';
-      return new OllamaAgent({ ...base, vendor: 'ollama', host: ollamaHost } as ConstructorParameters<typeof OllamaAgent>[0], history);
-    }
-    case 'llamacpp': {
-      const { LlamaCppAgent } = await import('@agentionai/agents/llamacpp');
-      const llamaHost = profile.host ?? 'http://localhost:8080';
-      return new LlamaCppAgent({ ...base, baseURL: `${llamaHost}/v1` } as ConstructorParameters<typeof LlamaCppAgent>[0], history);
-    }
-    case 'openrouter': {
-      // OpenRouter speaks the same OpenAI-compatible /v1/chat/completions API as
-      // llama.cpp — reuse LlamaCppAgent (it's really just "OpenAI chat-completions
-      // client with a configurable baseURL", not llama.cpp-specific) rather than
-      // OpenAiAgent, which targets OpenAI's newer Responses API that OpenRouter
-      // doesn't support.
-      const { LlamaCppAgent } = await import('@agentionai/agents/llamacpp');
-      const routerHost = profile.host ?? PROVIDER_DEFAULTS.openrouter.host;
-      return new LlamaCppAgent({ ...base, baseURL: routerHost } as ConstructorParameters<typeof LlamaCppAgent>[0], history);
-    }
-    default: {
-      const _: never = profile.provider;
-      throw new Error(`Unknown provider: ${_}`);
+  const agent = await instantiate();
+
+  // EventEmitter contract: emitting 'error' with no listener attached throws as
+  // an uncaught exception and takes the process down. These agents emit 'error'
+  // *in addition* to rejecting their promise, so catching the rejection is not
+  // enough — a llama.cpp server going away mid-compression crashed the whole CLI.
+  // Every agent therefore gets a safety net here; callers that want to report the
+  // failure add their own listener on top, and the rejection stays the reporting
+  // path. Swallowing here loses nothing: the same error arrives as a rejection.
+  agent.on(AgentEvent.ERROR, () => {});
+
+  return agent;
+
+  // Declared after the return purely so the interesting part — the safety net —
+  // reads first; hoisting makes it available above.
+  async function instantiate(): Promise<BaseAgent<string, string>> {
+    switch (profile.provider) {
+      case 'claude': {
+        const { ClaudeAgent } = await import('@agentionai/agents/claude');
+        return new ClaudeAgent({
+          ...base,
+          ...(authType === 'oauth' ? { authType } : {}),
+          ...(builtInTools?.length ? { builtInTools } : {}),
+        }, history);
+      }
+      case 'openai': {
+        const { OpenAiAgent } = await import('@agentionai/agents/openai');
+        return new OpenAiAgent(base, history);
+      }
+      case 'gemini': {
+        const { GeminiAgent } = await import('@agentionai/agents/gemini');
+        return new GeminiAgent(base, history);
+      }
+      case 'mistral': {
+        const { MistralAgent } = await import('@agentionai/agents/mistral');
+        return new MistralAgent(base, history);
+      }
+      case 'ollama': {
+        const { OllamaAgent } = await import('@agentionai/agents/ollama');
+        const ollamaHost = profile.host ?? 'http://localhost:11434';
+        return new OllamaAgent({ ...base, vendor: 'ollama', host: ollamaHost } as ConstructorParameters<typeof OllamaAgent>[0], history);
+      }
+      case 'llamacpp': {
+        const { LlamaCppAgent } = await import('@agentionai/agents/llamacpp');
+        const llamaHost = profile.host ?? 'http://localhost:8080';
+        return new LlamaCppAgent({ ...base, baseURL: `${llamaHost}/v1` } as ConstructorParameters<typeof LlamaCppAgent>[0], history);
+      }
+      case 'openrouter': {
+        // OpenRouter speaks the same OpenAI-compatible /v1/chat/completions API as
+        // llama.cpp — reuse LlamaCppAgent (it's really just "OpenAI chat-completions
+        // client with a configurable baseURL", not llama.cpp-specific) rather than
+        // OpenAiAgent, which targets OpenAI's newer Responses API that OpenRouter
+        // doesn't support.
+        const { LlamaCppAgent } = await import('@agentionai/agents/llamacpp');
+        const routerHost = profile.host ?? PROVIDER_DEFAULTS.openrouter.host;
+        return new LlamaCppAgent({ ...base, baseURL: routerHost } as ConstructorParameters<typeof LlamaCppAgent>[0], history);
+      }
+      default: {
+        const _: never = profile.provider;
+        throw new Error(`Unknown provider: ${_}`);
+      }
     }
   }
 }
