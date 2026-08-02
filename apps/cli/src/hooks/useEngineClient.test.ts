@@ -1,0 +1,269 @@
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import { createEngineClient } from './useEngineClient.js';
+import type { TranscriptPort, TurnOutcome } from './useEngineClient.js';
+import type { OutputEvent } from '@marshall/engine';
+import type { ApprovalRequest } from '@marshall/tools';
+
+interface Pushed { role: string; content: string; extra?: Record<string, unknown> }
+
+function harness(opts: { usage?: boolean; reasoning?: string; stream?: string } = {}) {
+  const pushed: Pushed[] = [];
+  const calls: string[] = [];
+  let pendingReasoning = opts.reasoning ?? '';
+  // Stands in for the live buffer the real port keeps: tokens land in it and a
+  // take empties it, which is what the ordering rules below are written against.
+  let pendingStream = opts.stream ?? '';
+
+  const port: TranscriptPort = {
+    push: (role, content, extra) => {
+      pushed.push({ role, content, extra: extra as Record<string, unknown> | undefined });
+      calls.push(`push:${role}`);
+    },
+    appendToken: (t) => { pendingStream += t; calls.push(`token:${t}`); },
+    appendReasoning: (t) => { pendingReasoning += t; calls.push(`reasoning:${t}`); },
+    takeStream: () => { const s = pendingStream; pendingStream = ''; calls.push('takeStream'); return s; },
+    takeReasoning: () => { const r = pendingReasoning; pendingReasoning = ''; calls.push('takeReasoning'); return r; },
+    turnEnded: (o: TurnOutcome) => calls.push(`turnEnded:${o}`),
+    requestApproval: async () => 'approve',
+    showUsage: () => opts.usage ?? false,
+  };
+
+  const client = createEngineClient(port);
+  return { client, pushed, calls, send: (e: OutputEvent) => client.onOutput(e) };
+}
+
+describe('tool calls', () => {
+  it('renders an ordinary tool as a tool row', () => {
+    const h = harness();
+    h.send({ type: 'tool-call', toolName: 'read_file', input: { path: 'a.ts' } });
+    assert.equal(h.pushed[0].role, 'tool');
+    assert.equal(h.pushed[0].content, 'a.ts');
+    assert.equal(h.pushed[0].extra?.note, undefined);
+  });
+
+  it('renders an agent-backed tool as an agent row carrying its model', () => {
+    const h = harness();
+    h.send({
+      type: 'tool-call', toolName: 'context', input: { instructions: 'survey apps/cli' },
+      subagent: { model: 'llamacpp/qwen', delegated: true },
+    });
+    assert.equal(h.pushed[0].role, 'agent');
+    assert.equal(h.pushed[0].content, 'survey apps/cli');
+    assert.equal(h.pushed[0].extra?.note, 'llamacpp/qwen');
+    assert.equal(h.pushed[0].extra?.delegated, true);
+  });
+
+  it('marks an agent that is not delegated, so it still reads as an agent', () => {
+    const h = harness();
+    h.send({
+      type: 'tool-call', toolName: 'planner', input: { instructions: 'plan' },
+      subagent: { model: 'openrouter/deepseek', delegated: false },
+    });
+    assert.equal(h.pushed[0].role, 'agent');
+    assert.equal(h.pushed[0].extra?.delegated, false);
+  });
+
+  it('tags a nested call with the agent that owns it', () => {
+    const h = harness();
+    h.send({ type: 'tool-call', toolName: 'read_file', input: { path: 'x.ts' }, parent: 'context#1' });
+    assert.equal(h.pushed[0].extra?.parent, 'context#1');
+  });
+
+  it('names the agent behind a top-level call that is not the coder', () => {
+    const h = harness();
+    h.send({ type: 'tool-call', toolName: 'read_file', input: { path: 'x.ts' }, caller: 'review' });
+    assert.equal(h.pushed[0].extra?.caller, 'review');
+  });
+
+  it('leaves the coder unnamed — it is the default voice, not an aside', () => {
+    const h = harness();
+    h.send({ type: 'tool-call', toolName: 'read_file', input: { path: 'x.ts' } });
+    assert.ok(!('caller' in (h.pushed[0].extra ?? {})));
+  });
+});
+
+describe('tool results', () => {
+  it('shows a top-level result', () => {
+    const h = harness();
+    h.send({ type: 'tool-result', toolName: 'read_file', result: 'contents' });
+    assert.deepEqual(h.calls, ['push:tool-result']);
+  });
+
+  it('drops a sub-agent result, which would otherwise drown the transcript', () => {
+    const h = harness();
+    h.send({ type: 'tool-result', toolName: 'read_file', result: 'contents', parent: 'context#0' });
+    assert.deepEqual(h.calls, []);
+  });
+});
+
+describe('sub-agent completion', () => {
+  it('reports size and duration on success', () => {
+    const h = harness();
+    h.send({ type: 'subagent-done', label: 'context#0', durationMs: 28300, chars: 4100 });
+    assert.equal(h.pushed[0].content, '4.1k chars');
+    assert.equal(h.pushed[0].extra?.note, '28.3s');
+    assert.equal(h.pushed[0].extra?.failed, false);
+  });
+
+  it('reports the error and marks the row failed', () => {
+    const h = harness();
+    h.send({ type: 'subagent-done', label: 'context#0', durationMs: 900, chars: 0, error: 'cannot reach host' });
+    assert.equal(h.pushed[0].content, 'cannot reach host');
+    assert.equal(h.pushed[0].extra?.failed, true);
+  });
+});
+
+describe('turn completion', () => {
+  it('commits reasoning before the answer, then ends the turn', () => {
+    const h = harness({ reasoning: 'thinking out loud' });
+    h.send({ type: 'response', text: 'the answer' });
+    assert.deepEqual(h.pushed.map(p => p.role), ['reasoning', 'assistant']);
+    assert.equal(h.pushed[0].content, 'thinking out loud');
+    assert.equal(h.pushed[1].content, 'the answer');
+    assert.equal(h.calls.at(-1), 'turnEnded:done');
+  });
+
+  it('omits the reasoning row when there is none', () => {
+    const h = harness();
+    h.send({ type: 'response', text: 'the answer' });
+    assert.deepEqual(h.pushed.map(p => p.role), ['assistant']);
+  });
+
+  it('commits the answer once, not once per source', () => {
+    // The final text arrives twice — token by token, then whole on the event.
+    const h = harness();
+    h.send({ type: 'token', text: 'the ' });
+    h.send({ type: 'token', text: 'answer' });
+    h.send({ type: 'response', text: 'the answer' });
+    assert.deepEqual(h.pushed.map(p => p.content), ['the answer']);
+  });
+
+  it('falls back to the streamed text when the final event carries none', () => {
+    const h = harness();
+    h.send({ type: 'token', text: 'all I said' });
+    h.send({ type: 'response', text: '' });
+    assert.deepEqual(h.pushed.map(p => p.content), ['all I said']);
+  });
+
+  it('an interrupt keeps the partial answer that was on screen', () => {
+    const h = harness({ reasoning: 'partial thought' });
+    h.send({ type: 'token', text: 'half a sent' });
+    h.send({ type: 'interrupted' });
+    assert.deepEqual(h.pushed.map(p => p.role), ['reasoning', 'assistant', 'info']);
+    assert.equal(h.pushed[1].content, 'half a sent');
+    assert.equal(h.calls.at(-1), 'turnEnded:interrupted');
+  });
+
+  it('an error ends the turn without steering', () => {
+    const h = harness();
+    h.send({ type: 'error', message: 'boom' });
+    assert.deepEqual(h.pushed.map(p => p.role), ['error']);
+    assert.equal(h.calls.at(-1), 'turnEnded:error');
+  });
+});
+
+describe('step ordering', () => {
+  it('commits what the model said before the tool it then called', () => {
+    const h = harness();
+    h.send({ type: 'reasoning', text: 'need the config' });
+    h.send({ type: 'token', text: 'Reading the config first.' });
+    h.send({ type: 'tool-call', toolName: 'read_file', input: { path: 'a.ts' } });
+    h.send({ type: 'tool-result', toolName: 'read_file', result: 'contents' });
+    h.send({ type: 'response', text: 'Done.' });
+
+    assert.deepEqual(h.pushed.map(p => p.role), [
+      'reasoning', 'assistant', 'tool', 'tool-result', 'assistant',
+    ]);
+    assert.equal(h.pushed[1].content, 'Reading the config first.');
+    assert.equal(h.pushed[4].content, 'Done.');
+  });
+
+  it('keeps each step in its own block instead of pooling them at the end', () => {
+    const h = harness();
+    h.send({ type: 'token', text: 'first step' });
+    h.send({ type: 'tool-call', toolName: 'read_file', input: { path: 'a.ts' } });
+    h.send({ type: 'token', text: 'second step' });
+    h.send({ type: 'tool-call', toolName: 'edit_file', input: { path: 'a.ts' } });
+    h.send({ type: 'response', text: 'finished' });
+
+    assert.deepEqual(h.pushed.map(p => p.content), [
+      'first step', 'a.ts', 'second step', 'a.ts', 'finished',
+    ]);
+  });
+
+  it('takes mid-turn prose from the event when the provider does not stream', () => {
+    const h = harness();
+    h.send({ type: 'assistant', text: 'Reading the config first.' });
+    h.send({ type: 'tool-call', toolName: 'read_file', input: { path: 'a.ts' } });
+    assert.deepEqual(h.pushed.map(p => p.role), ['assistant', 'tool']);
+    assert.equal(h.pushed[0].content, 'Reading the config first.');
+  });
+
+  it('never shows mid-turn prose twice when a provider both streams and reports it', () => {
+    const h = harness();
+    h.send({ type: 'token', text: 'Reading the config first.' });
+    h.send({ type: 'assistant', text: 'Reading the config first.' });
+    h.send({ type: 'tool-call', toolName: 'read_file', input: { path: 'a.ts' } });
+    assert.deepEqual(h.pushed.map(p => p.role), ['assistant', 'tool']);
+  });
+
+  it('drops an empty mid-turn message rather than committing a blank row', () => {
+    const h = harness();
+    h.send({ type: 'assistant', text: '   ' });
+    assert.deepEqual(h.pushed, []);
+  });
+});
+
+describe('usage', () => {
+  it('is hidden by default', () => {
+    const h = harness({ usage: false });
+    h.send({ type: 'usage', inputTokens: 10, outputTokens: 20, durationMs: 1500 });
+    assert.deepEqual(h.calls, []);
+  });
+
+  it('is formatted when enabled', () => {
+    const h = harness({ usage: true });
+    h.send({ type: 'usage', inputTokens: 10, outputTokens: 20, durationMs: 1500 });
+    assert.match(h.pushed[0].content, /↑10.*↓20.*1\.5s/);
+  });
+});
+
+describe('plan and review', () => {
+  it('renders a plan as markdown and ends the turn', () => {
+    const h = harness();
+    h.send({ type: 'plan', text: '1. do the thing' });
+    assert.equal(h.pushed[0].role, 'markdown');
+    assert.equal(h.pushed[0].extra?.title, 'plan');
+    assert.deepEqual(h.calls, ['push:markdown', 'turnEnded:done']);
+  });
+
+  it('renders a review as markdown', () => {
+    const h = harness();
+    h.send({ type: 'review', text: 'LGTM' });
+    assert.equal(h.pushed[0].extra?.title, 'review');
+  });
+});
+
+describe('streaming', () => {
+  it('forwards tokens and reasoning to the port, which owns the gating', () => {
+    const h = harness();
+    h.send({ type: 'token', text: 'hel' });
+    h.send({ type: 'reasoning', text: 'hmm' });
+    assert.deepEqual(h.calls, ['token:hel', 'reasoning:hmm']);
+  });
+
+  it('ignores thinking, which only marks that work started', () => {
+    const h = harness();
+    h.send({ type: 'thinking' });
+    assert.deepEqual(h.calls, []);
+  });
+});
+
+describe('approvals', () => {
+  it('delegates to the port', async () => {
+    const h = harness();
+    const req = { toolName: 'write_file', description: 'w', detail: 'd' } as ApprovalRequest;
+    assert.equal(await h.client.requestApproval(req), 'approve');
+  });
+});

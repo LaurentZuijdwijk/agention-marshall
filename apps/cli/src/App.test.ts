@@ -14,21 +14,69 @@ import { render } from 'ink';
 
 // ── test helpers ───────────────────────────────────────────────────────────────
 
-let tempDir: string | null = null;
+let tempDirs: string[] = [];
 let capturedOutput = '';
 
 afterEach(() => {
-  if (tempDir && existsSync(tempDir)) {
-    rmSync(tempDir, { recursive: true, force: true });
-    tempDir = null;
+  for (const dir of tempDirs) {
+    if (existsSync(dir)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
   }
+  tempDirs = [];
   capturedOutput = '';
 });
 
+/**
+ * Ink only renders incrementally when stdout looks like a TTY; against a plain
+ * Writable it stays in non-interactive mode and writes nothing until unmount.
+ * Every assertion here therefore ran against an empty buffer — which the
+ * negative assertions passed trivially, hiding the fact that they checked
+ * nothing at all.
+ */
+function fakeStdout(sink: (chunk: string) => void): Writable {
+  const stdout = new Writable({
+    write(chunk, _encoding, cb) { sink(chunk.toString()); cb(); },
+  }) as Writable & { isTTY: boolean; columns: number; rows: number };
+  stdout.isTTY = true;
+  stdout.columns = 100;
+  stdout.rows = 30;
+  return stdout;
+}
+
+/**
+ * Ink's useInput needs raw mode, and a bare Readable has neither `isTTY` nor
+ * `setRawMode` — so Ink renders "Raw mode is not supported" instead of the app.
+ * Tests that only assert a negative never noticed.
+ */
+function fakeStdin(): Readable {
+  const stdin = new Readable({ read() {} }) as Readable & {
+    isTTY: boolean;
+    setRawMode: (mode: boolean) => void;
+    ref: () => void;
+    unref: () => void;
+  };
+  stdin.isTTY = true;
+  stdin.setRawMode = () => {};
+  stdin.ref = () => {};
+  stdin.unref = () => {};
+  return stdin;
+}
+
+/** Poll until `predicate` holds or the budget runs out, so tests wait on the
+ *  rendered frame rather than a guessed number of ticks. */
+async function waitFor(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate() && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+}
+
 function mkTemp(): string {
-  tempDir = join(here, '..', '..', '.tmp-test-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8));
-  mkdirSync(tempDir, { recursive: true });
-  return tempDir;
+  const dir = join(here, '..', '..', '.tmp-test-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8));
+  mkdirSync(dir, { recursive: true });
+  tempDirs.push(dir);
+  return dir;
 }
 
 // ── mock Session ───────────────────────────────────────────────────────────────
@@ -79,9 +127,7 @@ describe('App component', () => {
   it('renders without error when model is provided', () => {
     const agentProfile = { provider: 'claude' as const, model: 'claude-sonnet-4-6' };
     const ws = mkTemp();
-    const stream = new Writable({
-      write(chunk, _encoding, cb) { capturedOutput += chunk.toString(); cb(); },
-    });
+    const stream = fakeStdout(chunk => { capturedOutput += chunk; });
 
     const instance = render(
       React.createElement(App, {
@@ -91,7 +137,7 @@ describe('App component', () => {
         startLoginCtor: mockStartLogin,
         completeLoginCtor: mockCompleteLogin,
       }),
-      { stdout: stream, stdin: new Readable({ read() {} }), patchConsole: false, exitOnCtrlG: false },
+      { stdout: stream, stdin: fakeStdin(), patchConsole: false, exitOnCtrlG: false },
     );
 
     assert.ok(instance, 'render should return an instance');
@@ -101,9 +147,7 @@ describe('App component', () => {
   it('saves config.json after setup completes', () => {
     const agentProfile = { provider: 'gemini' as const, model: undefined };
     const ws = mkTemp();
-    const stream = new Writable({
-      write(chunk, _encoding, cb) { capturedOutput += chunk.toString(); cb(); },
-    });
+    const stream = fakeStdout(chunk => { capturedOutput += chunk; });
 
     // Setup mock that completes synchronously via onMount-like approach
     const { unmount, wait } = render(
@@ -115,7 +159,7 @@ describe('App component', () => {
         startLoginCtor: mockStartLogin,
         completeLoginCtor: mockCompleteLogin,
       }),
-      { stdout: stream, stdin: new Readable({ read() {} }), patchConsole: false, exitOnCtrlG: false },
+      { stdout: stream, stdin: fakeStdin(), patchConsole: false, exitOnCtrlG: false },
     );
 
     // In non-TTY mode, useEffect won't fire. We need a different strategy.
@@ -140,9 +184,7 @@ describe('App component', () => {
       }
     };
 
-    const stream = new Writable({
-      write(chunk, _encoding, cb) { capturedOutput += chunk.toString(); cb(); },
-    });
+    const stream = fakeStdout(chunk => { capturedOutput += chunk; });
 
     const instance = render(
       React.createElement(App, {
@@ -155,7 +197,7 @@ describe('App component', () => {
         startLoginCtor: mockStartLogin,
         completeLoginCtor: mockCompleteLogin,
       }),
-      { stdout: stream, stdin: new Readable({ read() {} }), patchConsole: false, exitOnCtrlG: false },
+      { stdout: stream, stdin: fakeStdin(), patchConsole: false, exitOnCtrlG: false },
     );
 
     assert.ok(sessionOpts, 'Session should be constructed');
@@ -182,9 +224,7 @@ describe('App component', () => {
       }
     };
 
-    const stream = new Writable({
-      write(chunk, _encoding, cb) { capturedOutput += chunk.toString(); cb(); },
-    });
+    const stream = fakeStdout(chunk => { capturedOutput += chunk; });
 
     const instance = render(
       React.createElement(App, {
@@ -195,7 +235,7 @@ describe('App component', () => {
         startLoginCtor: mockStartLogin,
         completeLoginCtor: mockCompleteLogin,
       }),
-      { stdout: stream, stdin: new Readable({ read() {} }), patchConsole: false, exitOnCtrlG: false },
+      { stdout: stream, stdin: fakeStdin(), patchConsole: false, exitOnCtrlG: false },
     );
 
     assert.ok(contextAgentVal, 'contextAgent should be passed');
@@ -219,9 +259,7 @@ describe('App component', () => {
       }
     };
 
-    const stream = new Writable({
-      write(chunk, _encoding, cb) { capturedOutput += chunk.toString(); cb(); },
-    });
+    const stream = fakeStdout(chunk => { capturedOutput += chunk; });
 
     const instance = render(
       React.createElement(App, {
@@ -231,19 +269,17 @@ describe('App component', () => {
         startLoginCtor: mockStartLogin,
         completeLoginCtor: mockCompleteLogin,
       }),
-      { stdout: stream, stdin: new Readable({ read() {} }), patchConsole: false, exitOnCtrlG: false },
+      { stdout: stream, stdin: fakeStdin(), patchConsole: false, exitOnCtrlG: false },
     );
 
     assert.strictEqual(sessionWs, deepPath);
     instance.unmount();
   });
 
-  it('initializes with idle mode when model exists', () => {
+  it('initializes with idle mode when model exists', async () => {
     const agentProfile = { provider: 'claude' as const, model: 'claude-sonnet-4-6' };
     const ws = mkTemp();
-    const stream = new Writable({
-      write(chunk, _encoding, cb) { capturedOutput += chunk.toString(); cb(); },
-    });
+    const stream = fakeStdout(chunk => { capturedOutput += chunk; });
 
     const instance = render(
       React.createElement(App, {
@@ -253,20 +289,27 @@ describe('App component', () => {
         startLoginCtor: mockStartLogin,
         completeLoginCtor: mockCompleteLogin,
       }),
-      { stdout: stream, stdin: new Readable({ read() {} }), patchConsole: false, exitOnCtrlG: false },
+      { stdout: stream, stdin: fakeStdin(), patchConsole: false, exitOnCtrlG: false },
     );
 
-    // Should render without error — idle mode shows input prompt
-    assert.ok(!capturedOutput.includes('choose a provider'));
-    instance.unmount();
+    try {
+      // Assert the idle prompt is actually on screen, not merely that the setup
+      // step is absent — that negative passed even when nothing rendered at all.
+      await waitFor(() => capturedOutput.includes('type a task'));
+      assert.ok(
+        capturedOutput.includes('type a task'),
+        `expected the idle prompt, got: ${JSON.stringify(capturedOutput.slice(0, 200))}`,
+      );
+      assert.ok(!capturedOutput.includes('choose a provider'));
+    } finally {
+      instance.unmount();
+    }
   });
 
-  it('renders Setup component when no model', () => {
+  it('renders Setup component when no model', async () => {
     const agentProfile = { provider: 'claude' as const, model: undefined };
     const ws = mkTemp();
-    const stream = new Writable({
-      write(chunk, _encoding, cb) { capturedOutput += chunk.toString(); cb(); },
-    });
+    const stream = fakeStdout(chunk => { capturedOutput += chunk; });
 
     const instance = render(
       React.createElement(App, {
@@ -276,12 +319,24 @@ describe('App component', () => {
         startLoginCtor: mockStartLogin,
         completeLoginCtor: mockCompleteLogin,
       }),
-      { stdout: stream, stdin: new Readable({ read() {} }), patchConsole: false, exitOnCtrlG: false },
+      { stdout: stream, stdin: fakeStdin(), patchConsole: false, exitOnCtrlG: false },
     );
 
-    // Should render setup mode (which shows provider selection)
-    assert.ok(capturedOutput.includes('choose a provider') || capturedOutput.includes('claude'));
-    instance.unmount();
+    try {
+      // Ink commits on a later tick — asserting synchronously reads an empty
+      // buffer. The sibling tests only got away with it because they assert a
+      // negative, which passes trivially against no output at all.
+      await waitFor(() => capturedOutput.includes('choose a provider'));
+      assert.ok(
+        capturedOutput.includes('choose a provider'),
+        `expected the provider step, got: ${JSON.stringify(capturedOutput.slice(0, 200))}`,
+      );
+    } finally {
+      // In a finally so a failed assertion cannot leave Ink mounted. It used to
+      // leak on failure, and the runner then waited on its handles — one test
+      // accounting for 135s of the suite's 137s.
+      instance.unmount();
+    }
   });
 
   it('renders without error in all default configurations', () => {
@@ -307,7 +362,7 @@ describe('App component', () => {
           startLoginCtor: mockStartLogin,
           completeLoginCtor: mockCompleteLogin,
         }),
-        { stdout: stream, stdin: new Readable({ read() {} }), patchConsole: false, exitOnCtrlG: false },
+        { stdout: stream, stdin: fakeStdin(), patchConsole: false, exitOnCtrlG: false },
       );
 
       instance.unmount();

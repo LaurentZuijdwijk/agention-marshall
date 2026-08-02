@@ -4,12 +4,12 @@ import { TextInput } from './TextInput.js';
 import { PROVIDER_DEFAULTS } from '@marshall/engine';
 import type { Provider, Tier } from '@marshall/engine';
 import { C, G, brand } from './theme.js';
-import { traceRender } from './renderTrace.js';
+import { traceRender } from '../renderTrace.js';
 import {
   parseLlamaCppModels, applyLlamaCppProps, parseOllamaModels, parseOpenRouterModels,
   formatContext, formatBytes, windowRange,
-} from './models.js';
-import type { ModelInfo } from './models.js';
+} from '../models.js';
+import type { ModelInfo } from '../models.js';
 
 // ── data ──────────────────────────────────────────────────────────────────────
 
@@ -390,6 +390,12 @@ type Step =
 export interface SetupProps {
   initial?: { provider?: Provider; model?: string; host?: string };
   /**
+   * Last-used host per provider (from the config `providers` array). When the
+   * user switches providers mid-wizard, the host field re-seeds to that
+   * provider's own saved host rather than reusing one flat host.
+   */
+  savedHosts?: Record<Provider, string | undefined>;
+  /**
    * Which tier is being chosen. `fast` gets a "same as deep" escape and
    * different framing — it is the delegation target, not the main model.
    */
@@ -405,23 +411,42 @@ export interface SetupProps {
   onExit?: () => void;
 }
 
+/**
+ * Which server URL to pre-fill for `provider`.
+ *
+ * Prefer that provider's own last-used host, then the host we started the
+ * session on, then the built-in default.
+ *
+ * The middle step only applies when the session's host belongs to the *same*
+ * provider. It is the flat pre-tier config shape, and carrying it across a
+ * switch pre-filled ollama with a llama.cpp URL — the probe then went to the
+ * wrong server and the wizard reported it as unreachable.
+ */
+export function seedHost(
+  provider: Provider,
+  savedHosts?: Record<string, string | undefined>,
+  initial?: { provider?: Provider; host?: string },
+): string {
+  const providerDefault = PROVIDER_DEFAULTS[provider];
+  const builtIn = 'host' in providerDefault ? providerDefault.host : '';
+  const sameProvider = initial?.provider === provider ? initial?.host : undefined;
+  return savedHosts?.[provider] ?? sameProvider ?? builtIn ?? '';
+}
+
 /** What each tier is *for*, so the choice isn't guesswork. */
 const TIER_BLURB: Record<Tier, string> = {
   deep: 'writes code, plans and reviews',
   fast: 'reads files, searches and summarises for the deep model',
 };
 
-export function Setup({ initial, tier = 'deep', deepLabel, onComplete, onExit }: SetupProps) {
+export function Setup({ initial, tier = 'deep', deepLabel, savedHosts, onComplete, onExit }: SetupProps) {
   const [step, setStep] = useState<Step>({ name: 'provider' });
   traceRender('Setup', `step=${step.name}`);
   const [hostInput, setHostInput] = useState('');
   const [customInput, setCustomInput] = useState('');
   const [keyInput, setKeyInput] = useState('');
 
-  const defaultHostFor = (provider: Provider): string => {
-    const providerDefault = PROVIDER_DEFAULTS[provider];
-    return initial?.host ?? ('host' in providerDefault ? providerDefault.host : '') ?? '';
-  };
+  const defaultHostFor = (provider: Provider): string => seedHost(provider, savedHosts, initial);
 
   // A provider with an envKey and no key already in the environment needs one
   // from the user before the session can start — ask right after the model.

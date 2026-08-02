@@ -2,11 +2,16 @@
 
 export const SLASH_COMMANDS = ['/clear', '/cwd', '/exit', '/help', '/login', '/memory', '/model', '/plan', '/review', '/stream', '/tokens'] as const;
 
+/** Which tier `/model` is about to change. `both` is the first-run chain. */
+export type ModelTarget = 'both' | 'deep' | 'fast' | 'off';
+
 export type SlashCommandResult =
   | { type: 'unknown'; command: string }
+  /** Recognised, but used wrongly — the message tells the user how. */
+  | { type: 'usage'; message: string }
   | { type: 'help' }
   | { type: 'exit' }
-  | { type: 'model' }
+  | { type: 'model'; target: ModelTarget }
   | { type: 'cwd' }
   | { type: 'memory' }
   | { type: 'login' }
@@ -15,6 +20,10 @@ export type SlashCommandResult =
   | { type: 'tokens' }
   | { type: 'plan'; args: string }
   | { type: 'review'; args: string };
+
+const MODEL_TARGETS: Record<string, ModelTarget> = {
+  '': 'both', deep: 'deep', fast: 'fast', off: 'off',
+};
 
 export function resolveSlashCommand(input: string): SlashCommandResult {
   const text = input.trim();
@@ -28,14 +37,22 @@ export function resolveSlashCommand(input: string): SlashCommandResult {
   switch (known) {
     case '/help':  return { type: 'help' };
     case '/exit':  return { type: 'exit' };
-    case '/model': return { type: 'model' };
+    case '/model': {
+      const target = MODEL_TARGETS[args.toLowerCase()];
+      return target
+        ? { type: 'model', target }
+        : { type: 'usage', message: `usage: /model [deep|fast|off] — got "${args}"` };
+    }
     case '/cwd':   return { type: 'cwd' };
     case '/memory': return { type: 'memory' };
     case '/login': return { type: 'login' };
     case '/clear': return { type: 'clear' };
     case '/stream': return { type: 'stream' };
     case '/tokens': return { type: 'tokens' };
-    case '/plan':   return { type: 'plan', args };
+    case '/plan':
+      return args
+        ? { type: 'plan', args }
+        : { type: 'usage', message: 'usage: /plan <task> — describe what you want planned' };
     case '/review': return { type: 'review', args };
   }
 }

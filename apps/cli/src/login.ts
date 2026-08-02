@@ -117,8 +117,11 @@ export interface LoginSession {
   authUrl: string;
 }
 
-/** Step 1 — generate PKCE, build the auth URL, open the browser. Returns session state to pass to completeLogin(). */
-export function startLogin(): LoginSession {
+/**
+ * The PKCE challenge and the URL it belongs to. Separate from `startLogin` so it
+ * can be checked without launching a browser at whoever is running the tests.
+ */
+export function buildAuthSession(): LoginSession {
   const { verifier, challenge } = generatePKCE();
   const state = verifier; // Anthropic convention: state = verifier
 
@@ -132,9 +135,15 @@ export function startLogin(): LoginSession {
     code_challenge: challenge,
     code_challenge_method: 'S256',
   });
-  const authUrl = `${AUTH_URL}?${authParams}`;
-  openBrowser(authUrl);
-  return { verifier, state, authUrl };
+
+  return { verifier, state, authUrl: `${AUTH_URL}?${authParams}` };
+}
+
+/** Step 1 — generate PKCE, build the auth URL, open the browser. Returns session state to pass to completeLogin(). */
+export function startLogin(): LoginSession {
+  const session = buildAuthSession();
+  openBrowser(session.authUrl);
+  return session;
 }
 
 /** Step 2 — exchange the code the user pasted for tokens and save them. */

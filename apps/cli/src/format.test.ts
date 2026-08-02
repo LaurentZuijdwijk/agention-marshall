@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { formatToolInput, shortenPath, truncate } from './format.js';
-import { mix, brand } from './theme.js';
+import { formatToolInput, shortenPath, truncate, clampToRows } from './format.js';
+import { mix, brand } from './view/theme.js';
 
 describe('formatToolInput', () => {
   it('returns an empty string for empty or non-object input', () => {
@@ -60,6 +60,51 @@ describe('shortenPath', () => {
     assert.ok(out.startsWith('…/'), out);
     assert.ok(out.endsWith('here'), out);
     assert.ok(out.length <= 22, out);
+  });
+});
+
+describe('formatToolInput — sub-agent briefs', () => {
+  it('shows the brief itself, not an instructions= prefix', () => {
+    // `context` takes { instructions }, which was falling through to the
+    // key=value fallback and rendering as "instructions=Explore this…".
+    const out = formatToolInput({ instructions: 'Explore the CLI package' });
+    assert.equal(out, 'Explore the CLI package');
+  });
+
+  it('still folds away the other keys', () => {
+    const out = formatToolInput({ instructions: 'survey apps/cli', depth: 2 });
+    assert.equal(out, 'survey apps/cli  +1');
+  });
+});
+
+describe('clampToRows', () => {
+  it('returns short text untouched', () => {
+    assert.equal(clampToRows('one\ntwo', 80, 10), 'one\ntwo');
+  });
+
+  it('keeps the last rows once the text is taller than the budget', () => {
+    assert.equal(clampToRows('a\nb\nc\nd', 80, 2), 'c\nd');
+  });
+
+  it('counts wrapped rows, not newlines', () => {
+    // 20 chars at width 10 is two rows, so this is 3 rows in total.
+    assert.equal(clampToRows('x'.repeat(20) + '\ntail', 10, 2), 'x'.repeat(10) + '\ntail');
+  });
+
+  it('preserves blank lines as rows', () => {
+    assert.equal(clampToRows('a\n\nb', 80, 2), '\nb');
+  });
+
+  it('never exceeds the row budget', () => {
+    const text = Array.from({ length: 50 }, (_, i) => `line ${i} ${'y'.repeat(30)}`).join('\n');
+    const out = clampToRows(text, 20, 6);
+    const rows = out.split('\n').reduce((n, l) => n + Math.max(1, Math.ceil(l.length / 20)), 0);
+    assert.ok(rows <= 6, `expected <= 6 rows, got ${rows}`);
+  });
+
+  it('degrades safely on a zero-sized terminal', () => {
+    assert.equal(clampToRows('anything', 0, 10), '');
+    assert.equal(clampToRows('anything', 80, 0), '');
   });
 });
 

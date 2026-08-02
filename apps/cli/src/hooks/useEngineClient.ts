@@ -1,0 +1,186 @@
+import { useMemo } from 'react';
+import type { OutputEvent, ClientInterface } from '@marshall/engine';
+import type { ApprovalRequest, ApprovalDecision } from '@marshall/tools';
+import { formatToolInput } from '../format.js';
+import { G } from '../view/theme.js';
+import type { Message, MessageRole } from '../view/message.js';
+
+/** How a turn finished — the caller decides what that means for its own mode. */
+export type TurnOutcome = 'done' | 'error' | 'interrupted';
+
+/**
+ * Everything the translator below needs from the transcript.
+ *
+ * Deliberately behavioural rather than stateful: no setters, no React types, no
+ * `Mode`. The translator says *what happened*; the caller decides what that does
+ * to its state. That is what keeps `createEngineClient` a pure function and lets
+ * it be tested without React or Ink.
+ */
+export interface TranscriptPort {
+  push(role: MessageRole, content: string, extra?: Partial<Message>): void;
+  /** Append a streamed token. Implementations drop it when streaming is off. */
+  appendToken(text: string): void;
+  /** Append reasoning. Implementations drop it when reasoning display is off. */
+  appendReasoning(text: string): void;
+  /** Return whatever has streamed so far and clear it in one step. */
+  takeStream(): string;
+  /** Return any pending reasoning and clear it in one step. */
+  takeReasoning(): string;
+  turnEnded(outcome: TurnOutcome): void;
+  requestApproval(request: ApprovalRequest): Promise<ApprovalDecision>;
+  showUsage(): boolean;
+}
+
+/**
+ * Translate engine output events into transcript operations.
+ *
+ * Pure: same events in, same port calls out. Exported separately from the hook
+ * so tests can drive it directly.
+ */
+export function createEngineClient(port: TranscriptPort): ClientInterface {
+  /** Commit pending reasoning as its own row, in front of whatever follows. */
+  const commitReasoning = () => {
+    const reasoning = port.takeReasoning();
+    if (reasoning.trim()) port.push('reasoning', reasoning);
+  };
+
+  /**
+   * Close off the step the model just finished: its reasoning, then its prose,
+   * each as one committed row.
+   *
+   * This is what keeps a multi-step turn in chronological order. The live
+   * buffers only ever hold the *current* step — without this they accumulated
+   * every step's text until the turn ended, so each tool row printed above prose
+   * that had already been written, and the growing buffer redrew that same prose
+   * again under every new row.
+   */
+  const commitStep = () => {
+    commitReasoning();
+    const text = port.takeStream();
+    if (text.trim()) port.push('assistant', text);
+  };
+
+  return {
+    onOutput(event: OutputEvent) {
+      switch (event.type) {
+        case 'thinking':
+          break;
+
+        case 'tool-call':
+          // Nested calls flush too: their buffers are empty (only the main agent
+          // streams), so this costs nothing and needs no special case.
+          commitStep();
+          // An agent-backed tool is a delegation, not a file read, and gets its
+          // own presentation — this is the thing that makes the multi-agent loop
+          // legible rather than something you have to take on faith.
+          port.push(event.subagent ? 'agent' : 'tool', formatToolInput(event.input), {
+            title: event.toolName,
+            ...(event.subagent ? { note: event.subagent.model, delegated: event.subagent.delegated } : {}),
+            ...(event.parent ? { parent: event.parent } : {}),
+            ...(event.caller ? { caller: event.caller } : {}),
+          });
+          break;
+
+        case 'tool-result':
+          // A sub-agent's raw results would drown the transcript — its *calls*
+          // already show what it is doing, and its findings arrive in the
+          // summary it returns.
+          if (event.parent) break;
+          port.push('tool-result', event.result);
+          break;
+
+        case 'subagent-done':
+          port.push(
+            'subagent',
+            event.error ?? `${(event.chars / 1000).toFixed(1)}k chars`,
+            {
+              title: event.label,
+              note: `${(event.durationMs / 1000).toFixed(1)}s`,
+              failed: event.error !== undefined,
+            },
+          );
+          break;
+
+        case 'token':
+          port.appendToken(event.text);
+          break;
+
+        case 'reasoning':
+          port.appendReasoning(event.text);
+          break;
+
+        case 'assistant': {
+          // Mid-turn prose from a provider that doesn't stream. Its reasoning
+          // goes above it; the stream buffer is dropped rather than committed,
+          // because a provider that sends both is sending the same text twice.
+          commitReasoning();
+          port.takeStream();
+          if (event.text.trim()) port.push('assistant', event.text);
+          break;
+        }
+
+        case 'response': {
+          // The event carries the final answer in full, and the stream buffer
+          // holds that same text arriving token by token — commit one of them,
+          // never both. Reasoning goes first, the order the model produced it in.
+          const streamed = port.takeStream();
+          commitReasoning();
+          const text = event.text.trim() ? event.text : streamed;
+          if (text.trim()) port.push('assistant', text);
+          port.turnEnded('done');
+          break;
+        }
+
+        case 'usage':
+          if (port.showUsage()) {
+            port.push(
+              'usage',
+              `↑${event.inputTokens}  ↓${event.outputTokens}  ${G.bullet}  ${(event.durationMs / 1000).toFixed(1)}s`,
+            );
+          }
+          break;
+
+        case 'error':
+          // Whatever the model had already said stays above the failure rather
+          // than vanishing with it.
+          commitStep();
+          port.push('error', event.message);
+          port.turnEnded('error');
+          break;
+
+        case 'interrupted':
+          // The partial answer was on screen when Esc was pressed; committing it
+          // means the transcript matches what the user saw and acted on.
+          commitStep();
+          port.push('info', 'interrupted — steer with a new instruction, or /clear to reset');
+          port.turnEnded('interrupted');
+          break;
+
+        case 'plan':
+          port.push('markdown', event.text, {
+            title: 'plan',
+            note: 'will be used as context for your next task',
+          });
+          port.turnEnded('done');
+          break;
+
+        case 'review':
+          port.push('markdown', event.text, { title: 'review' });
+          port.turnEnded('done');
+          break;
+      }
+    },
+
+    requestApproval(request: ApprovalRequest): Promise<ApprovalDecision> {
+      return port.requestApproval(request);
+    },
+  };
+}
+
+/**
+ * The client identity must be stable — the engine Session holds onto it — so the
+ * port is expected to read through refs rather than close over render values.
+ */
+export function useEngineClient(port: TranscriptPort): ClientInterface {
+  return useMemo(() => createEngineClient(port), []); // eslint-disable-line react-hooks/exhaustive-deps
+}

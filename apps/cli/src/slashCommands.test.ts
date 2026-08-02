@@ -14,9 +14,18 @@ describe('slashCommands', () => {
       assert.equal(result.type, 'exit');
     });
 
-    it('returns model for /model', () => {
+    it('returns model targeting both tiers for bare /model', () => {
       const result = resolveSlashCommand('/model');
       assert.equal(result.type, 'model');
+      assert.equal((result as { target: string }).target, 'both');
+    });
+
+    it('reads the tier from /model deep|fast|off', () => {
+      for (const target of ['deep', 'fast', 'off']) {
+        const result = resolveSlashCommand(`/model ${target}`);
+        assert.equal(result.type, 'model');
+        assert.equal((result as { target: string }).target, target);
+      }
     });
 
     it('returns cwd for /cwd', () => {
@@ -79,9 +88,16 @@ describe('slashCommands', () => {
       assert.equal((result as { command: string }).command, 'hello world');
     });
 
-    it('handles slash command with arguments', () => {
+    it('returns usage for a /model argument that is not a tier', () => {
       const result = resolveSlashCommand('/model some-provider');
-      assert.equal(result.type, 'model');
+      assert.equal(result.type, 'usage');
+      assert.match((result as { message: string }).message, /usage: \/model/);
+    });
+
+    it('returns usage for /plan with nothing to plan', () => {
+      const result = resolveSlashCommand('/plan');
+      assert.equal(result.type, 'usage');
+      assert.match((result as { message: string }).message, /usage: \/plan/);
     });
 
     it('handles slash command with extra whitespace', () => {

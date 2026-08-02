@@ -263,8 +263,14 @@ export function parseOpenRouterModels(payload: unknown, pinned: string[] = []): 
     const raw = (data as any[]).find(e => e?.id === m.id);
     return { m, created: typeof raw?.created === 'number' ? raw.created : 0 };
   });
-  withCreated.sort((a, b) =>
-    Number(pinnedSet.has(b.m.id)) - Number(pinnedSet.has(a.m.id)) || b.created - a.created);
+  withCreated.sort((a, b) => {
+    // Free (:free) models first — they're the zero-cost way to try a family,
+    // and the paid lookalike is usually right below it.
+    const aFree = a.m.id.endsWith(':free') ? 1 : 0;
+    const bFree = b.m.id.endsWith(':free') ? 1 : 0;
+    return Number(pinnedSet.has(b.m.id)) - Number(pinnedSet.has(a.m.id)) ||
+      bFree - aFree || b.created - a.created;
+  });
   return withCreated.slice(0, OPENROUTER_MAX).map(x => x.m);
 }
 
