@@ -273,16 +273,3 @@ export function parseOpenRouterModels(payload: unknown, pinned: string[] = []): 
   });
   return withCreated.slice(0, OPENROUTER_MAX).map(x => x.m);
 }
-
-// ── list windowing ────────────────────────────────────────────────────────────
-
-/**
- * Which slice of a long list to show, keeping the cursor near the middle and
- * never scrolling past either end.
- */
-export function windowRange(count: number, cursor: number, size: number): { start: number; end: number } {
-  if (count <= size) return { start: 0, end: count };
-  const half = Math.floor(size / 2);
-  const start = Math.max(0, Math.min(cursor - half, count - size));
-  return { start, end: start + size };
-}

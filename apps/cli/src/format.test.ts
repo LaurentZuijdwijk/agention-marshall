@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { formatToolInput, shortenPath, truncate, clampToRows } from './format.js';
+import { formatToolInput, shortenPath, truncate, clampToRows, windowRange } from './format.js';
 import { mix, brand } from './view/theme.js';
 
 describe('formatToolInput', () => {
@@ -124,5 +124,20 @@ describe('theme colours', () => {
     for (let i = 0; i <= 10; i++) {
       assert.match(brand(i / 10), /^#[0-9a-f]{6}$/);
     }
+  });
+});
+
+describe('windowRange', () => {
+  it('shows everything when the list fits', () => {
+    assert.deepEqual(windowRange(5, 0, 9), { start: 0, end: 5 });
+  });
+
+  it('keeps the cursor centred once scrolling', () => {
+    assert.deepEqual(windowRange(17, 8, 9), { start: 4, end: 13 });
+  });
+
+  it('never scrolls past either end', () => {
+    assert.deepEqual(windowRange(17, 0, 9), { start: 0, end: 9 });
+    assert.deepEqual(windowRange(17, 16, 9), { start: 8, end: 17 });
   });
 });

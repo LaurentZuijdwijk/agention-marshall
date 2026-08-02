@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   parseLlamaCppModels, applyLlamaCppProps, parseOllamaModels, parseOpenRouterModels,
-  formatContext, formatParams, formatBytes, windowRange,
+  formatContext, formatParams, formatBytes,
 } from './models.js';
 
 // Shapes below are trimmed from real responses: a llama.cpp router at
@@ -210,21 +210,6 @@ describe('formatting', () => {
   it('formats sizes', () => {
     assert.equal(formatBytes(23595286784), '22.0 GB');
     assert.equal(formatBytes(0), '');
-  });
-});
-
-describe('windowRange', () => {
-  it('shows everything when the list fits', () => {
-    assert.deepEqual(windowRange(5, 0, 9), { start: 0, end: 5 });
-  });
-
-  it('keeps the cursor centred once scrolling', () => {
-    assert.deepEqual(windowRange(17, 8, 9), { start: 4, end: 13 });
-  });
-
-  it('never scrolls past either end', () => {
-    assert.deepEqual(windowRange(17, 0, 9), { start: 0, end: 9 });
-    assert.deepEqual(windowRange(17, 16, 9), { start: 8, end: 17 });
   });
 });
 

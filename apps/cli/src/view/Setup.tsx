@@ -1,15 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { TextInput } from './TextInput.js';
-import { PROVIDER_DEFAULTS } from '@agentionai/marshall-engine';
-import type { Provider, Tier } from '@agentionai/marshall-engine';
+import {
+  PROVIDER_DEFAULTS,
+  parseLlamaCppModels, applyLlamaCppProps, parseOllamaModels, parseOpenRouterModels,
+  formatContext, formatBytes,
+} from '@agentionai/marshall-engine';
+import type { Provider, Tier, ModelInfo } from '@agentionai/marshall-engine';
 import { C, G, brand } from './theme.js';
 import { traceRender } from '../renderTrace.js';
-import {
-  parseLlamaCppModels, applyLlamaCppProps, parseOllamaModels, parseOpenRouterModels,
-  formatContext, formatBytes, windowRange,
-} from '../models.js';
-import type { ModelInfo } from '../models.js';
+import { windowRange } from '../format.js';
 
 // ── data ──────────────────────────────────────────────────────────────────────
 
