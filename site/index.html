@@ -4,11 +4,32 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>marshall — a coding agent that lives in your terminal</title>
-<meta name="description" content="Marshall is a terminal coding assistant built on Agention. Multi-agent planner/coder/reviewer loop, human-in-the-loop approvals, any provider — Claude, OpenAI, Gemini, OpenRouter or local models.">
+<meta name="description" content="Marshall is a terminal coding assistant built on Agention. A planner/coder/reviewer loop reads, edits and runs your project — with an approval gate on every write. Claude, OpenAI, Gemini, Mistral, OpenRouter, or fully local via llama.cpp and Ollama.">
+<link rel="canonical" href="https://marshall.agention.ai/">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0B0D10">
+
+<!-- Social cards.
+     NOTE: the canonical/og:url/twitter host below is a placeholder — no Pages
+     deployed from /site via GitHub Pages. og:image must stay an absolute URL. -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="marshall">
+<meta property="og:title" content="marshall — a coding agent that lives in your terminal">
+<meta property="og:description" content="A planner/coder/reviewer loop that reads, edits and runs your project. Nothing mutates without your approval. Any provider — hosted or fully local.">
+<meta property="og:url" content="https://marshall.agention.ai/">
+<meta property="og:image" content="https://marshall.agention.ai/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="marshall — a coding agent that lives in your terminal">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="marshall — a coding agent that lives in your terminal">
+<meta name="twitter:description" content="A planner/coder/reviewer loop that reads, edits and runs your project. Nothing mutates without your approval.">
+<meta name="twitter:image" content="https://marshall.agention.ai/og.png">
+
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>◆</text></svg>">
 <style>
   :root {
-    /* — straight from apps/cli/src/theme.ts — */
+    /* — brand + terminal palette, straight from apps/cli/src/theme.ts — */
     --brand-from: #8B5CF6;
     --brand-to:   #22D3EE;
     --accent: #A78BFA;
@@ -18,13 +39,20 @@
     --ok:     #34D399;
     --warn:   #FBBF24;
     --error:  #F87171;
-    --muted:  #6B7280;
-    --faint:  #4B5563;
     --text:   #E5E7EB;
     --bg:     #0B0D10;
     --bg-2:   #10131A;
     --border: #1F2430;
+
+    /* theme.ts uses #6B7280 / #4B5563 for muted + faint. A terminal renders
+       those on a user-chosen background; here they'd land at 4.0:1 and 2.6:1
+       on --bg, under WCAG AA. Lifted just enough to clear 4.5:1 while still
+       reading as "chrome, not content". */
+    --muted:  #8A93A6;
+    --faint:  #737E96;
+
     --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    --nav-h: 52px;
   }
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -39,7 +67,7 @@
     overflow-x: hidden;
   }
 
-  /* subtle CRT-ish vignette + scanline shimmer, kept very quiet */
+  /* subtle CRT-ish vignette, kept very quiet */
   body::before {
     content: "";
     position: fixed; inset: 0;
@@ -52,6 +80,31 @@
   main { position: relative; z-index: 1; }
 
   .wrap { max-width: 920px; margin: 0 auto; padding: 0 24px; }
+
+  /* Anchors sit under the fixed nav without it — this is the whole reason. */
+  section[id], header[id] { scroll-margin-top: calc(var(--nav-h) + 16px); }
+
+  /* Visible only to screen readers — carries the real <h1> text, since the
+     wordmark below it is box-drawing characters. */
+  .sr-only {
+    position: absolute; width: 1px; height: 1px;
+    padding: 0; margin: -1px; overflow: hidden;
+    clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap;
+  }
+  .skip {
+    position: absolute; left: 12px; top: -60px; z-index: 100;
+    background: var(--bg-2); color: var(--text);
+    border: 1px solid var(--accent); border-radius: 8px;
+    padding: 10px 16px; text-decoration: none; font-size: 13px;
+    transition: top .15s;
+  }
+  .skip:focus { top: 10px; }
+
+  :focus-visible {
+    outline: 2px solid var(--brand-to);
+    outline-offset: 3px;
+    border-radius: 4px;
+  }
 
   /* ── gradient text ─────────────────────────────────────────── */
   .grad {
@@ -70,10 +123,10 @@
   }
   nav .wrap {
     display: flex; align-items: center; gap: 18px;
-    height: 52px;
+    height: var(--nav-h);
   }
   nav .logo { font-weight: 700; letter-spacing: .5px; }
-  nav a { color: var(--muted); text-decoration: none; font-size: 13px; }
+  nav a { color: var(--muted); text-decoration: none; font-size: 13px; white-space: nowrap; }
   nav a:hover { color: var(--text); }
   nav .spacer { flex: 1; }
   nav .gh {
@@ -83,9 +136,17 @@
     color: var(--text);
   }
   nav .gh:hover { border-color: var(--accent); color: var(--accent); }
+  /* Below ~640px the section links can't fit beside the wordmark and the
+     github pill; they'd squash into three-line stacks and push github off
+     the viewport. Drop them — every one is reachable by scrolling. */
+  @media (max-width: 640px) {
+    nav .sections { display: none; }
+    nav .wrap { gap: 12px; }
+  }
 
   /* ── hero ──────────────────────────────────────────────────── */
   header.hero { padding: 140px 0 40px; }
+  @media (max-width: 640px) { header.hero { padding: 104px 0 24px; } }
 
   /* The CLI's block-letter wordmark (apps/cli/src/Banner.tsx), painted with
      the same banded gradient, reveal wipe and white shimmer sweep. */
@@ -96,7 +157,6 @@
     white-space: pre;
     user-select: none;
   }
-  .ascii-logo .band { transition: none; }
   .ascii-rule {
     font-size: clamp(4px, 1.55vw, 13px);
     line-height: 1;
@@ -104,14 +164,6 @@
     user-select: none;
     margin-top: 6px;
   }
-  .wordmark-cursor {
-    display: inline-block;
-    width: .6em; height: 1em;
-    transform: translateY(.12em);
-    background: linear-gradient(180deg, var(--brand-from), var(--brand-to));
-    animation: blink 1.1s steps(1) infinite;
-  }
-  @keyframes blink { 50% { opacity: 0; } }
 
   .tagline {
     margin-top: 18px;
@@ -122,16 +174,38 @@
   .tagline b { color: var(--text); font-weight: 600; }
 
   .cta { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 34px; align-items: center; }
+
+  /* ── copyable command ──────────────────────────────────────── */
   .install {
+    display: inline-flex; align-items: center; gap: 10px;
     border: 1px solid var(--border);
     background: var(--bg-2);
     border-radius: 8px;
-    padding: 12px 18px;
+    padding: 0 8px 0 18px;
     color: var(--user);
-    user-select: all;
+    font-family: var(--mono);
     font-size: 14px;
+    text-align: left;
+    cursor: pointer;
+    transition: border-color .2s;
   }
-  .install .prompt { color: var(--accent); user-select: none; }
+  .install:hover { border-color: #2c3547; }
+  .install .prompt { color: var(--accent); }
+  .install .cmd { padding: 12px 0; }
+  .install .copy {
+    flex: none;
+    border-left: 1px solid var(--border);
+    padding: 12px 12px;
+    margin-left: 2px;
+    color: var(--muted);
+    font-size: 12px;
+    min-width: 74px;
+    text-align: center;
+  }
+  .install:hover .copy { color: var(--text); }
+  .install[data-copied="1"] .copy { color: var(--ok); }
+  @media (max-width: 420px) { .install { font-size: 12.5px; padding-left: 12px; } }
+
   .btn {
     display: inline-block;
     border-radius: 8px;
@@ -167,7 +241,7 @@
   }
   .dot { width: 10px; height: 10px; border-radius: 50%; }
   .dot.r { background: #3a2b2b; } .dot.y { background: #3a3423; } .dot.g { background: #24352c; }
-  .term-bar .title { margin-left: 8px; }
+  .term-bar .title { margin-left: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .term-body {
     padding: 18px 20px 22px;
     font-size: 13.5px;
@@ -175,6 +249,9 @@
     min-height: 380px;
     white-space: pre-wrap;
   }
+  /* Narrow viewports wrap the longer tool lines. Hang the continuation so it
+     tucks under the line it belongs to instead of restarting at column 0. */
+  .term-body > div { padding-left: 2.2em; text-indent: -2.2em; }
   .term-body .p   { color: var(--accent); font-weight: 700; }
   .term-body .u   { color: var(--user); font-weight: 700; }
   .term-body .a   { color: var(--accent); }
@@ -190,6 +267,11 @@
     vertical-align: -2px;
     animation: blink 1s steps(1) infinite;
   }
+  @keyframes blink { 50% { opacity: 0; } }
+  @media (max-width: 640px) {
+    .term { margin-top: 36px; }
+    .term-body { font-size: 11.5px; padding: 14px 14px 18px; min-height: 300px; }
+  }
 
   /* ── sections ──────────────────────────────────────────────── */
   section { padding: 72px 0 8px; }
@@ -203,6 +285,7 @@
   h3 { font-size: clamp(22px, 3.4vw, 30px); font-weight: 700; margin-bottom: 14px; }
   .lede { color: var(--muted); max-width: 640px; margin-bottom: 36px; }
   .lede b { color: var(--text); font-weight: 600; }
+  .lede code, .card code, .note code { color: var(--code); }
 
   .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
   .card {
@@ -216,7 +299,6 @@
   .card .glyph { font-size: 18px; margin-bottom: 10px; }
   .card h4 { font-size: 15px; margin-bottom: 6px; }
   .card p { color: var(--muted); font-size: 13.5px; }
-  .card code { color: var(--code); }
 
   /* ── loop diagram ──────────────────────────────────────────── */
   .loop {
@@ -229,7 +311,6 @@
     border-radius: 10px;
     padding: 18px;
     background: var(--bg-2);
-    position: relative;
   }
   .stage .n { color: var(--faint); font-size: 12px; }
   .stage h4 { margin: 4px 0 6px; }
@@ -255,7 +336,7 @@
   .cmds { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--bg-2); }
   .cmds .row {
     display: grid;
-    grid-template-columns: 180px 1fr;
+    grid-template-columns: 190px 1fr;
     gap: 16px;
     padding: 11px 18px;
     border-bottom: 1px solid var(--border);
@@ -265,7 +346,23 @@
   .cmds .row:hover { background: #131826; }
   .cmds .k { color: var(--accent); }
   .cmds .d { color: var(--muted); }
-  @media (max-width: 560px) { .cmds .row { grid-template-columns: 1fr; gap: 2px; } }
+  @media (max-width: 640px) {
+    .cmds .row { grid-template-columns: 1fr; gap: 2px; padding: 10px 14px; }
+    .cmds .d { font-size: 12.5px; }
+  }
+
+  /* ── honest-limits note ────────────────────────────────────── */
+  .note {
+    border: 1px solid var(--border);
+    border-left: 2px solid var(--warn);
+    border-radius: 10px;
+    background: var(--bg-2);
+    padding: 20px 22px;
+    color: var(--muted);
+    font-size: 13.5px;
+  }
+  .note b { color: var(--text); font-weight: 600; }
+  .note + .note { margin-top: 12px; }
 
   /* ── big CTA / footer ──────────────────────────────────────── */
   .big-cta {
@@ -279,54 +376,71 @@
       var(--bg-2);
   }
   .big-cta h3 { margin-bottom: 10px; }
-  .big-cta .install { display: inline-block; margin-top: 20px; }
+  .big-cta .install { margin-top: 20px; }
+  @media (max-width: 640px) { .big-cta { padding: 40px 16px; margin-top: 60px; } }
 
   footer {
     border-top: 1px solid var(--border);
     padding: 28px 0 46px;
     color: var(--faint);
     font-size: 12.5px;
-    display: flex; flex-wrap: wrap; gap: 14px;
   }
+  footer .wrap { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; }
   footer a { color: var(--muted); text-decoration: none; }
   footer a:hover { color: var(--text); }
   footer .spacer { flex: 1; }
 
   ::selection { background: rgba(139,92,246,.35); }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    *, *::before, *::after {
+      animation-duration: .001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: .001ms !important;
+    }
+  }
 </style>
 </head>
 <body>
 
+<a class="skip" href="#main">skip to content</a>
+
 <nav>
   <div class="wrap">
     <span class="logo grad">marshall</span>
-    <a href="#how">how it works</a>
-    <a href="#providers">providers</a>
-    <a href="#commands">commands</a>
+    <a class="sections" href="#how">how it works</a>
+    <a class="sections" href="#providers">providers</a>
+    <a class="sections" href="#commands">commands</a>
     <span class="spacer"></span>
     <a class="gh" href="https://github.com/LaurentZuijdwijk/agention-marshall">github ↗</a>
   </div>
 </nav>
 
-<main>
+<main id="main">
 
 <!-- ── hero ─────────────────────────────────────────────────────────── -->
 <header class="hero">
   <div class="wrap">
-    <div id="hero-logo"></div>
+    <h1 class="sr-only">marshall — a coding agent that lives in your terminal</h1>
+    <div id="hero-logo" aria-hidden="true"></div>
     <p class="tagline">
       A coding agent that <b>lives in your terminal</b>. Describe the change —
       a planner/coder/reviewer loop reads, edits and runs your project,
       and <b>nothing happens without your approval</b>.
     </p>
     <div class="cta">
-      <span class="install"><span class="prompt">❯ </span>npm install -g @marshall/cli</span>
-      <a class="btn" href="https://github.com/LaurentZuijdwijk/agention-marshall">get started</a>
+      <button class="install" type="button" data-copy="npm install -g @marshall/cli">
+        <span class="cmd"><span class="prompt" aria-hidden="true">❯ </span>npm install -g @marshall/cli</span>
+        <span class="copy" aria-hidden="true">copy</span>
+      </button>
+      <a class="btn" href="#start">get started</a>
       <a class="btn ghost" href="#how">how it works</a>
     </div>
 
-    <!-- live-feeling terminal demo; scripted below -->
-    <div class="term" id="term">
+    <!-- Decorative: a scripted replay of a real session, not live output.
+         Hidden from assistive tech — the prose above already says all of it. -->
+    <div class="term" id="term" aria-hidden="true">
       <div class="term-bar">
         <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
         <span class="title">marshall · ~/projects/storefront</span>
@@ -349,17 +463,17 @@
     <div class="loop">
       <div class="stage plan">
         <span class="n">01</span>
-        <h4>◆ planner</h4>
+        <h4><span aria-hidden="true">◆</span> planner</h4>
         <p>Turns "add rate limiting to the API" into an ordered, concrete plan. Runs on your deep tier.</p>
       </div>
       <div class="stage code">
         <span class="n">02</span>
-        <h4>● coder</h4>
+        <h4><span aria-hidden="true">●</span> coder</h4>
         <p>Reads, edits, runs tests — every write and shell command gated behind an approval you can audit.</p>
       </div>
       <div class="stage rev">
         <span class="n">03</span>
-        <h4>✓ reviewer</h4>
+        <h4><span aria-hidden="true">✓</span> reviewer</h4>
         <p>Second opinion on the actual diff. Loops with the coder until it holds up — never rubber-stamps.</p>
       </div>
     </div>
@@ -367,41 +481,41 @@
 </section>
 
 <!-- ── features ─────────────────────────────────────────────────────── -->
-<section>
+<section id="features">
   <div class="wrap">
     <h2>why marshall</h2>
     <h3>Batteries in, <span class="grad">guardrails on</span></h3>
     <p class="lede">The boring parts — safety, memory, context management — are engineered in, not bolted on.</p>
     <div class="grid">
       <div class="card">
-        <div class="glyph" style="color:var(--ok)">✓</div>
+        <div class="glyph" style="color:var(--ok)" aria-hidden="true">✓</div>
         <h4>Approval for every mutation</h4>
-        <p>Diffs and commands render before they run. Approve once, always-allow per session, or deny — <code>esc</code> denies everything pending.</p>
+        <p><code>write_file</code>, <code>edit_file</code> and <code>run_shell</code> render their diff or command before they run. Approve once, always-allow for the session, or deny — <code>esc</code> denies everything pending.</p>
       </div>
       <div class="card">
-        <div class="glyph" style="color:var(--tool)">◆</div>
+        <div class="glyph" style="color:var(--tool)" aria-hidden="true">◆</div>
         <h4>Two model tiers</h4>
         <p>A frontier model reasons; a cheap or local model fetches and summarises. <code>/model fast</code> points the grunt work at llama.cpp or Ollama and your bill (and latency) drop.</p>
       </div>
       <div class="card">
-        <div class="glyph" style="color:var(--user)">↪</div>
+        <div class="glyph" style="color:var(--user)" aria-hidden="true">↪</div>
         <h4>Interrupt &amp; steer</h4>
         <p><code>esc</code> stops at the next safe boundary — no half-written files (atomic writes) — and your next message course-corrects instead of restarting.</p>
       </div>
       <div class="card">
-        <div class="glyph" style="color:var(--code)">▲</div>
+        <div class="glyph" style="color:var(--code)" aria-hidden="true">▲</div>
         <h4>Sandboxed tools</h4>
-        <p>File tools are hard-jailed to the workspace; shell runs with a scrubbed env, timeouts, output caps and a command policy.</p>
+        <p>File tools are jailed to the workspace — <code>..</code> traversal and escaping symlinks are rejected. Shell runs with a scrubbed env, timeouts, output caps and a command policy.</p>
       </div>
       <div class="card">
-        <div class="glyph" style="color:var(--warn)">·</div>
+        <div class="glyph" style="color:var(--warn)" aria-hidden="true">·</div>
         <h4>Memory that doesn't leak tokens</h4>
         <p>Rolling compression with pinned goals, tool-result masking, read dedup — plus <code>AGENTS.md</code> project memory loaded at session start.</p>
       </div>
       <div class="card">
-        <div class="glyph" style="color:var(--accent)">❯</div>
-        <h4>Feels like a terminal, because it is one</h4>
-        <p>Streaming tokens, ctrl-r for live reasoning, markdown rendering, slash-command autocomplete. Built on Ink.</p>
+        <div class="glyph" style="color:var(--accent)" aria-hidden="true">❯</div>
+        <h4>Knows your repo's paperwork</h4>
+        <p>Built-in <code>gh_*</code> tools read issues, pull requests and diffs, and open a PR when the work is done — so "fix #482" is a whole task, not a lookup.</p>
       </div>
     </div>
   </div>
@@ -412,9 +526,9 @@
   <div class="wrap">
     <h2>providers</h2>
     <h3>Your keys, your models, <span class="grad">your call</span></h3>
-    <p class="lede">Hosted frontier, a single OpenRouter key, or fully local — switch any time with <b>/model</b>. First run walks you through it.</p>
+    <p class="lede">Hosted frontier, a single OpenRouter key, or fully local — switch any time with <b>/model</b>. First run walks you through it, and <code>marshall login</code> signs in with a Claude account instead of a key.</p>
     <div class="providers">
-      <span class="chip"><b>claude</b> <span class="faint">· ANTHROPIC_API_KEY</span></span>
+      <span class="chip"><b>claude</b> <span class="faint">· ANTHROPIC_API_KEY or login</span></span>
       <span class="chip"><b>openai</b> <span class="faint">· OPENAI_API_KEY</span></span>
       <span class="chip"><b>gemini</b> <span class="faint">· GEMINI_API_KEY</span></span>
       <span class="chip"><b>mistral</b> <span class="faint">· MISTRAL_API_KEY</span></span>
@@ -436,28 +550,53 @@
   <div class="wrap">
     <h2>commands</h2>
     <h3>Small surface, <span class="grad">muscle memory</span></h3>
-    <p class="lede"></p>
+    <p class="lede">Eleven slash commands and three keys. <code>/help</code> prints the lot.</p>
     <div class="cmds">
-      <div class="row"><span class="k">/model</span><span class="d">pick deep + fast models; wizard lists OpenRouter's live catalogue or probes local servers for what's actually loaded</span></div>
-      <div class="row"><span class="k">/plan &lt;task&gt;</span><span class="d">get a plan before touching code — used as context for the task</span></div>
-      <div class="row"><span class="k">/review</span><span class="d">second opinion on the current workspace state</span></div>
-      <div class="row"><span class="k">/tokens</span><span class="d">show ↑ in / ↓ out / duration after each response</span></div>
-      <div class="row"><span class="k">/stream</span><span class="d">toggle live token streaming</span></div>
-      <div class="row"><span class="k">/clear</span><span class="d">reset history, caches and scratch notes</span></div>
-      <div class="row"><span class="k">ctrl-r</span><span class="d">toggle live chain-of-thought on thinking models</span></div>
+      <div class="row"><span class="k">/model</span><span class="d">pick deep + fast models; the wizard lists OpenRouter's live catalogue or probes local servers for what's actually loaded</span></div>
+      <div class="row"><span class="k">/plan &lt;task&gt;</span><span class="d">get a plan before touching code — carried as context into your next task</span></div>
+      <div class="row"><span class="k">/review [notes]</span><span class="d">second opinion on the current workspace state</span></div>
+      <div class="row"><span class="k">/memory</span><span class="d">view <code>AGENTS.md</code>, the project memory loaded at session start</span></div>
+      <div class="row"><span class="k">/login</span><span class="d">authenticate with a Claude account instead of an API key</span></div>
+      <div class="row"><span class="k">/tokens</span><span class="d">toggle usage (↑ in / ↓ out / time) after each response</span></div>
+      <div class="row"><span class="k">/stream</span><span class="d">toggle live token streaming vs. final response only</span></div>
+      <div class="row"><span class="k">/clear</span><span class="d">reset history, dedupe cache and scratch notes</span></div>
+      <div class="row"><span class="k">ctrl-r</span><span class="d">toggle live reasoning, on providers that stream it</span></div>
       <div class="row"><span class="k">esc / esc esc</span><span class="d">interrupt &amp; steer / force-quit</span></div>
     </div>
   </div>
 </section>
 
+<!-- ── honest limits ────────────────────────────────────────────────── -->
+<section id="limits">
+  <div class="wrap">
+    <h2>fine print</h2>
+    <h3>What it <span class="grad">doesn't</span> do</h3>
+    <p class="lede">Worth knowing before you point it at something that matters.</p>
+    <div class="note">
+      <b>The sandbox is containment, not a security boundary.</b> File tools are hard-jailed to
+      the workspace, and shell runs under a command policy — but a shell command can still reach
+      the network, or read a file outside the workspace by absolute path. OS-level isolation
+      (container / microVM) is planned; only the executor behind the tool changes.
+    </div>
+    <div class="note">
+      <b>One workspace, one terminal.</b> No multi-repo sessions, and no editor integration yet —
+      a reference VS Code extension is on the roadmap, driven by the engine's stdio JSON-RPC
+      transport. The engine itself is headless and has no idea a terminal exists.
+    </div>
+  </div>
+</section>
+
 <!-- ── big cta ──────────────────────────────────────────────────────── -->
-<section>
+<section id="start">
   <div class="wrap">
     <div class="big-cta">
       <h2>get started</h2>
       <h3>Your terminal is <span class="grad">already open</span></h3>
-      <p class="lede" style="margin: 0 auto; max-width: 480px;">Node 22+, one npm install, thirty seconds of setup wizard.</p>
-      <span class="install"><span class="prompt">❯ </span>npm install -g @marshall/cli &amp;&amp; marshall</span>
+      <p class="lede" style="margin: 0 auto; max-width: 480px;">Node 22+, one npm install, thirty seconds of setup wizard. No account required if you're running local models.</p>
+      <button class="install" type="button" data-copy="npm install -g @marshall/cli && marshall">
+        <span class="cmd"><span class="prompt" aria-hidden="true">❯ </span>npm install -g @marshall/cli &amp;&amp; marshall</span>
+        <span class="copy" aria-hidden="true">copy</span>
+      </button>
       <div style="margin-top: 26px;">
         <a class="btn" href="https://github.com/LaurentZuijdwijk/agention-marshall">star on github</a>
       </div>
@@ -468,14 +607,39 @@
 </main>
 
 <footer>
-  <div class="wrap" style="display:flex; gap:14px; flex-wrap:wrap;">
-    <span>◆ <span class="grad">marshall</span> — built on <a href="https://docs.agention.ai">agention</a></span>
-    <span class="spacer" style="flex:1"></span>
+  <div class="wrap">
+    <span><span aria-hidden="true">◆ </span><span class="grad">marshall</span> — built on <a href="https://docs.agention.ai">agention</a></span>
+    <span class="spacer"></span>
     <a href="https://github.com/LaurentZuijdwijk/agention-marshall">github</a>
-    <span>·</span>
+    <span aria-hidden="true">·</span>
     <span>MIT licensed</span>
   </div>
 </footer>
+
+<script>
+// ── copy-to-clipboard on the install commands ─────────────────────────────
+document.querySelectorAll('.install[data-copy]').forEach(btn => {
+  const label = btn.querySelector('.copy');
+  let reset;
+  btn.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(btn.dataset.copy);
+    } catch {
+      // Clipboard API needs a secure context; fall back to selecting the text
+      // so ctrl-c still works (and so file:// previews aren't broken).
+      const r = document.createRange();
+      r.selectNodeContents(btn.querySelector('.cmd'));
+      const sel = getSelection();
+      sel.removeAllRanges(); sel.addRange(r);
+      return;
+    }
+    btn.dataset.copied = '1';
+    label.textContent = 'copied';
+    clearTimeout(reset);
+    reset = setTimeout(() => { btn.dataset.copied = '0'; label.textContent = 'copy'; }, 1600);
+  });
+});
+</script>
 
 <script>
 // ── wordmark ──────────────────────────────────────────────────────────────
@@ -531,7 +695,6 @@
         const dist = Math.abs(centre - sweep);
         if (dist < glowRadius) color = blend(color, dist, glowRadius);
         const span = document.createElement('span');
-        span.className = 'band';
         span.style.color = color;
         span.textContent = masked;
         line.appendChild(span);
@@ -600,9 +763,60 @@
 
   const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
   const line = (html) => { const d = document.createElement('div'); d.innerHTML = html; body.appendChild(d); };
-  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  const speed = reduced ? 0 : 1;
+
+  const SCRIPT = {
+    prompt: 'add input validation to the signup form',
+    plan: [
+      '1. read src/components/SignupForm.tsx',
+      '2. add zod schema + field errors',
+      '3. wire submit handler',
+      '4. run the test suite',
+    ],
+    tools: [
+      ['read_file',  'src/components/SignupForm.tsx', null],
+      ['edit_file',  'src/components/SignupForm.tsx', '±42 lines'],
+      ['write_file', 'src/validation/signup.ts', '+28 lines'],
+      ['run_shell',  'npm test -- SignupForm', '12 passed'],
+    ],
+    usage: '  usage · ↑8 214  ↓1 036  · 9.4s',
+    answer: 'Done. SignupForm now validates email, password strength and ' +
+      'matching confirmation client-side with zod, shows inline errors, and the ' +
+      'suite passes — 12/12.',
+  };
+
+  const toolLine = ([name, arg, note]) =>
+    `<span class="t">● ${esc(name)}</span>  <span class="m">${esc(arg)}</span>` +
+    (name === 'read_file' ? '' : ' <span class="ok">✓ approved</span>') +
+    (note ? ` <span class="f">· ${esc(note)}</span>` : '');
+
+  // Reduced motion: render the finished transcript once and stop. Replaying it
+  // with zero-length sleeps would spin the main thread forever.
+  function renderStatic() {
+    body.innerHTML = '';
+    line(`<span class="p">❯ </span><span class="u">${esc(SCRIPT.prompt)}</span>`);
+    line('<span class="f">│ </span><span class="a">◆ planner</span> <span class="f">· 4 steps</span>');
+    for (const step of SCRIPT.plan) line(`<span class="f">│   ${esc(step)}</span>`);
+    for (const t of SCRIPT.tools) line(toolLine(t));
+    line(`<span class="f">${esc(SCRIPT.usage)}</span>`);
+    line(`<span class="a">◆ </span>${esc(SCRIPT.answer)}`);
+  }
+
+  if (reduced) { renderStatic(); return; }
+
+  // ── playback gating ──────────────────────────────────────────────────
+  // The old version disconnected its observer after the first intersection,
+  // so the loop kept typing forever in a scrolled-past or backgrounded tab.
+  // Keep observing instead, and make every sleep park while off-screen.
+  let onScreen = false;
+  let started = false;
+
+  const awake = () => onScreen && !document.hidden;
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  async function sleep(ms) {
+    await wait(ms);
+    while (!awake()) await wait(250);   // park, don't burn frames
+  }
 
   async function type(el, text, cls, cps) {
     const span = document.createElement('span');
@@ -610,75 +824,73 @@
     el.appendChild(span);
     for (const ch of text) {
       span.textContent += ch;
-      await sleep((1000 / cps) * speed);
+      await sleep(1000 / cps);
     }
     return span;
   }
 
   async function run() {
-    body.innerHTML = '';
+    // Loop iteratively rather than recursing — this never returns, and a
+    // self-call would grow an await chain for the life of the page.
+    for (;;) {
+      body.innerHTML = '';
 
-    // user prompt
-    let d = document.createElement('div');
-    d.innerHTML = '<span class="p">❯ </span>';
-    body.appendChild(d);
-    await type(d, 'add input validation to the signup form', 'u', 28 * speed || 28);
-    await sleep(500 * speed);
+      let d = document.createElement('div');
+      d.innerHTML = '<span class="p">❯ </span>';
+      body.appendChild(d);
+      await type(d, SCRIPT.prompt, 'u', 28);
+      await sleep(500);
 
-    // plan
-    line('<span class="f">│ </span><span class="a">◆ planner</span> <span class="f">· 4 steps</span>');
-    await sleep(350 * speed);
-    line('<span class="f">│   1. read src/components/SignupForm.tsx</span>');
-    line('<span class="f">│   2. add zod schema + field errors</span>');
-    line('<span class="f">│   3. wire submit handler</span>');
-    line('<span class="f">│   4. run the test suite</span>');
-    await sleep(500 * speed);
+      line('<span class="f">│ </span><span class="a">◆ planner</span> <span class="f">· 4 steps</span>');
+      await sleep(350);
+      for (const step of SCRIPT.plan) line(`<span class="f">│   ${esc(step)}</span>`);
+      await sleep(500);
 
-    // tool calls + approvals
-    const tools = [
-      ['read_file',  'src/components/SignupForm.tsx', null],
-      ['edit_file',  'src/components/SignupForm.tsx', '±42 lines'],
-      ['write_file', 'src/validation/signup.ts', '+28 lines'],
-      ['run_shell',  'npm test -- SignupForm', '12 passed'],
-    ];
-    for (const [name, arg, note] of tools) {
-      line(`<span class="t">● ${esc(name)}</span>  <span class="m">${esc(arg)}</span>` +
-           (name === 'read_file'
-             ? ''
-             : ` <span class="ok">✓ approved</span>`) +
-           (note ? ` <span class="f">· ${esc(note)}</span>` : ''));
-      await sleep(420 * speed);
+      for (const t of SCRIPT.tools) {
+        line(toolLine(t));
+        await sleep(420);
+      }
+      line(`<span class="f">${esc(SCRIPT.usage)}</span>`);
+      await sleep(400);
+
+      d = document.createElement('div');
+      d.innerHTML = '<span class="a">◆ </span>';
+      body.appendChild(d);
+      await type(d, SCRIPT.answer, null, 60);
+
+      // idle prompt
+      await sleep(700);
+      d = document.createElement('div');
+      d.innerHTML = '<span class="p">❯ </span>';
+      body.appendChild(d);
+      const caret = document.createElement('span');
+      caret.className = 'caret';
+      d.appendChild(caret);
+
+      await sleep(4200);
     }
-    line('<span class="f">  usage · ↑8 214  ↓1 036  · 9.4s</span>');
-    await sleep(400 * speed);
-
-    // streamed answer
-    d = document.createElement('div');
-    d.innerHTML = '<span class="a">◆ </span>';
-    body.appendChild(d);
-    await type(d, 'Done. SignupForm now validates email, password strength and ' +
-      'matching confirmation client-side with zod, shows inline errors, and the ' +
-      'suite passes — 12/12.', null, 60 * speed || 60);
-
-    // idle prompt
-    await sleep(700 * speed);
-    d = document.createElement('div');
-    d.innerHTML = '<span class="p">❯ </span>';
-    body.appendChild(d);
-    const caret = document.createElement('span');
-    caret.className = 'caret';
-    d.appendChild(caret);
-
-    await sleep(4200 * speed || 4200);
-    run();
   }
 
-  // Only animate while visible — saves battery and avoids layout thrash.
-  const io = new IntersectionObserver((entries) => {
-    if (entries[0].isIntersecting) { io.disconnect(); run(); }
-  }, { threshold: 0.2 });
-  io.observe(body);
+  new IntersectionObserver((entries) => {
+    onScreen = entries[0].isIntersecting;
+    if (onScreen && !started) { started = true; run(); }
+  }, { threshold: 0.2 }).observe(body);
 })();
+</script>
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "marshall",
+  "applicationCategory": "DeveloperApplication",
+  "operatingSystem": "macOS, Linux, Windows",
+  "description": "A terminal coding assistant built on Agention. A planner/coder/reviewer loop reads, edits and runs your project, with human approval on every state-changing action.",
+  "url": "https://marshall.agention.ai/",
+  "codeRepository": "https://github.com/LaurentZuijdwijk/agention-marshall",
+  "license": "https://opensource.org/licenses/MIT",
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+}
 </script>
 
 </body>
