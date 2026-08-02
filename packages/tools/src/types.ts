@@ -20,12 +20,29 @@ export function createDedupeCache(): DedupeCache {
   };
 }
 
+/**
+ * Who a tool belt belongs to.
+ *
+ * A belt is built per agent, so the agent that will call these tools is known
+ * at construction time — which is the only place it *is* known: the underlying
+ * Tool passes its caller to event listeners, not into the execute function
+ * where the approval gate runs.
+ */
+export interface ToolCaller {
+  /** The role behind the belt: `coder`, `plan`, `review`. */
+  role: string;
+  /** `provider/model` actually running that role. */
+  model: string;
+}
+
 export interface ApprovalRequest {
   toolName: string;
   /** One-line summary shown in the approval prompt */
   description: string;
   /** Full detail: diff for file edits, command line for shell */
   detail: string;
+  /** The agent whose action is waiting on the user. */
+  caller?: ToolCaller;
 }
 
 export type ApprovalFn = (request: ApprovalRequest) => Promise<ApprovalDecision>;
@@ -52,6 +69,8 @@ export interface ToolConfig {
   signal?: AbortSignal;
   commandPolicy?: CommandPolicy;
   limits?: Limits;
+  /** Stamped onto every approval this belt raises. */
+  caller?: ToolCaller;
 }
 
 /** Plain tool spec — used by withApproval so it doesn't need Tool internals */

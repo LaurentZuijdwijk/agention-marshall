@@ -3,6 +3,7 @@ export type {
   ApprovalFn,
   ApprovalDecision,
   ApprovalRequest,
+  ToolCaller,
   Limits,
   CommandPolicy,
   ToolSpec,

@@ -66,3 +66,33 @@ test('calls approval with the built request', async () => {
   await tool.execute('a', 'b', { cmd: 'ls' }, 'id');
   assert.deepEqual(capturedRequest, { toolName: 'test_tool', description: 'run ls', detail: 'ls' });
 });
+
+test('names the requesting agent on the approval request', async () => {
+  let capturedRequest: unknown;
+  const approval: ApprovalFn = async (req) => { capturedRequest = req; return 'approve'; };
+
+  const tool = withApproval(
+    dummySpec(async () => 'ok'),
+    approval,
+    buildReq,
+    undefined,
+    { role: 'coder', model: 'claude/claude-opus-4-6' },
+  );
+
+  await tool.execute('a', 'b', {}, 'id');
+  assert.deepEqual(capturedRequest, {
+    toolName: 'test_tool', description: 'test', detail: '',
+    caller: { role: 'coder', model: 'claude/claude-opus-4-6' },
+  });
+});
+
+test('omits the caller entirely when the belt has no owner', async () => {
+  // An absent field, not `caller: undefined` — the panel decides what to render
+  // by presence, so a key that exists but holds nothing would be a lie.
+  let capturedRequest: Record<string, unknown> = {};
+  const approval: ApprovalFn = async (req) => { capturedRequest = req as unknown as Record<string, unknown>; return 'approve'; };
+
+  const tool = withApproval(dummySpec(async () => 'ok'), approval, buildReq);
+  await tool.execute('a', 'b', {}, 'id');
+  assert.ok(!('caller' in capturedRequest));
+});

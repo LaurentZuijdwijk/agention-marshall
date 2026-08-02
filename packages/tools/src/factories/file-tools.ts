@@ -301,6 +301,7 @@ export function createFileTools(config: ToolConfig, dedupeCache?: DedupeCache): 
       detail: `Path: ${path}\n\n${String(content).slice(0, 800)}${String(content).length > 800 ? '\n[...]' : ''}`,
     }),
     config.signal,
+    config.caller,
   );
 
   const edit_file = withApproval(
@@ -312,6 +313,7 @@ export function createFileTools(config: ToolConfig, dedupeCache?: DedupeCache): 
       detail: simpleDiff(String(path), String(oldString), String(newString)),
     }),
     config.signal,
+    config.caller,
   );
 
   return [read_file, list_dir, search, write_file, edit_file];
