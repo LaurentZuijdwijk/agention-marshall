@@ -96,7 +96,7 @@ Press **Esc / Ctrl-C** to interrupt the current task:
 - Read deduplication — re-reading an unchanged file does not re-flood the context
 
 **Long-term (project memory):**
-- A `MARSHALL.md` file in your workspace holds conventions, architecture notes, and prior decisions
+- An `AGENTS.md` file in your workspace holds conventions, architecture notes, and prior decisions
 - Loaded into the system prompt at session start
 - The agent can propose updates to it (behind approval, since it's a file write)
 
