@@ -129,6 +129,30 @@ describe('slashCommands', () => {
     });
   });
 
+  describe('/mcp', () => {
+    it('lists with no arguments', () => {
+      assert.deepEqual(resolveSlashCommand('/mcp'), { type: 'mcp', action: 'list' });
+    });
+
+    it('opens the wizard for add, which takes no arguments', () => {
+      assert.deepEqual(resolveSlashCommand('/mcp add'), { type: 'mcp', action: 'add' });
+    });
+
+    it('takes a server name for remove and reconnect', () => {
+      assert.deepEqual(resolveSlashCommand('/mcp remove linear'), { type: 'mcp', action: 'remove', server: 'linear' });
+      assert.deepEqual(resolveSlashCommand('/mcp reconnect linear'), { type: 'mcp', action: 'reconnect', server: 'linear' });
+    });
+
+    it('rejects remove and reconnect with no server named', () => {
+      assert.equal(resolveSlashCommand('/mcp remove').type, 'usage');
+      assert.equal(resolveSlashCommand('/mcp reconnect').type, 'usage');
+    });
+
+    it('rejects a verb it does not know', () => {
+      assert.equal(resolveSlashCommand('/mcp frobnicate x').type, 'usage');
+    });
+  });
+
   describe('HELP text', () => {
     it('contains all command names', () => {
       for (const cmd of SLASH_COMMANDS) {

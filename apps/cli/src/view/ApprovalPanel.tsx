@@ -88,6 +88,18 @@ export function ApprovalPanel({ request, pending, onSelect }: {
         <Text color={C.tool} bold>{request.description}</Text>
       </Box>
 
+      {/* Provenance, and the only warning the user gets. A builtin tool is code
+          in this repo; an MCP tool is a remote party's, and that party also
+          wrote the name and description shown above — so the one thing worth
+          stating outright is that none of this text is ours. */}
+      {request.source?.kind === 'mcp' && (
+        <Box>
+          <Text color={C.warn}>
+            {G.warn} remote tool from the {request.source.server} MCP server
+          </Text>
+        </Box>
+      )}
+
       {/* Whose action this is. With work fanned out across tiers, "approve this
           edit" is a different question depending on which agent — and which
           model — is asking for it. */}

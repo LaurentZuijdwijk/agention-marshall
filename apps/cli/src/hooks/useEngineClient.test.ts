@@ -325,3 +325,38 @@ describe('approvals', () => {
     assert.equal(await h.client.requestApproval(req), 'approve');
   });
 });
+
+describe('mcp state', () => {
+  const state = (servers: unknown[]): OutputEvent =>
+    ({ type: 'mcp-state', servers } as OutputEvent);
+
+  it('says nothing when every server is healthy', () => {
+    const h = harness();
+    h.send(state([{ name: 'linear', url: 'u', status: 'connected', toolNames: ['a'] }]));
+    assert.deepEqual(h.pushed, []);
+  });
+
+  it('reports a server that could not be reached', () => {
+    const h = harness();
+    h.send(state([{ name: 'linear', url: 'u', status: 'error', toolNames: [], error: 'ECONNREFUSED' }]));
+    assert.equal(h.pushed[0].role, 'error');
+    assert.match(h.pushed[0].content, /linear/);
+    assert.match(h.pushed[0].content, /ECONNREFUSED/);
+  });
+
+  it('reports each failure separately', () => {
+    const h = harness();
+    h.send(state([
+      { name: 'a', url: 'u', status: 'error', toolNames: [], error: 'x' },
+      { name: 'b', url: 'u', status: 'connected', toolNames: [] },
+      { name: 'c', url: 'u', status: 'error', toolNames: [], error: 'y' },
+    ]));
+    assert.deepEqual(h.pushed.map(p => p.role), ['error', 'error']);
+  });
+
+  it('does not end the turn — this can arrive mid-turn or with no turn at all', () => {
+    const h = harness();
+    h.send(state([{ name: 'a', url: 'u', status: 'error', toolNames: [], error: 'x' }]));
+    assert.ok(!h.calls.some(c => c.startsWith('turnEnded')));
+  });
+});

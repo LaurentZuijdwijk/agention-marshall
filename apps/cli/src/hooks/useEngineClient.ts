@@ -74,6 +74,19 @@ export function createEngineClient(port: TranscriptPort): ClientInterface {
           port.turnStarted();
           break;
 
+        case 'mcp-state': {
+          // Only failures are surfaced unprompted. A server connecting normally
+          // is not news, and printing a block per server at every startup would
+          // bury the thing the user actually typed. `/mcp` shows the full list.
+          const failed = event.servers.filter(s => s.status === 'error');
+          if (failed.length === 0) break;
+          commitStep();
+          for (const server of failed) {
+            port.push('error', `MCP server "${server.name}" is unavailable: ${server.error ?? 'could not connect'}`);
+          }
+          break;
+        }
+
         case 'job-done': {
           const failed = event.status === 'timed-out' || event.exitCode !== 0;
           const outcome = event.status === 'timed-out'

@@ -1,9 +1,11 @@
 export type {
   ToolConfig,
   ApprovalFn,
+  ApprovalDecider,
   ApprovalDecision,
   ApprovalRequest,
   ToolCaller,
+  ToolSource,
   Limits,
   CommandPolicy,
   ToolSpec,
@@ -38,5 +40,12 @@ export { withApproval } from './factories/approval.js';
 export { createFileTools, createReadOnlyFileTools } from './factories/file-tools.js';
 export { createShellTool, DEFAULT_COMMAND_POLICY } from './factories/shell-tool.js';
 export { createJobTools, summarise as summariseJob, formatOutput as formatJobOutput } from './factories/job-tools.js';
+export {
+  adaptMcpTools,
+  namespaceMcpTool,
+  stringifyResult as stringifyMcpResult,
+  DEFAULT_MCP_TIMEOUT_MS,
+} from './factories/mcp-tools.js';
+export type { McpToolOptions } from './factories/mcp-tools.js';
 export { createScratchTools } from './factories/scratch-tools.js';
 export { createGitHubTools } from './factories/github-tools.js';

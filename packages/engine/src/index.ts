@@ -12,3 +12,5 @@ export {
   formatContext, formatParams, formatBytes,
 } from './models.js';
 export { Session } from './session.js';
+export { McpRegistry } from './mcp.js';
+export type { McpServerConfig, McpServerState, McpStatus } from './mcp.js';

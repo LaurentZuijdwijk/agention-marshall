@@ -37,6 +37,25 @@ export interface ToolCaller {
   model: string;
 }
 
+/**
+ * Where a tool came from.
+ *
+ * Carried on every approval request because provenance is the strongest risk
+ * signal available: `write_file` is code we audited, while an MCP tool is a
+ * remote party's code whose name and description it also controls. The
+ * approval UI shows it, and it is the first thing an automated reviewer would
+ * weigh — see ApprovalDecider.
+ */
+export type ToolSource =
+  | { kind: 'builtin' }
+  | {
+      kind: 'mcp';
+      /** The local name for the server, as configured. */
+      server: string;
+      /** The tool's name on the server, before namespacing. */
+      remoteName: string;
+    };
+
 export interface ApprovalRequest {
   toolName: string;
   /** One-line summary shown in the approval prompt */
@@ -45,9 +64,30 @@ export interface ApprovalRequest {
   detail: string;
   /** The agent whose action is waiting on the user. */
   caller?: ToolCaller;
+  /**
+   * The raw arguments the tool was called with.
+   *
+   * Alongside `detail` rather than replacing it: `detail` is prose for a human
+   * to read, this is structure for a program to judge. An automated reviewer
+   * cannot reliably work backwards from a rendered diff.
+   */
+  input?: Record<string, unknown>;
+  /** Defaults to builtin when absent. */
+  source?: ToolSource;
 }
 
 export type ApprovalFn = (request: ApprovalRequest) => Promise<ApprovalDecision>;
+
+/**
+ * One link in the chain that answers an approval request.
+ *
+ * `'defer'` means "no opinion, ask the next one" — the outcome a three-valued
+ * ApprovalDecision cannot express, and the reason this type exists separately.
+ * The chain today is [session always-allow list, the human]; the point of the
+ * seam is that an agent that judges a request and only escalates the risky ones
+ * becomes an entry inserted before the human, with no tool changing.
+ */
+export type ApprovalDecider = (request: ApprovalRequest) => Promise<ApprovalDecision | 'defer'>;
 
 export interface Limits {
   /** Max bytes for file reads. Default: 256 KiB */

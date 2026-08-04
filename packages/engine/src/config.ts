@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Limits, CommandPolicy } from '@agentionai/marshall-tools';
+import type { McpServerConfig } from './mcp.js';
 
 export type Provider = 'claude' | 'openai' | 'gemini' | 'mistral' | 'ollama' | 'llamacpp' | 'openrouter';
 
@@ -114,6 +115,14 @@ export interface EngineConfig {
    * forever; without it, "auto-resume" and "infinite loop" are the same feature.
    */
   autoResumeBudget?: number;
+  /**
+   * Remote MCP servers to connect to at session start.
+   *
+   * Their tools are namespaced (`mcp__<server>__<tool>`) and always gated by
+   * approval: unlike the builtin belt, we cannot know what a remote tool does,
+   * and the server writes its own name and description.
+   */
+  mcpServers?: McpServerConfig[];
 }
 
 // ── tier resolution ───────────────────────────────────────────────────────────

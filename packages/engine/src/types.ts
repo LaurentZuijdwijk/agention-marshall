@@ -1,4 +1,5 @@
 import type { ApprovalRequest, ApprovalDecision } from '@agentionai/marshall-tools';
+import type { McpServerState } from './mcp.js';
 
 export type { ApprovalRequest, ApprovalDecision };
 
@@ -62,7 +63,15 @@ export type OutputEvent =
   | { type: 'error'; message: string }
   | { type: 'interrupted' }
   | { type: 'plan'; text: string }
-  | { type: 'review'; text: string };
+  | { type: 'review'; text: string }
+  /**
+   * The full picture of every configured MCP server, pushed on each change.
+   *
+   * Whole-state rather than per-server deltas: there are a handful of servers at
+   * most, and a client that renders a list from the latest snapshot cannot drift
+   * out of sync the way one accumulating events can. Like `job-done`, this can
+   * arrive with no turn running — the initial connect settles on its own. */
+  | { type: 'mcp-state'; servers: McpServerState[] };
 
 export interface ClientInterface {
   onOutput(event: OutputEvent): void;

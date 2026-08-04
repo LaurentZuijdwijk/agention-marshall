@@ -2,9 +2,11 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { homedir } from 'node:os';
 import { Box, Static, useApp, useStdout } from 'ink';
 import { Session } from '@agentionai/marshall-engine';
-import type { AgentProfile, Provider, Tier } from '@agentionai/marshall-engine';
+import type { AgentProfile, Provider, Tier, McpServerConfig } from '@agentionai/marshall-engine';
 import type { ApprovalDecision } from '@agentionai/marshall-tools';
 import { Setup } from './view/Setup.js';
+import { McpSetup } from './view/McpSetup.js';
+import type { McpScope } from './view/McpSetup.js';
 import { Banner } from './view/Banner.js';
 import type { HeaderMeta } from './view/Banner.js';
 import { Spinner } from './view/Spinner.js';
@@ -29,6 +31,7 @@ import { useKeyBindings } from './hooks/useKeyBindings.js';
 import { startLogin, completeLogin } from './login.js';
 import type { LoginSession } from './login.js';
 import { runSlashCommand } from './commands.js';
+import { saveMcpServers, saveProjectMcpSelection } from './services/config-store.js';
 import { SLASH_COMMANDS } from './slashCommands.js';
 import { completeAtPath, expandFileMentions } from './fileCompletion.js';
 import type { Mode } from './mode.js';
@@ -55,6 +58,10 @@ export interface AppProps {
    * switches providers, instead of reusing a single flat host.
    */
   savedHosts?: Record<string, string | undefined>;
+  /** MCP servers from the global config, connected when the session starts. */
+  mcpServers?: McpServerConfig[];
+  /** MCP config that resolves to nothing — surfaced at startup and by `/mcp`. */
+  mcpWarnings?: string[];
   /**
    * Hands the parent a way to force a full transcript replay. Used on resize:
    * the terminal reflows what is already on screen, so Ink's line-count erase
@@ -86,6 +93,8 @@ export function App({
   enableWebSearch = true,
   maxTokens,
   savedHosts,
+  mcpServers,
+  mcpWarnings,
   registerRedraw,
   animate = Boolean(process.stdout.isTTY),
   SessionCtor = Session,
@@ -162,7 +171,7 @@ export function App({
     useSession({
       workspaceRoot, agentProfile, fastProfile: initialFastProfile,
       contextAgentProfile, plannerAgentProfile, reviewerAgentProfile,
-      enableGitHub, enableWebSearch, maxTokens, savedHosts,
+      enableGitHub, enableWebSearch, maxTokens, savedHosts, mcpServers,
       client, SessionCtor,
       onProfilesChanged: (deep, fast) => transcript.reset([headerMessage(deep, fast)]),
     });
@@ -170,6 +179,13 @@ export function App({
   useEffect(() => {
     registerRedraw?.(() => transcript.replay());
   }, [registerRedraw]);
+
+  // Announced once at startup rather than only on /mcp: a project that enables a
+  // server nothing defines otherwise looks exactly like a project with no MCP,
+  // and the user has no reason to go looking.
+  useEffect(() => {
+    for (const warning of mcpWarnings ?? []) transcript.push('error', warning);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── quitting ───────────────────────────────────────────────────────────────
   const quit = () => {
@@ -247,6 +263,48 @@ export function App({
     setMode(next.show ? { type: 'approval', request: next.show } : { type: 'running' });
   };
 
+  // ── mcp ────────────────────────────────────────────────────────────────────
+  //
+  // Fire and forget, like the model config: a failed write costs the user
+  // re-adding the server next session, not this one.
+  const persistMcp = (enableForProjectOnly?: string) => {
+    if (!session) return;
+    const servers = session.mcpServers().map(server =>
+      server.name === enableForProjectOnly ? { ...server, enabled: false } : server);
+    void saveMcpServers(servers).catch(() => {});
+    if (enableForProjectOnly) {
+      void saveProjectMcpSelection(workspaceRoot, current => ({
+        ...current,
+        enable: [...new Set([...(current.enable ?? []), enableForProjectOnly])],
+      })).catch(() => {});
+    }
+  };
+
+  const handleMcpAdd = (server: McpServerConfig, scope: McpScope) => {
+    setMode({ type: 'idle' });
+    if (!session) return;
+    transcript.push('info', `connecting to ${server.name}…`);
+    session.addMcpServer(server)
+      .then((state) => {
+        if (state.status === 'connected') {
+          transcript.push('info',
+            `${G.ok} ${state.name} connected — ${state.toolNames.length} tools, ` +
+            'each one asks before it runs');
+          // Persisted only on success. Writing a server we could not reach
+          // would retry it on every future start and fail there too.
+          //
+          // The definition always goes to the global config — it can hold a
+          // bearer token, and that never belongs in a repo. `project` scope
+          // marks it off-by-default there and opts this one checkout in, so the
+          // committed file names a server without carrying its credentials.
+          persistMcp(scope === 'project' ? state.name : undefined);
+        } else {
+          transcript.push('error', `${state.name}: ${state.error ?? 'could not connect'}`);
+        }
+      })
+      .catch((err: unknown) => transcript.push('error', err instanceof Error ? err.message : String(err)));
+  };
+
   // ── setup wizard ───────────────────────────────────────────────────────────
   const handleSetupComplete = (
     tier: Tier,
@@ -301,6 +359,8 @@ export function App({
       runSlashCommand(text, {
         workspaceRoot, transcript, session, approvals, prefs, setMode, setSteering,
         headerMessage: () => headerMessage(activeProfile, fastProfile),
+        onMcpChanged: persistMcp,
+        mcpWarnings,
         applyProfiles, activeProfile, quit,
         startLogin: startLoginCtor,
       });
@@ -330,6 +390,18 @@ export function App({
   };
 
   // ── render ─────────────────────────────────────────────────────────────────
+  if (mode.type === 'mcp-setup') {
+    return (
+      <Box padding={1}>
+        <McpSetup
+          existing={session?.mcpState().map(s => s.name) ?? []}
+          onComplete={handleMcpAdd}
+          onExit={() => setMode({ type: 'idle' })}
+        />
+      </Box>
+    );
+  }
+
   if (mode.type === 'setup') {
     const { tier, chain } = mode;
     // The fast tier usually lives on the same server as deep, so seed it from

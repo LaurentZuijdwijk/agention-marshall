@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { Session } from '@agentionai/marshall-engine';
-import type { AgentProfile, ClientInterface, Provider } from '@agentionai/marshall-engine';
+import type { AgentProfile, ClientInterface, Provider, McpServerConfig } from '@agentionai/marshall-engine';
 import { saveConfig } from '../services/config-store.js';
 
 /**
@@ -37,6 +37,8 @@ export interface UseSessionOptions {
   enableWebSearch?: boolean;
   maxTokens?: number;
   savedHosts?: Record<string, string | undefined>;
+  /** Servers loaded from the global config, connected at session start. */
+  mcpServers?: McpServerConfig[];
   client: ClientInterface;
   /** Fired after a rebuild, so the caller can restart its transcript. */
   onProfilesChanged(deep: AgentProfile, fast: AgentProfile | undefined): void;
@@ -65,6 +67,7 @@ export function useSession(options: UseSessionOptions): SessionController {
       agent: deep,
       models: { deep, fast },
       workspaceRoot, enableGitHub, enableWebSearch, maxTokens,
+      mcpServers: options.mcpServers,
       contextAgent: contextAgentProfile,
       plannerAgent: plannerAgentProfile,
       reviewerAgent: reviewerAgentProfile,

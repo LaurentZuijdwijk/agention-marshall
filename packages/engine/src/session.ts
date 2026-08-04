@@ -18,7 +18,9 @@ import {
   formatJobOutput,
 } from '@agentionai/marshall-tools';
 import type { ToolConfig, DedupeCache, BackgroundJob, BackgroundJobs } from '@agentionai/marshall-tools';
-import type { ApprovalDecision, ApprovalRequest } from '@agentionai/marshall-tools';
+import type { ApprovalDecision, ApprovalRequest, ApprovalDecider, ApprovalFn } from '@agentionai/marshall-tools';
+import { McpRegistry } from './mcp.js';
+import type { McpServerConfig, McpServerState } from './mcp.js';
 import {
   createAgent,
   CONTEXT_AGENT_PROMPT,
@@ -76,6 +78,21 @@ const AUTO_RESUME_INSTRUCTION =
  * Exported for tests only — the provider shapes are the whole risk here, and
  * they are far cheaper to pin down directly than through a live agent.
  */
+/**
+ * Walk an approval chain until something has an opinion.
+ *
+ * Denies if every link defers. That can only happen if the chain is
+ * misconfigured — the human link never defers — and on a gate whose whole job
+ * is to withhold consent, the safe answer to "nobody decided" is no.
+ */
+async function runChain(chain: ApprovalDecider[], req: ApprovalRequest): Promise<ApprovalDecision> {
+  for (const decide of chain) {
+    const verdict = await decide(req);
+    if (verdict !== 'defer') return verdict;
+  }
+  return 'deny';
+}
+
 export function assistantText(content: unknown[]): string {
   return content
     .filter((block): block is { type: 'text'; text: string } =>
@@ -134,6 +151,16 @@ export class Session {
   /** Turns still allowed to start unattended. Refilled by every user turn. */
   private autoResumeBudget: number;
   private disposed = false;
+  /**
+   * Remote MCP servers and the tools they offer.
+   *
+   * Connected in the background from the constructor rather than lazily on
+   * first use: a remote handshake is the slowest thing in startup, and doing it
+   * eagerly means the first turn usually finds it done. `run` awaits it anyway,
+   * so a server that is still connecting delays that turn rather than being
+   * silently absent from the belt.
+   */
+  private readonly mcp: McpRegistry;
 
   constructor(
     private readonly config: EngineConfig,
@@ -150,6 +177,9 @@ export class Session {
     this.dedupeCache = createDedupeCache();
     this.jobs = createBackgroundJobs({ onExit: (job) => this.onJobExit(job) });
     this.autoResumeBudget = config.autoResumeBudget ?? DEFAULT_AUTO_RESUME_BUDGET;
+
+    this.mcp = new McpRegistry(config.mcpServers);
+    if (!this.mcp.isEmpty) void this.mcp.connectAll().then(() => this.reportMcpState());
 
     this.logPath = join(config.workspaceRoot, '.marshall', 'logs', 'session.log');
     this.logDirReady = mkdir(dirname(this.logPath), { recursive: true }).then(() => {});
@@ -558,27 +588,104 @@ export class Session {
     return this.jobs;
   }
 
-  /** Stop every background job. The processes are detached, so a session that
-   *  goes away without this leaves them running with nobody reading them. */
+  // ── MCP ─────────────────────────────────────────────────────────────────────
+
+  /** Configured servers and what each is currently doing — what `/mcp` renders. */
+  mcpState(): McpServerState[] {
+    return this.mcp.state();
+  }
+
+  /**
+   * The server configs, for a client that persists them.
+   *
+   * Separate from `mcpState` on purpose: state is for display and deliberately
+   * omits `headers`, since it is handed to the UI and those headers are bearer
+   * tokens. Persisting from state would quietly drop the credential and leave a
+   * server that works this session and fails on the next start.
+   */
+  mcpServers(): McpServerConfig[] {
+    return this.mcp.configs;
+  }
+
+  /** Add a server, connect it, and report the outcome. Never throws: an
+   *  unreachable server comes back as an `error` state, not an exception. */
+  async addMcpServer(config: McpServerConfig): Promise<McpServerState> {
+    const state = await this.mcp.add(config);
+    this.log(`MCP add ${config.name} ${state.status} ${state.error ?? `${state.toolNames.length} tools`}`);
+    this.reportMcpState();
+    return state;
+  }
+
+  async removeMcpServer(name: string): Promise<boolean> {
+    const removed = await this.mcp.remove(name);
+    if (removed) {
+      this.log(`MCP remove ${name}`);
+      this.reportMcpState();
+    }
+    return removed;
+  }
+
+  async reconnectMcpServer(name: string): Promise<McpServerState | null> {
+    const state = await this.mcp.reconnect(name);
+    if (state) {
+      this.log(`MCP reconnect ${name} ${state.status} ${state.error ?? ''}`);
+      this.reportMcpState();
+    }
+    return state;
+  }
+
+  /** Push the current picture to the client. Emitted on every change so the UI
+   *  never has to poll, and once after the initial connect settles. */
+  private reportMcpState(): void {
+    if (this.disposed) return;
+    this.client.onOutput({ type: 'mcp-state', servers: this.mcp.state() });
+  }
+
+  /** Stop every background job and close every MCP connection. The processes
+   *  are detached and the sockets are open, so a session that goes away without
+   *  this leaves both running with nobody reading them. */
   dispose(): void {
     this.disposed = true;
     this.jobs.killAll();
+    void this.mcp.disconnect().catch(() => {});
+  }
+
+  /**
+   * The ordered chain that answers an approval request.
+   *
+   * Each decider returns a decision or `'defer'`, and the first non-defer wins;
+   * asking the human is simply the last link, the one that never defers. Written
+   * as a chain rather than an `if` ladder because the intended next entry is an
+   * agent that judges a request and only escalates the risky ones — it slots in
+   * between these two, and no tool has to know it exists. That is also why
+   * ApprovalRequest carries structured `input` and `source`: a reviewer needs
+   * the arguments and the provenance, not the prose meant for a human.
+   */
+  private approvalChain(): ApprovalDecider[] {
+    return [
+      // Session "always allow", by tool name.
+      async (req) => {
+        if (!this.alwaysApproved.has(req.toolName)) return 'defer';
+        this.log(`TOOL ${req.toolName} auto-approved (always)`);
+        return 'approve';
+      },
+      // ── an automated reviewer would go here ──
+      (req) => this.decideApproval(req),
+    ];
   }
 
   /** Approval function that honours the per-session always-approve list. */
-  private makeApproval(): (req: ApprovalRequest) => Promise<ApprovalDecision> {
+  private makeApproval(): ApprovalFn {
+    const chain = this.approvalChain();
     return async (req) => {
-      if (this.alwaysApproved.has(req.toolName)) {
-        this.log(`TOOL ${req.toolName} auto-approved (always)`);
-        return 'approve';
-      }
       // Parallel tool calls for the same tool all reach this gate at once, so a
       // single user decision should answer the whole batch — otherwise choosing
       // "always" only sticks for whichever call happens to resolve first and the
       // rest still prompt. Coalesce them onto one shared decision.
       const inFlight = this.pendingApprovals.get(req.toolName);
       if (inFlight) return inFlight;
-      const decision = this.decideApproval(req);
+
+      const decision = runChain(chain, req);
       this.pendingApprovals.set(req.toolName, decision);
       void decision.finally(() => this.pendingApprovals.delete(req.toolName));
       return decision;
@@ -636,6 +743,9 @@ export class Session {
       this.searchToolReady,
       this.plannerToolReady,
       this.reviewerToolReady,
+      // Settles whether the servers connected or failed, so a dead server costs
+      // this turn a bounded wait rather than dropping its tools without a word.
+      this.mcp.ready(),
     ]);
 
     // Shrink before the turn rather than mid-turn: the plugin's own trigger was
@@ -708,6 +818,9 @@ export class Session {
         ...(searchTool ? [searchTool] : []),
         ...(plannerTool ? [plannerTool] : []),
         ...(reviewerTool ? [reviewerTool] : []),
+        // Rebuilt per turn: the wrapping binds this turn's approval fn, abort
+        // signal and caller identity, none of which outlive the turn.
+        ...this.mcp.tools(toolConfig),
         this.maskingPlugin.retrieveTool,
       ];
 

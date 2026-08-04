@@ -31,7 +31,10 @@ export function withApproval(
     execute: async (input: Record<string, unknown>) => {
       if (signal?.aborted) return INTERRUPTED;
 
-      const request = { ...buildRequest(input), ...(caller ? { caller } : {}) };
+      // `input` is stamped on here, not in each buildRequest: every gated tool
+      // has it, and a decider that has to trust each caller to remember it is a
+      // decider that will eventually judge a request with no arguments.
+      const request = { input, ...buildRequest(input), ...(caller ? { caller } : {}) };
       const decision = await approval(request);
 
       if (signal?.aborted) return INTERRUPTED;

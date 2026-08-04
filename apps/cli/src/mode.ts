@@ -15,6 +15,8 @@ export type Mode =
   | { type: 'idle' }
   | { type: 'running' }
   | { type: 'login-pending'; session: LoginSession }
-  | { type: 'approval'; request: ApprovalRequest };
+  | { type: 'approval'; request: ApprovalRequest }
+  /** The `/mcp add` wizard, asking for url, name and token. */
+  | { type: 'mcp-setup' };
 
 export type SetMode = (mode: Mode) => void;

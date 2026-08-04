@@ -5,7 +5,7 @@ import type { CommandDeps, CommandSession } from './commands.js';
 import type { Transcript } from './hooks/useTranscript.js';
 import type { Mode } from './mode.js';
 import type { Message } from './view/message.js';
-import type { AgentProfile } from '@agentionai/marshall-engine';
+import type { AgentProfile, McpServerState } from '@agentionai/marshall-engine';
 import type { BackgroundJob } from '@agentionai/marshall-tools';
 
 // ── fakes ─────────────────────────────────────────────────────────────────────
@@ -30,7 +30,7 @@ function fakeTranscript() {
 
 const PROFILE: AgentProfile = { provider: 'claude', model: 'claude-sonnet-4-6' };
 
-function setup(overrides: Partial<CommandDeps> & { jobs?: BackgroundJob[] } = {}) {
+function setup(overrides: Partial<CommandDeps> & { jobs?: BackgroundJob[]; servers?: McpServerState[] } = {}) {
   const t = fakeTranscript();
   const modes: Mode[] = [];
   const calls = {
@@ -43,9 +43,13 @@ function setup(overrides: Partial<CommandDeps> & { jobs?: BackgroundJob[] } = {}
     steering: [] as boolean[],
     killed: [] as string[],
     killedAll: 0,
+    mcpRemoved: [] as string[],
+    mcpReconnected: [] as string[],
+    mcpChanged: 0,
   };
 
   const jobs = overrides.jobs ?? [];
+  const servers = overrides.servers ?? [];
 
   const session: CommandSession = {
     plan: async (task) => { calls.plan.push(task); },
@@ -55,6 +59,15 @@ function setup(overrides: Partial<CommandDeps> & { jobs?: BackgroundJob[] } = {}
       list: () => jobs,
       kill: (id) => { calls.killed.push(id); return jobs.some(j => j.id === id && j.status === 'running'); },
       killAll: () => { calls.killedAll++; },
+    },
+    mcpState: () => servers,
+    removeMcpServer: async (name) => {
+      calls.mcpRemoved.push(name);
+      return servers.some(s => s.name === name);
+    },
+    reconnectMcpServer: async (name) => {
+      calls.mcpReconnected.push(name);
+      return servers.find(s => s.name === name) ?? null;
     },
   };
 
@@ -86,6 +99,7 @@ function setup(overrides: Partial<CommandDeps> & { jobs?: BackgroundJob[] } = {}
     activeProfile: PROFILE,
     quit: () => { calls.quit++; },
     startLogin: () => ({ authUrl: 'https://auth.example' } as never),
+    onMcpChanged: () => { calls.mcpChanged++; },
     ...overrides,
   };
 
@@ -131,6 +145,9 @@ describe('runSlashCommand', () => {
         review: async () => {},
         clear: async () => 'cleared',
         backgroundJobs: { list: () => [], kill: () => false, killAll: () => {} },
+        mcpState: () => [],
+        removeMcpServer: async () => false,
+        reconnectMcpServer: async () => null,
       },
     });
     runSlashCommand('/plan something', deps);
@@ -280,5 +297,83 @@ describe('/jobs', () => {
     const { deps, pushed } = setup({ session: null });
     runSlashCommand('/jobs', deps);
     assert.equal(pushed[0].role, 'error');
+  });
+});
+
+describe('/mcp', () => {
+  const server = (over: Partial<McpServerState> = {}): McpServerState => ({
+    name: 'linear',
+    url: 'https://mcp.linear.app/mcp',
+    status: 'connected',
+    toolNames: ['create_issue', 'search_issues'],
+    ...over,
+  });
+
+  it('points at /mcp add when nothing is configured', () => {
+    const { deps, pushed } = setup();
+    runSlashCommand('/mcp', deps);
+    assert.equal(pushed[0].role, 'info');
+    assert.match(pushed[0].content, /no MCP servers configured/);
+  });
+
+  it('lists each server with its status and the tools it offers', () => {
+    const { deps, pushed } = setup({ servers: [server()] });
+    runSlashCommand('/mcp', deps);
+    assert.match(pushed[0].content, /linear\s+connected/);
+    assert.match(pushed[0].content, /2 tools: create_issue, search_issues/);
+  });
+
+  it('shows the reason a server failed instead of just "error"', () => {
+    const { deps, pushed } = setup({
+      servers: [server({ status: 'error', toolNames: [], error: 'ECONNREFUSED' })],
+    });
+    runSlashCommand('/mcp', deps);
+    assert.match(pushed[0].content, /ECONNREFUSED/);
+  });
+
+  it('opens the wizard for /mcp add rather than doing anything itself', () => {
+    const { deps, modes, pushed } = setup();
+    runSlashCommand('/mcp add', deps);
+    assert.deepEqual(modes, [{ type: 'mcp-setup' }]);
+    assert.deepEqual(pushed, []);
+  });
+
+  it('removes a server and persists the change', async () => {
+    const { deps, calls, pushed } = setup({ servers: [server()] });
+    runSlashCommand('/mcp remove linear', deps);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(calls.mcpRemoved, ['linear']);
+    assert.equal(calls.mcpChanged, 1, 'a removed server must not come back next session');
+    assert.match(pushed[0].content, /removed linear/);
+  });
+
+  it('does not persist when the named server was not configured', async () => {
+    const { deps, calls, pushed } = setup();
+    runSlashCommand('/mcp remove ghost', deps);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(calls.mcpChanged, 0);
+    assert.match(pushed[0].content, /not a configured MCP server/);
+  });
+
+  it('reconnects a server and reports the new state', async () => {
+    const { deps, calls, pushed } = setup({ servers: [server()] });
+    runSlashCommand('/mcp reconnect linear', deps);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(calls.mcpReconnected, ['linear']);
+    assert.match(pushed[0].content, /linear\s+connected/);
+  });
+
+  it('rejects a malformed argument with usage', () => {
+    const { deps, pushed } = setup();
+    runSlashCommand('/mcp frobnicate', deps);
+    assert.equal(pushed[0].role, 'error');
+    assert.match(pushed[0].content, /usage: \/mcp/);
+  });
+
+  it('refuses before a model is chosen', () => {
+    const { deps, pushed, modes } = setup({ session: null });
+    runSlashCommand('/mcp', deps);
+    assert.equal(pushed[0].role, 'error');
+    assert.deepEqual(modes, []);
   });
 });

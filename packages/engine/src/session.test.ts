@@ -423,6 +423,11 @@ test('parallel approvals for the same tool coalesce into one user decision', asy
   const third = approve(req);
 
   // Only the first request reaches the user; the rest wait on the same decision.
+  // Awaited rather than asserted inline: the approval chain is walked
+  // asynchronously, so the human link is reached a tick after the call. What
+  // matters is that the in-flight promise is registered synchronously, which is
+  // what makes calls two and three join it instead of prompting again.
+  await new Promise(resolve => setImmediate(resolve));
   assert.equal(approvalCalls, 1, 'same-tool parallel calls must share one user decision');
 
   releasedResolve('always');

@@ -1,8 +1,8 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { readFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
-import type { AgentProfile } from '@agentionai/marshall-engine';
+import { join, dirname } from 'node:path';
+import type { AgentProfile, McpServerConfig } from '@agentionai/marshall-engine';
 
 // ── the on-disk shape ─────────────────────────────────────────────────────────
 //
@@ -40,9 +40,39 @@ export interface SavedProviderEntry {
   apiKey?: string;
 }
 
+/** A remote MCP server as stored. `headers` can hold a bearer token, which is
+ *  the other reason this file is written 0600 and lives outside the repo. */
+export interface SavedMcpServer {
+  name?: string;
+  url?: string;
+  headers?: Record<string, string>;
+  enabled?: boolean;
+}
+
+/**
+ * The project file's MCP section — safe to commit.
+ *
+ * Deliberately *not* the `mcpServers` array. Two reasons: `deepMerge` replaces
+ * arrays wholesale, so a project-local `mcpServers` would silently replace the
+ * global list and force every secret to be repeated here to keep the other
+ * servers working; and this file lands in git, where a bearer token must never
+ * be. This section can only select from what the global config defines, or
+ * declare a server that needs no credentials at all.
+ */
+export interface SavedProjectMcp {
+  /** Turn on globally-defined servers that are `enabled: false` by default. */
+  enable?: string[];
+  /** Turn off servers this project should not see. Beats `enable`. */
+  disable?: string[];
+  /** Servers only this project uses. `headers` is stripped — see resolveMcpServers. */
+  servers?: SavedMcpServer[];
+}
+
 export interface SavedConfig extends SavedProfile {
   models?: { deep?: SavedProfile; fast?: SavedProfile };
   providers?: SavedProviderEntry[];
+  mcpServers?: SavedMcpServer[];
+  mcp?: SavedProjectMcp;
 }
 
 /** Directory holding the global config, honouring `$XDG_CONFIG_HOME`. */
@@ -128,6 +158,99 @@ export function savedProviders(config: SavedConfig): Record<string, SavedProvide
     if (entry?.provider) byProvider[entry.provider] = entry;
   }
   return byProvider;
+}
+
+/**
+ * Configured MCP servers, with anything malformed dropped.
+ *
+ * This is untrusted file content that becomes network connections, so entries
+ * without both a name and a url are discarded rather than passed on to fail
+ * later at connect time with a less obvious message.
+ */
+export function savedMcpServers(config: SavedConfig): McpServerConfig[] {
+  return (config.mcpServers ?? [])
+    .filter((s): s is SavedMcpServer & { name: string; url: string } =>
+      Boolean(s && typeof s.name === 'string' && typeof s.url === 'string'))
+    .map(s => ({
+      name: s.name,
+      url: s.url,
+      ...(s.headers ? { headers: s.headers } : {}),
+      ...(s.enabled === false ? { enabled: false } : {}),
+    }));
+}
+
+/**
+ * The servers to actually connect to, from the two files.
+ *
+ * Layering, in one place so the rules are visible:
+ *
+ *   - The global config *defines* servers, credentials included. `enabled:
+ *     false` means "configured, but off unless a project asks for it" — which
+ *     is how a personal server stays out of every unrelated checkout.
+ *   - The project config *selects*: `enable` opts into a default-off server,
+ *     `disable` opts out of a default-on one. `disable` wins, because the safe
+ *     direction to resolve a contradiction is fewer tools, not more.
+ *   - A project may declare its own servers, but never their `headers`. That
+ *     file is meant to be committed, and a bearer token in git is a leak for
+ *     everyone who clones it. A no-auth local server still works.
+ *
+ * Pure, so the precedence is testable without touching a disk.
+ */
+export function resolveMcpServers(global: SavedConfig, project: SavedConfig): McpServerConfig[] {
+  const section = project.mcp ?? {};
+  const disabled = new Set(section.disable ?? []);
+  const enabled = new Set(section.enable ?? []);
+
+  const defined = savedMcpServers(global);
+  // Stripped, not rejected: a project-declared server pointing at localhost is
+  // a legitimate and useful thing, it just cannot carry a credential.
+  const projectOwn = savedMcpServers({ mcpServers: section.servers })
+    .map(({ headers: _dropped, ...server }) => server);
+
+  const byName = new Map<string, McpServerConfig>();
+  for (const server of [...defined, ...projectOwn]) byName.set(server.name, server);
+
+  return [...byName.values()]
+    .filter(server => !disabled.has(server.name))
+    .filter(server => server.enabled !== false || enabled.has(server.name))
+    .map(({ enabled: _on, ...server }) => server);
+}
+
+/**
+ * Names the project selects that no global definition matches.
+ *
+ * `resolveMcpServers` ignores these, which is the right behaviour — a stale
+ * name in a committed file must not break startup for everyone. But ignoring
+ * them *silently* means a project that enables a server nobody has defined
+ * looks identical to a project with no MCP at all, and the user is left staring
+ * at "no MCP servers configured" having just written the opposite. So the fact
+ * is reported separately rather than folded into the resolution.
+ */
+export function danglingMcpSelections(global: SavedConfig, project: SavedConfig): string[] {
+  const section = project.mcp ?? {};
+  const defined = new Set([
+    ...savedMcpServers(global).map(s => s.name),
+    ...savedMcpServers({ mcpServers: section.servers }).map(s => s.name),
+  ]);
+  return [...new Set([...(section.enable ?? []), ...(section.disable ?? [])])]
+    .filter(name => !defined.has(name));
+}
+
+/** Read both files and report any selection that resolves to nothing. */
+export function loadMcpWarnings(workspaceRoot: string): string[] {
+  const global = readJsonConfig(globalConfigPath());
+  const project = readJsonConfig(configPath(workspaceRoot));
+  return danglingMcpSelections(global, project).map(name =>
+    `"${name}" is selected in .marshall/config.json but no server by that name is defined ` +
+    `in ${globalConfigPath()} — run /mcp add to define it.`);
+}
+
+/** Read both files and resolve. The App's entry point for MCP config. */
+export function loadMcpServers(workspaceRoot: string): McpServerConfig[] {
+  ensureGlobalConfig();
+  const global = readJsonConfig(globalConfigPath());
+  const project = readJsonConfig(configPath(workspaceRoot));
+  return resolveMcpServers(global, project);
 }
 
 /** Just the hosts, which is all the App needs to re-seed a provider switch. */
@@ -219,4 +342,50 @@ export async function saveConfig(
   } catch { /* no file yet, or unreadable — start from empty */ }
 
   await writeFile(path, JSON.stringify(buildConfig(deep, fast, existing), null, 2), { mode: 0o600 });
+}
+
+/**
+ * Persist the MCP server list to the global config, leaving everything else in
+ * the file untouched.
+ *
+ * A read-modify-write rather than a rebuild via `buildConfig`: that function
+ * describes the *model* config, and routing MCP through it would mean every
+ * server change also rewrites the tiers. Same 0600 as the rest — these entries
+ * carry bearer tokens.
+ */
+export async function saveMcpServers(servers: McpServerConfig[]): Promise<void> {
+  const path = globalConfigPath();
+  await mkdir(globalConfigDir(), { recursive: true });
+
+  let existing: SavedConfig = {};
+  try {
+    existing = JSON.parse(await readFile(path, 'utf8')) as SavedConfig;
+  } catch { /* no file yet, or unreadable — start from empty */ }
+
+  const next: SavedConfig = { ...existing, mcpServers: servers };
+  await writeFile(path, JSON.stringify(next, null, 2), { mode: 0o600 });
+}
+
+/**
+ * Record a project's MCP selection in `.marshall/config.json`.
+ *
+ * Written to the *project*, unlike every other writer here, because that is the
+ * point: this file says which servers this checkout uses, and it carries no
+ * credentials, so it is safe to commit. Existing keys are preserved — a repo
+ * may well pin its model here too.
+ */
+export async function saveProjectMcpSelection(
+  workspaceRoot: string,
+  update: (current: SavedProjectMcp) => SavedProjectMcp,
+): Promise<void> {
+  const path = configPath(workspaceRoot);
+  await mkdir(dirname(path), { recursive: true });
+
+  let existing: SavedConfig = {};
+  try {
+    existing = JSON.parse(await readFile(path, 'utf8')) as SavedConfig;
+  } catch { /* no file yet, or unreadable — start from empty */ }
+
+  const next: SavedConfig = { ...existing, mcp: update(existing.mcp ?? {}) };
+  await writeFile(path, JSON.stringify(next, null, 2) + '\n');
 }

@@ -7,7 +7,7 @@
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import type { AgentProfile } from '@agentionai/marshall-engine';
+import type { AgentProfile, McpServerState } from '@agentionai/marshall-engine';
 import type { BackgroundJob } from '@agentionai/marshall-tools';
 import type { Approvals } from './hooks/useApprovals.js';
 import type { PreferencesController } from './hooks/usePreferences.js';
@@ -27,6 +27,9 @@ export interface CommandSession {
     kill(id: string): boolean;
     killAll(): void;
   };
+  mcpState(): McpServerState[];
+  removeMcpServer(name: string): Promise<boolean>;
+  reconnectMcpServer(name: string): Promise<McpServerState | null>;
 }
 
 export interface CommandDeps {
@@ -43,6 +46,12 @@ export interface CommandDeps {
   activeProfile: AgentProfile;
   quit(): void;
   startLogin(): LoginSession;
+  /** Persist the server list after `/mcp remove` — the add path saves from the
+   *  App, which is where the wizard's result lands. */
+  onMcpChanged?(): void;
+  /** Config problems that produce no server, e.g. a project enabling a name
+   *  nothing defines. Shown by `/mcp`, which is where someone goes looking. */
+  mcpWarnings?: string[];
 }
 
 function describeJob(job: BackgroundJob): string {
@@ -51,6 +60,15 @@ function describeJob(job: BackgroundJob): string {
     ? `running ${elapsed.toFixed(0)}s`
     : `${job.status} (${job.exitCode ?? '?'}) after ${elapsed.toFixed(0)}s`;
   return `${job.id}  ${state}  ${job.command}`;
+}
+
+/** One block per server: what it is, then what it actually gave us. The tool
+ *  names matter — they are what the model sees, and the server chose them. */
+function describeServer(server: McpServerState): string {
+  const head = `${server.name}  ${server.status}  ${server.url}`;
+  if (server.error) return `${head}\n  ${server.error}`;
+  if (server.toolNames.length === 0) return head;
+  return `${head}\n  ${server.toolNames.length} tools: ${server.toolNames.join(', ')}`;
 }
 
 export function runSlashCommand(input: string, deps: CommandDeps): void {
@@ -116,6 +134,47 @@ export function runSlashCommand(input: string, deps: CommandDeps): void {
       transcript.push('info', all.length === 0
         ? 'no background jobs in this session'
         : all.map(describeJob).join('\n'));
+      return;
+    }
+
+    case 'mcp': {
+      if (!session) {
+        transcript.push('error', 'no model chosen yet — finish setup first');
+        return;
+      }
+
+      if (command.action === 'add') {
+        setMode({ type: 'mcp-setup' });
+        return;
+      }
+
+      if (command.action === 'list') {
+        const servers = session.mcpState();
+        const warnings = deps.mcpWarnings ?? [];
+        const lines = servers.length === 0
+          ? ['no MCP servers configured — /mcp add to connect one']
+          : servers.map(describeServer);
+        // Warnings last: they explain why the list above is shorter than the
+        // user expected, so they only make sense after seeing it.
+        transcript.push(warnings.length > 0 ? 'error' : 'info', [...lines, ...warnings].join('\n'));
+        return;
+      }
+
+      // remove / reconnect — both name a server and both are async, so both
+      // report only once the engine has actually done the work.
+      const { action, server } = command;
+      const work = action === 'remove'
+        ? session.removeMcpServer(server).then(removed => {
+            if (removed) deps.onMcpChanged?.();
+            return removed ? `removed ${server}` : `${server} is not a configured MCP server`;
+          })
+        : session.reconnectMcpServer(server).then(state => state
+            ? describeServer(state)
+            : `${server} is not a configured MCP server`);
+
+      work
+        .then(message => transcript.push('info', message))
+        .catch((err: unknown) => transcript.push('error', err instanceof Error ? err.message : String(err)));
       return;
     }
 

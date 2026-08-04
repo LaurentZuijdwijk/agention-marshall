@@ -5,8 +5,9 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import {
   buildConfig, upsertProvider, loadConfig, savedDeepProfile, savedProviders, savedHosts,
-  saveConfig, configPath, globalConfigPath,
+  saveConfig, configPath, globalConfigPath, savedMcpServers, resolveMcpServers, danglingMcpSelections,
 } from './config-store.js';
+import type { SavedConfig } from './config-store.js';
 import type { SavedProviderEntry } from './config-store.js';
 import type { AgentProfile } from '@agentionai/marshall-engine';
 
@@ -197,5 +198,150 @@ describe('saveConfig', () => {
     const root = ws();
     await saveConfig(ROUTER, undefined);
     assert.equal(existsSync(configPath(root)), false);
+  });
+});
+
+describe('savedMcpServers', () => {
+  it('is empty when nothing is configured', () => {
+    assert.deepEqual(savedMcpServers({}), []);
+  });
+
+  it('reads name, url, headers and enabled', () => {
+    assert.deepEqual(
+      savedMcpServers({
+        mcpServers: [
+          { name: 'linear', url: 'https://mcp.linear.app/mcp', headers: { Authorization: 'Bearer t' } },
+          { name: 'off', url: 'https://example.com/mcp', enabled: false },
+        ],
+      }),
+      [
+        { name: 'linear', url: 'https://mcp.linear.app/mcp', headers: { Authorization: 'Bearer t' } },
+        { name: 'off', url: 'https://example.com/mcp', enabled: false },
+      ],
+    );
+  });
+
+  // This is untrusted file content that turns into network connections, so a
+  // half-written entry is dropped here rather than failing later at connect.
+  it('drops entries missing a name or a url', () => {
+    const servers = savedMcpServers({
+      mcpServers: [
+        { name: 'ok', url: 'https://example.com/mcp' },
+        { name: 'no-url' },
+        { url: 'https://example.com/nameless' },
+        null as never,
+      ],
+    });
+    assert.deepEqual(servers.map(s => s.name), ['ok']);
+  });
+
+  it('omits enabled entirely when it is not false, so the default stands', () => {
+    const [server] = savedMcpServers({ mcpServers: [{ name: 'a', url: 'https://e.com/mcp', enabled: true }] });
+    assert.equal('enabled' in server, false);
+  });
+});
+
+describe('resolveMcpServers', () => {
+  const global = (servers: unknown[]): SavedConfig => ({ mcpServers: servers } as SavedConfig);
+
+  it('uses the global servers when the project says nothing', () => {
+    const servers = resolveMcpServers(global([{ name: 'a', url: 'https://a/mcp' }]), {});
+    assert.deepEqual(servers.map(s => s.name), ['a']);
+  });
+
+  it('leaves a default-off server off until a project asks for it', () => {
+    const config = global([{ name: 'garmin', url: 'http://localhost:3001/garmin', enabled: false }]);
+    assert.deepEqual(resolveMcpServers(config, {}), []);
+    assert.deepEqual(
+      resolveMcpServers(config, { mcp: { enable: ['garmin'] } }).map(s => s.name),
+      ['garmin'],
+    );
+  });
+
+  it('lets a project switch off a server that is on by default', () => {
+    const config = global([{ name: 'linear', url: 'https://l/mcp' }]);
+    assert.deepEqual(resolveMcpServers(config, { mcp: { disable: ['linear'] } }), []);
+  });
+
+  // Fewer tools is the safe way to resolve a contradiction.
+  it('lets disable win over enable', () => {
+    const config = global([{ name: 'x', url: 'https://x/mcp', enabled: false }]);
+    assert.deepEqual(resolveMcpServers(config, { mcp: { enable: ['x'], disable: ['x'] } }), []);
+  });
+
+  it('carries the global credentials through', () => {
+    const config = global([{ name: 'a', url: 'https://a/mcp', headers: { Authorization: 'Bearer t' } }]);
+    assert.deepEqual(resolveMcpServers(config, {})[0].headers, { Authorization: 'Bearer t' });
+  });
+
+  it('lets a project declare a server of its own', () => {
+    const servers = resolveMcpServers({}, { mcp: { servers: [{ name: 'local', url: 'http://localhost:9000/mcp' }] } });
+    assert.deepEqual(servers.map(s => s.name), ['local']);
+  });
+
+  // The project file is meant to be committed; a token in it leaks to everyone
+  // who clones the repo. The server still works, just without credentials.
+  it('strips credentials from a project-declared server', () => {
+    const servers = resolveMcpServers({}, {
+      mcp: { servers: [{ name: 'leaky', url: 'https://x/mcp', headers: { Authorization: 'Bearer secret' } }] },
+    });
+    assert.equal(servers.length, 1);
+    assert.equal(servers[0].headers, undefined);
+  });
+
+  it('does not let a project redefine a global server to shed its auth', () => {
+    const servers = resolveMcpServers(
+      global([{ name: 'linear', url: 'https://l/mcp', headers: { Authorization: 'Bearer t' } }]),
+      { mcp: { servers: [{ name: 'linear', url: 'https://evil/mcp' }] } },
+    );
+    // Last writer wins by name, so this documents the behaviour rather than
+    // asserting a guarantee: the project entry replaces the global one and
+    // arrives with no credentials, so a redirected server gets no token.
+    assert.equal(servers.length, 1);
+    assert.equal(servers[0].headers, undefined);
+  });
+
+  it('ignores enable/disable naming servers that do not exist', () => {
+    const servers = resolveMcpServers(global([{ name: 'a', url: 'https://a/mcp' }]), {
+      mcp: { enable: ['ghost'], disable: ['phantom'] },
+    });
+    assert.deepEqual(servers.map(s => s.name), ['a']);
+  });
+
+  it('does not leak the enabled flag into the engine config', () => {
+    const servers = resolveMcpServers(global([{ name: 'a', url: 'https://a/mcp', enabled: false }]), {
+      mcp: { enable: ['a'] },
+    });
+    assert.equal('enabled' in servers[0], false);
+  });
+});
+
+describe('danglingMcpSelections', () => {
+  it('is empty when every selection matches a definition', () => {
+    const global = { mcpServers: [{ name: 'a', url: 'https://a/mcp', enabled: false }] };
+    assert.deepEqual(danglingMcpSelections(global, { mcp: { enable: ['a'] } }), []);
+  });
+
+  // The case that produced "no MCP servers configured" after the user had just
+  // written the opposite into the project file.
+  it('names an enabled server that nothing defines', () => {
+    assert.deepEqual(danglingMcpSelections({}, { mcp: { enable: ['garmin'] } }), ['garmin']);
+  });
+
+  it('names a dangling disable too — it is just as likely to be a typo', () => {
+    assert.deepEqual(danglingMcpSelections({}, { mcp: { disable: ['typo'] } }), ['typo']);
+  });
+
+  it('counts a project-declared server as a definition', () => {
+    const project = { mcp: { enable: ['local'], servers: [{ name: 'local', url: 'http://localhost:1/mcp' }] } };
+    assert.deepEqual(danglingMcpSelections({}, project), []);
+  });
+
+  it('does not repeat a name selected twice', () => {
+    assert.deepEqual(danglingMcpSelections({}, { mcp: { enable: ['x'], disable: ['x'] } }), ['x']);
+  });
+
+  it('is empty when the project has no mcp section at all', () => {
+    assert.deepEqual(danglingMcpSelections({ mcpServers: [{ name: 'a', url: 'https://a/mcp' }] }, {}), []);
   });
 });

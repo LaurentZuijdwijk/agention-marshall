@@ -64,7 +64,12 @@ test('calls approval with the built request', async () => {
   );
 
   await tool.execute('a', 'b', { cmd: 'ls' }, 'id');
-  assert.deepEqual(capturedRequest, { toolName: 'test_tool', description: 'run ls', detail: 'ls' });
+  // `input` rides along on every request, whatever buildRequest returned: the
+  // rendered `detail` is for a human, and a programmatic decider needs the
+  // arguments themselves.
+  assert.deepEqual(capturedRequest, {
+    toolName: 'test_tool', description: 'run ls', detail: 'ls', input: { cmd: 'ls' },
+  });
 });
 
 test('names the requesting agent on the approval request', async () => {
@@ -81,7 +86,7 @@ test('names the requesting agent on the approval request', async () => {
 
   await tool.execute('a', 'b', {}, 'id');
   assert.deepEqual(capturedRequest, {
-    toolName: 'test_tool', description: 'test', detail: '',
+    toolName: 'test_tool', description: 'test', detail: '', input: {},
     caller: { role: 'coder', model: 'claude/claude-opus-4-6' },
   });
 });
