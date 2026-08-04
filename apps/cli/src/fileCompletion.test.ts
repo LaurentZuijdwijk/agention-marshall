@@ -22,6 +22,9 @@ beforeEach(() => {
   writeFileSync(join(root, '.env'), 'SECRET=1\n');
   writeFileSync(join(root, 'docs/guide.md'), '# guide\n');
   writeFileSync(join(root, 'bin.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x0d]));
+  // Binary with no recognised image extension — the case that can only be
+  // announced. `bin.png` no longer covers it: a .png is now an attachment.
+  writeFileSync(join(root, 'bin.dat'), Buffer.from([0x1f, 0x8b, 0x00, 0x42]));
 });
 
 afterEach(() => {
@@ -124,9 +127,23 @@ describe('expandFileMentions', () => {
   });
 
   it('announces a binary file without inlining it', () => {
+    const { text, mentions } = expandFileMentions('look @bin.dat', root);
+    assert.equal(text, 'look @bin.dat');
+    assert.deepEqual(mentions.map(m => m.outcome), ['unreadable']);
+  });
+
+  // Not "unreadable": an image mention is a payload the caller attaches, not a
+  // failure to inline. It stays as typed here only because turning it into its
+  // `[image #N]` label needs the caller's attachment store.
+  it('carries an image mention as an attachment rather than announcing it', () => {
     const { text, mentions } = expandFileMentions('look @bin.png', root);
     assert.equal(text, 'look @bin.png');
-    assert.deepEqual(mentions.map(m => m.outcome), ['unreadable']);
+    assert.deepEqual(mentions.map(m => m.outcome), ['image']);
+    assert.equal(mentions[0].image?.mimeType, 'image/png');
+    assert.equal(
+      mentions[0].image?.data,
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x0d]).toString('base64'),
+    );
   });
 
   it('announces an oversized file without inlining it', () => {
