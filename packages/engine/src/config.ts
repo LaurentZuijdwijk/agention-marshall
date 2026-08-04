@@ -96,6 +96,24 @@ export interface EngineConfig {
   /** When set, the main agent gets a `reviewer` tool (read-only file access) backed by
    *  this profile, for a second opinion on changes before finishing. */
   reviewerAgent?: AgentProfile;
+  /**
+   * Whether a finished background shell job starts a new turn on its own.
+   * Default: true.
+   *
+   * With it off, the job's result is still delivered — it just waits until the
+   * user's next message rather than waking the agent. Turn it off for a
+   * strictly turn-taking client, or where an unattended turn costs money the
+   * user didn't ask to spend.
+   */
+  autoResume?: boolean;
+  /**
+   * How many turns in a row may be started by a job finishing, before the user
+   * has to say something. Default: 4. Reset by every user-initiated turn.
+   *
+   * The cap is what stops a start-job/fail/retry cycle from running unattended
+   * forever; without it, "auto-resume" and "infinite loop" are the same feature.
+   */
+  autoResumeBudget?: number;
 }
 
 // ── tier resolution ───────────────────────────────────────────────────────────

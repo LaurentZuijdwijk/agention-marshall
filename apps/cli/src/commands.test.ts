@@ -6,6 +6,7 @@ import type { Transcript } from './hooks/useTranscript.js';
 import type { Mode } from './mode.js';
 import type { Message } from './view/message.js';
 import type { AgentProfile } from '@agentionai/marshall-engine';
+import type { BackgroundJob } from '@agentionai/marshall-tools';
 
 // ── fakes ─────────────────────────────────────────────────────────────────────
 
@@ -29,7 +30,7 @@ function fakeTranscript() {
 
 const PROFILE: AgentProfile = { provider: 'claude', model: 'claude-sonnet-4-6' };
 
-function setup(overrides: Partial<CommandDeps> = {}) {
+function setup(overrides: Partial<CommandDeps> & { jobs?: BackgroundJob[] } = {}) {
   const t = fakeTranscript();
   const modes: Mode[] = [];
   const calls = {
@@ -40,12 +41,21 @@ function setup(overrides: Partial<CommandDeps> = {}) {
     quit: 0,
     applied: [] as Array<[AgentProfile, AgentProfile | undefined]>,
     steering: [] as boolean[],
+    killed: [] as string[],
+    killedAll: 0,
   };
+
+  const jobs = overrides.jobs ?? [];
 
   const session: CommandSession = {
     plan: async (task) => { calls.plan.push(task); },
     review: async (notes) => { calls.review.push(notes); },
     clear: async () => { calls.cleared++; return 'history cleared'; },
+    backgroundJobs: {
+      list: () => jobs,
+      kill: (id) => { calls.killed.push(id); return jobs.some(j => j.id === id && j.status === 'running'); },
+      killAll: () => { calls.killedAll++; },
+    },
   };
 
   const prefs = {
@@ -120,6 +130,7 @@ describe('runSlashCommand', () => {
         plan: async () => { throw new Error('provider unreachable'); },
         review: async () => {},
         clear: async () => 'cleared',
+        backgroundJobs: { list: () => [], kill: () => false, killAll: () => {} },
       },
     });
     runSlashCommand('/plan something', deps);
@@ -209,5 +220,65 @@ describe('runSlashCommand', () => {
     assert.deepEqual(calls.steering, [false]);
     assert.equal(transcript.reset?.[0].role, 'header');
     assert.equal(transcript.reset?.[1].content, 'history cleared');
+  });
+});
+
+describe('/jobs', () => {
+  const job = (over: Partial<BackgroundJob> = {}): BackgroundJob => ({
+    id: 'job1',
+    command: 'npm run dev',
+    startedAt: Date.now() - 5000,
+    status: 'running',
+    exitCode: null,
+    ...over,
+  });
+
+  it('says so when nothing has been backgrounded', () => {
+    const { deps, pushed } = setup();
+    runSlashCommand('/jobs', deps);
+    assert.equal(pushed[0].role, 'info');
+    assert.match(pushed[0].content, /no background jobs/);
+  });
+
+  it('lists each job with its command and state', () => {
+    const { deps, pushed } = setup({
+      jobs: [job(), job({ id: 'job2', command: 'npm test', status: 'exited', exitCode: 1, endedAt: Date.now() })],
+    });
+    runSlashCommand('/jobs', deps);
+    assert.match(pushed[0].content, /job1.*running.*npm run dev/s);
+    assert.match(pushed[0].content, /job2.*exited \(1\).*npm test/s);
+  });
+
+  it('kills one job by id', () => {
+    const { deps, calls, pushed } = setup({ jobs: [job()] });
+    runSlashCommand('/jobs kill job1', deps);
+    assert.deepEqual(calls.killed, ['job1']);
+    assert.match(pushed[0].content, /killed job1/);
+  });
+
+  it('reports an id that is not running rather than claiming success', () => {
+    const { deps, pushed } = setup({ jobs: [job({ status: 'exited', exitCode: 0 })] });
+    runSlashCommand('/jobs kill job1', deps);
+    assert.match(pushed[0].content, /not a running job/);
+  });
+
+  it('kills everything on "kill all" and counts what it stopped', () => {
+    const { deps, calls, pushed } = setup({ jobs: [job(), job({ id: 'job2' })] });
+    runSlashCommand('/jobs kill all', deps);
+    assert.equal(calls.killedAll, 1);
+    assert.match(pushed[0].content, /killed 2 background jobs/);
+  });
+
+  it('rejects a malformed argument with usage', () => {
+    const { deps, pushed } = setup();
+    runSlashCommand('/jobs nonsense', deps);
+    assert.equal(pushed[0].role, 'error');
+    assert.match(pushed[0].content, /usage: \/jobs/);
+  });
+
+  it('refuses before a model is chosen', () => {
+    const { deps, pushed } = setup({ session: null });
+    runSlashCommand('/jobs', deps);
+    assert.equal(pushed[0].role, 'error');
   });
 });

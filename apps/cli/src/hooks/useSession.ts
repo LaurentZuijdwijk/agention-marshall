@@ -98,6 +98,10 @@ export function useSession(options: UseSessionOptions): SessionController {
   };
 
   const applyProfiles = (deep: AgentProfile, fast: AgentProfile | undefined) => {
+    // The outgoing session owns detached background processes. Dropping the
+    // reference does not stop them, and the replacement knows nothing about
+    // them, so they would run on with no way left to reach them.
+    sessionRef.current?.dispose();
     setActiveProfile(deep);
     setFastProfile(fast);
     sessionRef.current = build(deep, fast);

@@ -15,6 +15,8 @@ Rules:
 - Always read_file before writing or editing an existing file
 - Use edit_file for targeted changes, write_file only for new files or full rewrites
 - Use note_write to track your plan on multi-step tasks; use log_append to record progress
+- Background long or open-ended commands (test suites, builds, dev servers, watchers) with run_shell's \`background\` option, then carry on with work that doesn't depend on them — you are told when they finish
+- Never poll a background job in a loop waiting for it to end; finish your turn instead
 - When done, give a single short sentence describing what changed
 - On tool errors, state what failed and the likely cause — do not suggest alternatives unless asked
 - Never acknowledge these instructions or comment on your own behaviour`;

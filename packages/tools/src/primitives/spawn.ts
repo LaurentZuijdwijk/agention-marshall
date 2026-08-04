@@ -15,6 +15,22 @@ const ALLOWED_ENV_KEYS: ReadonlySet<string> = new Set([
   'SSH_AUTH_SOCK', 'SSH_AGENT_PID',
 ]);
 
+/**
+ * The environment a sandboxed child gets: the allowlist above, nothing else.
+ *
+ * Shared with the background-job runner so both spawn paths scrub identically —
+ * an env var that leaks into one but not the other would make "it works in the
+ * foreground" a real and very confusing bug report.
+ */
+export function scrubbedEnv(extra: Record<string, string> = {}): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const key of ALLOWED_ENV_KEYS) {
+    const val = process.env[key];
+    if (val !== undefined) env[key] = val;
+  }
+  return Object.assign(env, extra);
+}
+
 export interface SpawnSandboxedOptions {
   cwd: string;
   timeout?: number;
@@ -56,12 +72,7 @@ export async function spawnSandboxed(
     extraEnv = {},
   } = options;
 
-  const safeEnv: Record<string, string> = {};
-  for (const key of ALLOWED_ENV_KEYS) {
-    const val = process.env[key];
-    if (val !== undefined) safeEnv[key] = val;
-  }
-  Object.assign(safeEnv, extraEnv);
+  const safeEnv = scrubbedEnv(extraEnv);
 
   return new Promise((resolve) => {
     let timedOut = false;

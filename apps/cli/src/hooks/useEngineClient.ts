@@ -26,6 +26,13 @@ export interface TranscriptPort {
   takeStream(): string;
   /** Return any pending reasoning and clear it in one step. */
   takeReasoning(): string;
+  /**
+   * A turn has begun. Almost always redundant — the caller started it and has
+   * already switched its own UI — but a turn woken by a finished background job
+   * has no such caller, and without this the transcript streams underneath an
+   * input prompt that still looks ready for typing.
+   */
+  turnStarted(): void;
   turnEnded(outcome: TurnOutcome): void;
   requestApproval(request: ApprovalRequest): Promise<ApprovalDecision>;
   showUsage(): boolean;
@@ -64,7 +71,25 @@ export function createEngineClient(port: TranscriptPort): ClientInterface {
     onOutput(event: OutputEvent) {
       switch (event.type) {
         case 'thinking':
+          port.turnStarted();
           break;
+
+        case 'job-done': {
+          const failed = event.status === 'timed-out' || event.exitCode !== 0;
+          const outcome = event.status === 'timed-out'
+            ? 'timed out'
+            : `exit ${event.exitCode ?? '?'}`;
+          // Whatever the model was mid-sentence on stays above the completion,
+          // which can land in the middle of an unrelated turn.
+          commitStep();
+          port.push('job', event.command, {
+            title: event.id,
+            failed,
+            note: `${outcome}  ${G.bullet}  ${(event.durationMs / 1000).toFixed(1)}s` +
+              (event.resuming ? `  ${G.bullet}  picking it up` : ''),
+          });
+          break;
+        }
 
         case 'tool-call':
           // Nested calls flush too: their buffers are empty (only the main agent

@@ -7,7 +7,7 @@ import type { HeaderMeta } from './Banner.js';
 
 export type MessageRole =
   | 'header' | 'user' | 'assistant' | 'markdown' | 'tool' | 'tool-result'
-  | 'info' | 'usage' | 'error' | 'reasoning' | 'agent' | 'subagent';
+  | 'info' | 'usage' | 'error' | 'reasoning' | 'agent' | 'subagent' | 'job';
 
 export interface Message {
   key: string;

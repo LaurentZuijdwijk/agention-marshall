@@ -15,11 +15,13 @@ src/
 │   ├── resolve.ts         resolveInWorkspace: path jail + symlink check
 │   ├── atomic-write.ts    atomicWrite: temp-file + rename
 │   ├── capped-read.ts     cappedRead: size-capped file reads
-│   └── spawn.ts           spawnSandboxed: scrubbed env, timeout, process-group kill
+│   ├── spawn.ts           spawnSandboxed: scrubbed env, timeout, process-group kill
+│   └── background.ts      createBackgroundJobs: detached jobs that outlive a turn
 └── factories/             Agention Tool instances built on the primitives
     ├── approval.ts        withApproval: wraps any ToolSpec with an awaited approval gate
     ├── file-tools.ts      createFileTools → read_file, list_dir, search, write_file, edit_file
     ├── shell-tool.ts      createShellTool → run_shell
+    ├── job-tools.ts       createJobTools → shell_output, shell_kill, shell_list
     ├── scratch-tools.ts   createScratchTools → note_write/read/list, log_append/read
     └── github-tools.ts    createGitHubTools → gh_list_issues, gh_view_issue, gh_list_prs,
                                                gh_view_pr, gh_diff, gh_create_pr, gh_comment
@@ -91,6 +93,32 @@ Sandbox properties:
 - Command checked against `commandPolicy` before execution
 
 Default denylist blocks: `rm -rf /`, `curl|sh`, `wget|sh`, `npm publish`, `git push --force`, `dd if=`, `mkfs`, `shutdown/reboot/halt`.
+
+### Background jobs — `createJobTools(config)`
+
+Present only when a `BackgroundJobs` registry is injected as `config.jobs`. With one, `run_shell` also accepts `background: true`, which starts the command detached and returns a job id immediately instead of waiting.
+
+| Tool | Approval | Description |
+|------|----------|-------------|
+| `shell_output` | no | Output from a job since the last read, plus its status. |
+| `shell_kill` | no | Stop a running job. |
+| `shell_list` | no | Every job in the session with status and runtime. |
+
+Starting one still goes through `run_shell`'s approval gate and command policy — the prompt says the command will outlive the turn. Reading and stopping are ungated: reads are inert, and stopping a job is inside the blast radius already approved when it started.
+
+```ts
+const jobs = createBackgroundJobs({ onExit: (job) => notify(job) });
+const tools = [createShellTool({ ...config, jobs }), ...createJobTools({ ...config, jobs })];
+```
+
+Two things differ from `spawnSandboxed`, both following from lifetime:
+
+- **The registry is session-scoped and injected, never owned by the factory.** `config.signal` is aborted at the end of every turn, so a job wired to it would be killed exactly when it was meant to keep running. Backgrounded commands therefore ignore `signal` entirely — **whoever creates the registry must call `killAll()` when the session ends**, or detached processes outlive the program.
+- **Output overflow drops the oldest bytes, not the newest.** A one-shot command's output is capped from the front; the interesting end of a dev server's log is the tail. Each job keeps two capped views: `read(id)` returns what has arrived since the last read, `tail(id)` the most recent slice regardless of reads.
+
+`onExit` fires only for jobs that end on their own. `kill` and `killAll` are silent — a caller that asked a process to stop already knows it stopped.
+
+A job also gets a ceiling of its own, `limits.backgroundTimeoutMs` (default 30 min), separate from the foreground `timeoutMs`.
 
 ### Scratch tools — `createScratchTools(config)`
 

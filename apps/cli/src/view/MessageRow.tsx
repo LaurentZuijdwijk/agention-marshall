@@ -106,6 +106,20 @@ export function MessageRow({ msg }: { msg: Message }) {
         </Box>
       );
 
+    // A background command finished. Top-level and un-indented on purpose: it is
+    // the one row that can appear with no turn running and nothing above it, so
+    // it has to read as an event in its own right rather than as nested output.
+    case 'job':
+      return (
+        <Box marginTop={1}>
+          <Text color={msg.failed ? C.error : C.ok}>{msg.failed ? G.no : G.ok} </Text>
+          <Text color={C.tool}>background </Text>
+          <Text color={C.text}>{msg.title}</Text>
+          <Text color={C.muted}>  {msg.content}</Text>
+          {msg.note && <Text color={C.faint}>  {G.bullet}  {msg.note}</Text>}
+        </Box>
+      );
+
     case 'tool-result': {
       const lines = msg.content.split('\n');
       const overflow = lines.length - TOOL_RESULT_LINES;

@@ -48,8 +48,19 @@ All tools live in `packages/tools` and are safe-by-default:
 | `write_file` | Yes |
 | `edit_file` | Yes |
 | `run_shell` | Yes |
+| `shell_output` | No |
+| `shell_kill` | No |
+| `shell_list` | No |
 
 Before any state-changing tool runs, the proposed action (diff, command, path) is shown and you choose: **approve / deny / always-allow-this-session**.
+
+### Background commands
+
+`run_shell` takes a `background` option for anything long-running — a test suite, a build, a dev server, a watcher. It returns a job id immediately instead of blocking the turn, and the agent carries on with work that doesn't depend on the result.
+
+When the command finishes, its result is fed back into the conversation. If nothing is running at that moment, **the agent picks the work back up on its own** — so "run the suite, fix what breaks" is one instruction rather than a babysitting session. A turn started this way is marked in the transcript, and there is a cap (default 4) on how many turns may run unattended before you have to say something; set `autoResume: false` to have results simply wait for your next message instead.
+
+Background jobs deliberately survive **Esc** — that is what backgrounding means. Use `/jobs` to see what is running, `/jobs kill <id>` (or `kill all`) to stop it. `/clear` and quitting stop everything.
 
 ### Sandbox
 
@@ -70,7 +81,7 @@ Shell commands run with:
 
 Press **Esc / Ctrl-C** to interrupt the current task:
 - Stops at the next safe boundary
-- Kills any running shell process immediately (process group)
+- Kills any running foreground shell process immediately (process group); background jobs keep running by design — stop those with `/jobs kill`
 - Never leaves a half-written file (atomic writes: temp file + rename)
 - Drops into **steer mode** — type a new instruction and the loop course-corrects without restarting
 - A second Esc/Ctrl-C hard-cancels

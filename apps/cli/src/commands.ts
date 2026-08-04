@@ -8,6 +8,7 @@ import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AgentProfile } from '@agentionai/marshall-engine';
+import type { BackgroundJob } from '@agentionai/marshall-tools';
 import type { Approvals } from './hooks/useApprovals.js';
 import type { PreferencesController } from './hooks/usePreferences.js';
 import type { Transcript } from './hooks/useTranscript.js';
@@ -21,6 +22,11 @@ export interface CommandSession {
   plan(task: string): Promise<unknown>;
   review(notes?: string): Promise<unknown>;
   clear(): Promise<string>;
+  backgroundJobs: {
+    list(): BackgroundJob[];
+    kill(id: string): boolean;
+    killAll(): void;
+  };
 }
 
 export interface CommandDeps {
@@ -37,6 +43,14 @@ export interface CommandDeps {
   activeProfile: AgentProfile;
   quit(): void;
   startLogin(): LoginSession;
+}
+
+function describeJob(job: BackgroundJob): string {
+  const elapsed = ((job.endedAt ?? Date.now()) - job.startedAt) / 1000;
+  const state = job.status === 'running'
+    ? `running ${elapsed.toFixed(0)}s`
+    : `${job.status} (${job.exitCode ?? '?'}) after ${elapsed.toFixed(0)}s`;
+  return `${job.id}  ${state}  ${job.command}`;
 }
 
 export function runSlashCommand(input: string, deps: CommandDeps): void {
@@ -74,6 +88,36 @@ export function runSlashCommand(input: string, deps: CommandDeps): void {
       start(command.args ? `/review ${command.args}` : '/review',
             s => s.review(command.args || undefined));
       return;
+
+    case 'jobs': {
+      if (!session) {
+        transcript.push('error', 'no model chosen yet — finish setup first');
+        return;
+      }
+      const jobs = session.backgroundJobs;
+
+      if (command.kill === 'all') {
+        const running = jobs.list().filter(j => j.status === 'running').length;
+        jobs.killAll();
+        transcript.push('info', running > 0
+          ? `killed ${running} background job${running === 1 ? '' : 's'}`
+          : 'no background jobs are running');
+        return;
+      }
+
+      if (command.kill) {
+        transcript.push('info', jobs.kill(command.kill)
+          ? `killed ${command.kill}`
+          : `${command.kill} is not a running job`);
+        return;
+      }
+
+      const all = jobs.list();
+      transcript.push('info', all.length === 0
+        ? 'no background jobs in this session'
+        : all.map(describeJob).join('\n'));
+      return;
+    }
 
     case 'help':
       transcript.push('info', HELP);

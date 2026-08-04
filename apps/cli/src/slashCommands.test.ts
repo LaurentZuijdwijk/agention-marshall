@@ -106,6 +106,29 @@ describe('slashCommands', () => {
     });
   });
 
+  describe('/jobs', () => {
+    it('lists with no arguments', () => {
+      assert.deepEqual(resolveSlashCommand('/jobs'), { type: 'jobs' });
+    });
+
+    it('takes an id to kill', () => {
+      assert.deepEqual(resolveSlashCommand('/jobs kill job2'), { type: 'jobs', kill: 'job2' });
+    });
+
+    it('treats "all" as an id, so the command layer decides what it means', () => {
+      assert.deepEqual(resolveSlashCommand('/jobs kill all'), { type: 'jobs', kill: 'all' });
+    });
+
+    it('rejects a verb it does not know', () => {
+      const result = resolveSlashCommand('/jobs stop job1');
+      assert.equal(result.type, 'usage');
+    });
+
+    it('rejects kill with no id', () => {
+      assert.equal(resolveSlashCommand('/jobs kill').type, 'usage');
+    });
+  });
+
   describe('HELP text', () => {
     it('contains all command names', () => {
       for (const cmd of SLASH_COMMANDS) {

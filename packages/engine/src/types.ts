@@ -28,6 +28,25 @@ export type OutputEvent =
   | { type: 'tool-result'; toolName: string; result: string; parent?: string }
   /** A sub-agent invocation finished. */
   | { type: 'subagent-done'; label: string; durationMs: number; chars: number; error?: string }
+  /**
+   * A backgrounded shell command ended on its own. Unlike every other event
+   * here, this one can arrive while no turn is running — it is the one thing the
+   * engine reports without having been asked.
+   *
+   * `resuming` says what happens next: true means the engine is starting a turn
+   * to act on the result, false means it is queued for the user's next message.
+   * The client needs the distinction to know whether to show a prompt or a
+   * spinner.
+   */
+  | {
+      type: 'job-done';
+      id: string;
+      command: string;
+      status: 'exited' | 'timed-out';
+      exitCode: number | null;
+      durationMs: number;
+      resuming: boolean;
+    }
   | { type: 'token'; text: string }
   | { type: 'reasoning'; text: string }
   /** Prose the model produced *before* the tool calls of the same step — the

@@ -36,7 +36,16 @@ export function createShellTool(config: ToolConfig) {
     signal,
     commandPolicy = DEFAULT_COMMAND_POLICY,
     limits = {},
+    jobs,
   } = config;
+
+  const backgroundDescription = jobs
+    ? ' Set `background: true` for a command that should keep running past this ' +
+      'step — a dev server, a watcher, or a suite too slow to block on. It returns ' +
+      'a job id immediately; read new output with shell_output, and you will be ' +
+      'told automatically when it finishes. Do not background a command whose ' +
+      'result you need in order to decide what to do next in this same step.'
+    : '';
 
   const run_shell_spec: ToolSpec = {
     name: 'run_shell',
@@ -44,21 +53,48 @@ export function createShellTool(config: ToolConfig) {
       'Run a shell command inside the workspace directory. ' +
       'The command runs with a scrubbed environment, a 120 s timeout, and ' +
       'capped output. Returns stdout, stderr, and exit code. Long suites ' +
-      '(full test runs, builds) should be scoped down or paged to fit.',
+      '(full test runs, builds) should be scoped down or paged to fit.' +
+      backgroundDescription,
     inputSchema: {
       type: 'object',
       properties: {
         command: { type: 'string', description: 'Shell command to run (passed to sh -c)' },
+        ...(jobs
+          ? {
+              background: {
+                type: 'boolean',
+                description:
+                  'Run detached and return a job id immediately instead of waiting for the command to finish.',
+              },
+            }
+          : {}),
       },
       required: ['command'],
     },
-    execute: async ({ command }) => {
+    execute: async ({ command, background }) => {
       if (signal?.aborted) return 'Task interrupted — command was not run.';
       const cmd = String(command);
       const verdict = checkPolicy(cmd, commandPolicy);
 
       if (verdict === 'deny') {
         return `Command blocked by policy: "${cmd}". This command matches a restricted pattern.`;
+      }
+
+      if (jobs && background === true) {
+        // Deliberately not given `signal`: the whole point is to outlive the turn.
+        // The session's registry owns its lifetime and kills it on teardown.
+        const job = jobs.start({
+          command: cmd,
+          cwd: workspaceRoot,
+          timeoutMs: limits.backgroundTimeoutMs,
+          maxOutputBytes: limits.maxOutputBytes,
+        });
+        return (
+          `Started background job "${job.id}": ${cmd}\n` +
+          `It runs independently of this step. Read new output with shell_output("${job.id}"), ` +
+          `stop it with shell_kill("${job.id}"). You will be told when it finishes — ` +
+          `do not poll it in a loop waiting for that.`
+        );
       }
 
       const result = await spawnSandboxed('sh', ['-c', cmd], {
@@ -82,10 +118,12 @@ export function createShellTool(config: ToolConfig) {
   return withApproval(
     run_shell_spec,
     approval,
-    ({ command }) => ({
+    ({ command, background }) => ({
       toolName: 'run_shell',
-      description: `Run: ${command}`,
-      detail: `$ ${command}`,
+      description: background === true ? `Run in background: ${command}` : `Run: ${command}`,
+      // The prompt has to say it will outlive the turn — approving a command
+      // that keeps running after the task ends is a different decision.
+      detail: background === true ? `$ ${command}   (background)` : `$ ${command}`,
     }),
     signal,
     config.caller,

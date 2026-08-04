@@ -1,6 +1,6 @@
 // ── slash command parsing (pure logic, testable) ────────────────────────────────
 
-export const SLASH_COMMANDS = ['/clear', '/cwd', '/exit', '/help', '/login', '/memory', '/model', '/plan', '/review', '/stream', '/tokens'] as const;
+export const SLASH_COMMANDS = ['/clear', '/cwd', '/exit', '/help', '/jobs', '/login', '/memory', '/model', '/plan', '/review', '/stream', '/tokens'] as const;
 
 /** Which tier `/model` is about to change. `both` is the first-run chain. */
 export type ModelTarget = 'both' | 'deep' | 'fast' | 'off';
@@ -19,7 +19,9 @@ export type SlashCommandResult =
   | { type: 'stream' }
   | { type: 'tokens' }
   | { type: 'plan'; args: string }
-  | { type: 'review'; args: string };
+  | { type: 'review'; args: string }
+  /** `/jobs` lists; `/jobs kill <id>` (or `kill all`) stops. */
+  | { type: 'jobs'; kill?: string };
 
 const MODEL_TARGETS: Record<string, ModelTarget> = {
   '': 'both', deep: 'deep', fast: 'fast', off: 'off',
@@ -54,6 +56,14 @@ export function resolveSlashCommand(input: string): SlashCommandResult {
         ? { type: 'plan', args }
         : { type: 'usage', message: 'usage: /plan <task> — describe what you want planned' };
     case '/review': return { type: 'review', args };
+    case '/jobs': {
+      if (!args) return { type: 'jobs' };
+      const [verb, id] = args.split(/\s+/);
+      if (verb !== 'kill' || !id) {
+        return { type: 'usage', message: `usage: /jobs [kill <id>|kill all] — got "${args}"` };
+      }
+      return { type: 'jobs', kill: id };
+    }
   }
 }
 
@@ -66,6 +76,8 @@ export const HELP = `commands:
   /model off         — stop tiering; run everything on the deep model
   /plan <task>       — get a plan before making changes (used as context for your next task)
   /review [notes]    — get a second opinion on the current workspace state
+  /jobs              — list background shell jobs from this session
+  /jobs kill <id>    — stop one background job, or "all" for every one
   /clear             — clear history, dedupe cache, and scratch notes
   /tokens            — toggle token usage (↑ in / ↓ out / time) after each response
   /stream            — toggle streaming tokens live vs showing the final response only

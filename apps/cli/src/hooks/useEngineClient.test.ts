@@ -24,6 +24,7 @@ function harness(opts: { usage?: boolean; reasoning?: string; stream?: string } 
     appendReasoning: (t) => { pendingReasoning += t; calls.push(`reasoning:${t}`); },
     takeStream: () => { const s = pendingStream; pendingStream = ''; calls.push('takeStream'); return s; },
     takeReasoning: () => { const r = pendingReasoning; pendingReasoning = ''; calls.push('takeReasoning'); return r; },
+    turnStarted: () => calls.push('turnStarted'),
     turnEnded: (o: TurnOutcome) => calls.push(`turnEnded:${o}`),
     requestApproval: async () => 'approve',
     showUsage: () => opts.usage ?? false,
@@ -253,10 +254,67 @@ describe('streaming', () => {
     assert.deepEqual(h.calls, ['token:hel', 'reasoning:hmm']);
   });
 
-  it('ignores thinking, which only marks that work started', () => {
+  it('turns thinking into a turn-started signal and nothing else', () => {
     const h = harness();
     h.send({ type: 'thinking' });
-    assert.deepEqual(h.calls, []);
+    assert.deepEqual(h.calls, ['turnStarted']);
+    assert.deepEqual(h.pushed, []);
+  });
+});
+
+describe('background jobs', () => {
+  const done = (over: Partial<Extract<OutputEvent, { type: 'job-done' }>> = {}): OutputEvent => ({
+    type: 'job-done',
+    id: 'job1',
+    command: 'npm test',
+    status: 'exited',
+    exitCode: 0,
+    durationMs: 12_300,
+    resuming: false,
+    ...over,
+  });
+
+  it('renders a completion as a job row carrying the command', () => {
+    const h = harness();
+    h.send(done());
+    assert.equal(h.pushed[0].role, 'job');
+    assert.equal(h.pushed[0].content, 'npm test');
+    assert.equal(h.pushed[0].extra?.title, 'job1');
+    assert.equal(h.pushed[0].extra?.failed, false);
+    assert.match(String(h.pushed[0].extra?.note), /exit 0/);
+    assert.match(String(h.pushed[0].extra?.note), /12\.3s/);
+  });
+
+  it('marks a non-zero exit as failed', () => {
+    const h = harness();
+    h.send(done({ exitCode: 1 }));
+    assert.equal(h.pushed[0].extra?.failed, true);
+  });
+
+  it('marks a timeout as failed and says so', () => {
+    const h = harness();
+    h.send(done({ status: 'timed-out', exitCode: null }));
+    assert.equal(h.pushed[0].extra?.failed, true);
+    assert.match(String(h.pushed[0].extra?.note), /timed out/);
+  });
+
+  it('says when the engine is about to act on the result', () => {
+    const h = harness();
+    h.send(done({ resuming: true }));
+    assert.match(String(h.pushed[0].extra?.note), /picking it up/);
+  });
+
+  it('commits the model mid-sentence prose above the completion', () => {
+    const h = harness({ stream: 'partial answer' });
+    h.send(done());
+    assert.deepEqual(h.pushed.map(p => p.role), ['assistant', 'job']);
+    assert.equal(h.pushed[0].content, 'partial answer');
+  });
+
+  it('does not end the turn — a completion can land mid-turn', () => {
+    const h = harness();
+    h.send(done());
+    assert.ok(!h.calls.some(c => c.startsWith('turnEnded')));
   });
 });
 

@@ -141,6 +141,11 @@ export function App({
     },
     takeStream: () => live.current.transcript.takeStream(),
     takeReasoning: () => live.current.transcript.takeReasoning(),
+    // Only `idle` is promoted. A turn started by a finished background job must
+    // put the spinner up in place of the input prompt, but it must not shove the
+    // setup wizard, a login prompt or a pending approval off the screen to do it
+    // — those are waiting on the user, and the turn can render underneath them.
+    turnStarted: () => setMode(prev => (prev.type === 'idle' ? { type: 'running' } : prev)),
     turnEnded: (outcome) => {
       live.current.setSteering(outcome === 'interrupted');
       setMode({ type: 'idle' });
@@ -171,6 +176,10 @@ export function App({
     // Abort in-flight work first: this cancels the LLM request and kills any
     // running shell process, which is what actually frees the event loop.
     session?.interrupt();
+    // Background jobs are detached and survive an interrupt by design, so they
+    // need killing explicitly — otherwise quitting leaves a dev server running
+    // with nothing attached to it.
+    session?.dispose();
     exit();
     // Ink has restored the terminal by now, but an aborted request can still
     // hold node open — a socket that never settles used to leave the process

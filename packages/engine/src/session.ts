@@ -11,9 +11,13 @@ import {
   createShellTool,
   createScratchTools,
   createGitHubTools,
+  createJobTools,
   createDedupeCache,
+  createBackgroundJobs,
+  summariseJob,
+  formatJobOutput,
 } from '@agentionai/marshall-tools';
-import type { ToolConfig, DedupeCache } from '@agentionai/marshall-tools';
+import type { ToolConfig, DedupeCache, BackgroundJob, BackgroundJobs } from '@agentionai/marshall-tools';
 import type { ApprovalDecision, ApprovalRequest } from '@agentionai/marshall-tools';
 import {
   createAgent,
@@ -41,7 +45,25 @@ interface AgentWithUsage extends BaseAgent<string, string> {
 
 const NEVER_MASK_TOOLS = [
   'list_dir', 'note_write', 'note_read', 'note_list', 'log_append', 'log_read', 'context', 'search',
+  // A job id is a handle the model needs later, and it only ever appears in the
+  // result of the call that created it. Masking that away strands the job.
+  'shell_list',
 ];
+
+const DEFAULT_AUTO_RESUME_BUDGET = 4;
+
+/**
+ * The task given to a turn that a finished job started.
+ *
+ * The report itself is prepended as context, so this only has to say what to do
+ * with it — including that stopping is a valid answer. Without that last clause
+ * the model treats an unattended wake-up as a demand for action and invents
+ * follow-up work.
+ */
+const AUTO_RESUME_INSTRUCTION =
+  'The background job above finished while you were idle. Continue the work it was part of: ' +
+  'if it failed, diagnose and fix it; if it succeeded and more remains, carry on. ' +
+  'If nothing further is needed, say so in one short sentence and stop.';
 
 /**
  * The text an assistant message carried alongside its tool calls.
@@ -91,6 +113,27 @@ export class Session {
   private currentTask: string | null = null;
   private steeringContext: string | null = null;
   private pendingPlan: string | null = null;
+  /**
+   * Background shell jobs, owned at *session* scope.
+   *
+   * Not per-run, which is the whole point: the `AbortSignal` in `toolConfig` is
+   * recreated and aborted around every turn, so a job wired to it would be
+   * killed the moment the turn that started it ended.
+   */
+  private readonly jobs: BackgroundJobs;
+  /**
+   * Finished jobs waiting to be told to the model.
+   *
+   * A queue rather than a direct `history.addText`, because a job can finish at
+   * any instant — including between an assistant's `tool_use` and its matching
+   * `tool_result`, where injecting a user message produces a malformed
+   * conversation that Anthropic rejects outright. Flushed only at the top of a
+   * turn, which is always a safe boundary.
+   */
+  private readonly pendingJobReports: string[] = [];
+  /** Turns still allowed to start unattended. Refilled by every user turn. */
+  private autoResumeBudget: number;
+  private disposed = false;
 
   constructor(
     private readonly config: EngineConfig,
@@ -105,6 +148,8 @@ export class Session {
     this.history = new History();
     this.history.use(this.maskingPlugin);
     this.dedupeCache = createDedupeCache();
+    this.jobs = createBackgroundJobs({ onExit: (job) => this.onJobExit(job) });
+    this.autoResumeBudget = config.autoResumeBudget ?? DEFAULT_AUTO_RESUME_BUDGET;
 
     this.logPath = join(config.workspaceRoot, '.marshall', 'logs', 'session.log');
     this.logDirReady = mkdir(dirname(this.logPath), { recursive: true }).then(() => {});
@@ -426,6 +471,100 @@ export class Session {
     }
   }
 
+  // ── background jobs ─────────────────────────────────────────────────────────
+
+  /**
+   * A background job ended by itself. Queue what happened, tell the client, and
+   * wake the agent if nothing is already running.
+   *
+   * The output taken here is the *unread* part (`read`, not `tail`): anything
+   * the model already pulled with `shell_output` is in its context, and paying
+   * for it a second time is how a chatty dev server eats a context window.
+   */
+  private onJobExit(job: BackgroundJob): void {
+    if (this.disposed) return;
+
+    const durationMs = (job.endedAt ?? Date.now()) - job.startedAt;
+    this.log(
+      `JOB ${job.id} ${job.status} exit=${job.exitCode ?? 'null'} ` +
+      `${(durationMs / 1000).toFixed(1)}s ${JSON.stringify(job.command.slice(0, 200))}`,
+    );
+
+    this.pendingJobReports.push(this.formatJobReport(job));
+
+    // Announced before any turn starts, so the client can say what is about to
+    // happen rather than print a completion and be surprised by a turn starting
+    // underneath it.
+    this.client.onOutput({
+      type: 'job-done',
+      id: job.id,
+      command: job.command,
+      status: job.status === 'timed-out' ? 'timed-out' : 'exited',
+      exitCode: job.exitCode,
+      durationMs,
+      resuming: this.autoResumeAllowed(),
+    });
+
+    this.maybeResume();
+  }
+
+  private formatJobReport(job: BackgroundJob): string {
+    const output = formatJobOutput(this.jobs.read(job.id));
+    return `[Background job finished]\n${summariseJob(job)}\n\n${output || '(no output)'}`;
+  }
+
+  /**
+   * Whether a queued report will be acted on at all — deliberately blind to
+   * whether a turn happens to be running right now.
+   *
+   * That distinction is what makes the `resuming` flag honest. A job finishing
+   * mid-turn *is* picked up; just at the end of that turn rather than
+   * immediately, because the running turn built its prompt before the job
+   * existed. Only a disabled or exhausted auto-resume means "no".
+   */
+  private autoResumeAllowed(): boolean {
+    if (this.disposed) return false;
+    if (this.config.autoResume === false) return false;
+    return this.autoResumeBudget > 0;
+  }
+
+  /**
+   * Start a turn for whatever is queued, if this is a moment when one can start.
+   *
+   * Called both when a job exits and when a turn ends — a job that finished
+   * mid-turn was only queued, and the end of that turn is both the first safe
+   * point to act on it and the last chance to notice it before the session goes
+   * quiet with the report undelivered.
+   */
+  private maybeResume(): void {
+    if (this.pendingJobReports.length === 0) return;
+    // A run already in flight claims the controller; `run` would refuse the call
+    // and the report would be dropped on the floor. Its own `finally` calls back
+    // here once it is done.
+    if (this.controller) return;
+    if (!this.autoResumeAllowed()) return;
+    this.autoResumeBudget -= 1;
+    void this.run(AUTO_RESUME_INSTRUCTION, [], { auto: true });
+  }
+
+  /**
+   * The session's background shell jobs.
+   *
+   * Exposed so a client can list what is running and stop it — and so work that
+   * has no turn behind it (a scheduled command, say) can start a job and still
+   * get the same completion-wakes-the-agent behaviour.
+   */
+  get backgroundJobs(): BackgroundJobs {
+    return this.jobs;
+  }
+
+  /** Stop every background job. The processes are detached, so a session that
+   *  goes away without this leaves them running with nobody reading them. */
+  dispose(): void {
+    this.disposed = true;
+    this.jobs.killAll();
+  }
+
   /** Approval function that honours the per-session always-approve list. */
   private makeApproval(): (req: ApprovalRequest) => Promise<ApprovalDecision> {
     return async (req) => {
@@ -457,7 +596,20 @@ export class Session {
     return decision;
   }
 
-  async run(task: string, images: ImageAttachment[] = []): Promise<void> {
+  /**
+   * Run one turn.
+   *
+   * `auto` marks a turn the engine started by itself, after a background job
+   * finished. The only differences are that it does not refill the auto-resume
+   * budget — otherwise the budget could never run out, which is the entire
+   * reason it exists — and that it does not count as user activity. It sits
+   * behind `images` so every existing caller keeps its signature.
+   */
+  async run(
+    task: string,
+    images: ImageAttachment[] = [],
+    options: { auto?: boolean } = {},
+  ): Promise<void> {
     if (this.controller) {
       this.client.onOutput({ type: 'error', message: 'A task is already running.' });
       return;
@@ -471,6 +623,10 @@ export class Session {
       this.client.onOutput({ type: 'error', message: refusal });
       this.log(`REFUSED ${refusal}`);
       return;
+    }
+
+    if (!options.auto) {
+      this.autoResumeBudget = this.config.autoResumeBudget ?? DEFAULT_AUTO_RESUME_BUDGET;
     }
 
     this.controller = new AbortController();
@@ -496,11 +652,16 @@ export class Session {
     const plan = this.pendingPlan;
     this.pendingPlan = null;
 
-    const effectiveTask = steering
+    // Every finished job is reported exactly once, at the front of the next
+    // turn — whether that turn was started by the user or by the job itself.
+    const jobReports = this.pendingJobReports.splice(0);
+    const jobBlock = jobReports.length ? `${jobReports.join('\n\n')}\n\n` : '';
+
+    const effectiveTask = jobBlock + (steering
       ? `[Previous task was interrupted: "${steering}"]\n\nNew direction: ${task}`
       : plan
       ? `[Plan]\n${plan}\n\n[Task]\n${task}`
-      : task;
+      : task);
 
     this.currentTask = task;
     let errorReported = false;
@@ -534,11 +695,13 @@ export class Session {
         // write tools today, but "who is asking me to approve this" should be
         // answered on the panel rather than assumed.
         caller: { role: 'coder', model: `${coderProfile.provider}/${resolveModel(coderProfile)}` },
+        jobs: this.jobs,
       };
 
       const tools = [
         ...createFileTools(toolConfig, this.dedupeCache),
         createShellTool(toolConfig),
+        ...createJobTools(toolConfig),
         ...createScratchTools(toolConfig),
         ...(this.config.enableGitHub ? createGitHubTools(toolConfig) : []),
         ...(contextTool ? [contextTool] : []),
@@ -622,6 +785,10 @@ export class Session {
       detachToolResult?.();
       this.currentTask = null;
       this.controller = null;
+      // A job that finished mid-turn was only queued — this is the boundary
+      // where acting on it becomes safe, and the last chance to notice it before
+      // the session goes idle.
+      this.maybeResume();
     }
   }
 
@@ -699,6 +866,7 @@ export class Session {
     } finally {
       detach?.();
       this.controller = null;
+      this.maybeResume();
     }
   }
 
@@ -734,6 +902,14 @@ export class Session {
     this.alwaysApproved.clear();
     this.pendingApprovals.clear();
 
+    // Background jobs go too. A clean slate that leaves a dev server running and
+    // its completion queued would wake the agent up about work whose context has
+    // just been deleted. `killAll` is deliberately silent, so nothing is queued
+    // by this.
+    const running = this.jobs.list().filter(j => j.status === 'running').length;
+    this.jobs.killAll();
+    this.pendingJobReports.length = 0;
+
     const notesDir = join(this.config.workspaceRoot, '.marshall', 'notes');
     let notesCleared = 0;
     if (existsSync(notesDir)) {
@@ -744,8 +920,13 @@ export class Session {
     }
 
     this.log('CLEAR');
-    return notesCleared > 0
-      ? `history, dedupe cache, always-approved list, and ${notesCleared} scratch note${notesCleared === 1 ? '' : 's'} cleared`
-      : 'history, dedupe cache, and always-approved list cleared';
+    const extras = [
+      ...(notesCleared > 0 ? [`${notesCleared} scratch note${notesCleared === 1 ? '' : 's'}`] : []),
+      ...(running > 0 ? [`${running} background job${running === 1 ? '' : 's'}`] : []),
+    ];
+    const base = 'history, dedupe cache, always-approved list';
+    return extras.length > 0
+      ? `${base}, and ${extras.join(' and ')} cleared`
+      : `${base} cleared`;
   }
 }

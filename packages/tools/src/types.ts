@@ -1,3 +1,5 @@
+import type { BackgroundJobs } from './primitives/background.js';
+
 export type ApprovalDecision = 'approve' | 'deny' | 'always';
 
 export interface DedupeCacheEntry {
@@ -56,6 +58,10 @@ export interface Limits {
   timeoutMs?: number;
   /** Max grep results returned. Default: 200 */
   maxSearchResults?: number;
+  /** Ceiling for a backgrounded shell command. Default: 30 min. Separate from
+   *  `timeoutMs` because the two answer different questions: how long to block a
+   *  turn, versus how long to let a detached process live. */
+  backgroundTimeoutMs?: number;
 }
 
 export type CommandPolicy =
@@ -71,6 +77,17 @@ export interface ToolConfig {
   limits?: Limits;
   /** Stamped onto every approval this belt raises. */
   caller?: ToolCaller;
+  /**
+   * Registry for backgrounded shell commands. Absent means `run_shell` has no
+   * `background` option and the job tools don't exist.
+   *
+   * Injected rather than owned by the factory because its lifetime is the
+   * *session*, not the task: `signal` is aborted at the end of every turn, and a
+   * job wired to that would die exactly when it was supposed to keep running.
+   * Whoever owns the session owns the registry — and is responsible for calling
+   * `killAll()` when the session ends.
+   */
+  jobs?: BackgroundJobs;
 }
 
 /** Plain tool spec — used by withApproval so it doesn't need Tool internals */

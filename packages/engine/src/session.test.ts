@@ -89,6 +89,141 @@ test('calling run() while a run is already in progress emits an error event', as
 });
 
 // ---------------------------------------------------------------------------
+// background jobs & auto-resume
+//
+// `run()` reaches a real provider and fails, which is fine here: what these
+// assert is which turns the engine *decides* to start, not what a model says.
+// ---------------------------------------------------------------------------
+
+function jobSession(root: string, client: ClientInterface, overrides = {}): Session {
+  return new Session(
+    {
+      agent: { provider: 'claude', apiKey: 'test-key' },
+      workspaceRoot: root,
+      compressionThreshold: 0,
+      ...overrides,
+    },
+    client,
+  );
+}
+
+const jobDone = (events: OutputEvent[]) =>
+  events.filter((e): e is Extract<OutputEvent, { type: 'job-done' }> => e.type === 'job-done');
+
+async function waitFor(condition: () => boolean, timeoutMs = 5000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error('timed out waiting for condition');
+    await new Promise(r => setTimeout(r, 10));
+  }
+}
+
+test('a finished background job is reported to the client', async () => {
+  const events: OutputEvent[] = [];
+  const session = jobSession(tempRoot(), makeClient(events));
+  session.backgroundJobs.start({ command: 'exit 2', cwd: tempRoot() });
+
+  await waitFor(() => jobDone(events).length > 0);
+  const done = jobDone(events)[0];
+  assert.equal(done.command, 'exit 2');
+  assert.equal(done.exitCode, 2);
+  assert.equal(done.status, 'exited');
+  session.dispose();
+});
+
+test('a job finishing on an idle session starts a turn', async () => {
+  const events: OutputEvent[] = [];
+  const session = jobSession(tempRoot(), makeClient(events));
+  session.backgroundJobs.start({ command: 'true', cwd: tempRoot() });
+
+  await waitFor(() => jobDone(events).length > 0);
+  assert.equal(jobDone(events)[0].resuming, true);
+  // `thinking` is emitted once per turn, right before the agent runs.
+  await waitFor(() => events.some(e => e.type === 'thinking'));
+  session.dispose();
+});
+
+test('autoResume: false reports the job without starting a turn', async () => {
+  const events: OutputEvent[] = [];
+  const session = jobSession(tempRoot(), makeClient(events), { autoResume: false });
+  session.backgroundJobs.start({ command: 'true', cwd: tempRoot() });
+
+  await waitFor(() => jobDone(events).length > 0);
+  assert.equal(jobDone(events)[0].resuming, false);
+  await new Promise(r => setTimeout(r, 200));
+  assert.ok(!events.some(e => e.type === 'thinking'), 'no turn should have started');
+  session.dispose();
+});
+
+test('an exhausted auto-resume budget stops the loop', async () => {
+  const events: OutputEvent[] = [];
+  const session = jobSession(tempRoot(), makeClient(events), { autoResumeBudget: 0 });
+  session.backgroundJobs.start({ command: 'true', cwd: tempRoot() });
+
+  await waitFor(() => jobDone(events).length > 0);
+  assert.equal(jobDone(events)[0].resuming, false, 'no budget left to spend');
+  session.dispose();
+});
+
+test('a killed job does not report or wake the agent', async () => {
+  const events: OutputEvent[] = [];
+  const session = jobSession(tempRoot(), makeClient(events));
+  const job = session.backgroundJobs.start({ command: 'sleep 30', cwd: tempRoot() });
+
+  session.backgroundJobs.kill(job.id);
+  await waitFor(() => session.backgroundJobs.get(job.id)!.status !== 'running');
+  await new Promise(r => setTimeout(r, 100));
+
+  assert.equal(jobDone(events).length, 0, 'stopping a job is not news');
+  session.dispose();
+});
+
+test('a job that finishes mid-turn is still reported as resuming', async () => {
+  const events: OutputEvent[] = [];
+  const session = jobSession(tempRoot(), makeClient(events));
+
+  const running = session.run('a task').catch(() => {});
+  session.backgroundJobs.start({ command: 'true', cwd: tempRoot() });
+
+  await waitFor(() => jobDone(events).length > 0);
+  // Not picked up *now* — the running turn built its prompt before the job
+  // existed — but at the end of that turn, which is what `resuming` promises.
+  assert.equal(jobDone(events)[0].resuming, true);
+  await running;
+  session.dispose();
+});
+
+test('a job finishing mid-turn starts a turn once the current one ends', async () => {
+  const events: OutputEvent[] = [];
+  const session = jobSession(tempRoot(), makeClient(events));
+
+  const running = session.run('a task').catch(() => {});
+  session.backgroundJobs.start({ command: 'true', cwd: tempRoot() });
+  await waitFor(() => jobDone(events).length > 0);
+  await running;
+
+  // Two `thinking` events: the user's turn, then the one the job woke.
+  await waitFor(() => events.filter(e => e.type === 'thinking').length >= 2);
+  session.dispose();
+});
+
+test('dispose() kills running jobs', async () => {
+  const session = jobSession(tempRoot(), makeClient());
+  const job = session.backgroundJobs.start({ command: 'sleep 30', cwd: tempRoot() });
+  session.dispose();
+  await waitFor(() => session.backgroundJobs.get(job.id)!.status === 'killed');
+});
+
+test('clear() kills running jobs and says how many', async () => {
+  const session = jobSession(tempRoot(), makeClient());
+  session.backgroundJobs.start({ command: 'sleep 30', cwd: tempRoot() });
+  const msg = await session.clear();
+  assert.match(msg, /1 background job/);
+  await waitFor(() => session.backgroundJobs.list().every(j => j.status !== 'running'));
+  session.dispose();
+});
+
+// ---------------------------------------------------------------------------
 // clear()
 // ---------------------------------------------------------------------------
 
