@@ -38,7 +38,21 @@ export function transcriptReducer(state: TranscriptState, action: TranscriptActi
       return { ...state, messages: [...state.messages, action.message] };
     case 'reset':
       // Live buffers go too: whatever they held belonged to the cleared session.
-      return { ...state, messages: action.messages, stream: '', reasoning: '' };
+      //
+      // The epoch bump is load-bearing, not bookkeeping. Ink's <Static> holds
+      // the number of rows it has already emitted in component state and only
+      // ever renders `items.slice(thatCount)`. Replacing the array with a
+      // shorter one therefore renders *nothing* — the count is already past the
+      // end — which is how /clear wiped the terminal and then left it empty.
+      // Only a new key gives Static a fresh count, so any change that is not a
+      // pure append has to change the epoch.
+      return {
+        ...state,
+        messages: action.messages,
+        stream: '',
+        reasoning: '',
+        epoch: state.epoch + 1,
+      };
     case 'append-stream':
       return { ...state, stream: state.stream + action.text };
     case 'clear-stream':

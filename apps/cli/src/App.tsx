@@ -399,9 +399,21 @@ export function App({
     });
   };
 
+  /** What to pre-fill the wizard with for the tier being chosen. */
+  const seedProfile = (tier: Tier) => {
+    const seed = tier === 'fast' ? (fastProfile ?? activeProfile) : activeProfile;
+    return { provider: seed.provider, model: seed.model, host: seed.host };
+  };
+
   // ── render ─────────────────────────────────────────────────────────────────
-  if (mode.type === 'mcp-setup') {
-    return (
+  //
+  // The wizards render *inside* the tree below rather than replacing it. Ink's
+  // <Static> keeps the count of rows it has already emitted in component state,
+  // so unmounting it — which an early return here used to do — resets that
+  // count to zero and makes it re-emit the whole transcript on the way back.
+  // That was the duplicate banner after a model switch.
+  const wizard =
+    mode.type === 'mcp-setup' ? (
       <Box padding={1}>
         <McpSetup
           existing={session?.mcpState().map(s => s.name) ?? []}
@@ -409,30 +421,23 @@ export function App({
           onExit={() => setMode({ type: 'idle' })}
         />
       </Box>
-    );
-  }
-
-  if (mode.type === 'setup') {
-    const { tier, chain } = mode;
-    // The fast tier usually lives on the same server as deep, so seed it from
-    // whichever profile is closest to what the user is about to pick.
-    const seed = tier === 'fast' ? (fastProfile ?? activeProfile) : activeProfile;
-    return (
+    ) : mode.type === 'setup' ? (
       <Box padding={1}>
         <SetupCtor
-          key={tier}
-          tier={tier}
+          key={mode.tier}
+          tier={mode.tier}
           deepLabel={activeProfile.model}
-          initial={{ provider: seed.provider, model: seed.model, host: seed.host }}
+          // The fast tier usually lives on the same server as deep, so seed it
+          // from whichever profile is closest to what the user is about to pick.
+          initial={seedProfile(mode.tier)}
           savedHosts={hosts}
           savedKeys={keys}
           onComplete={(p: Provider | null, m: string | null, h?: string, k?: string) =>
-            handleSetupComplete(tier, chain, p, m, h, k)}
+            handleSetupComplete(mode.tier, mode.chain, p, m, h, k)}
           onExit={() => setMode({ type: 'idle' })}
         />
       </Box>
-    );
-  }
+    ) : null;
 
   const accepting = mode.type === 'idle' || mode.type === 'login-pending';
 
@@ -477,7 +482,9 @@ export function App({
         </PromptFrame>
       )}
 
-      {!booting && accepting && (
+      {wizard}
+
+      {!booting && accepting && !wizard && (
         <InputPrompt
           kind={mode.type === 'login-pending' ? 'login' : steering ? 'steering' : 'task'}
           value={input}
