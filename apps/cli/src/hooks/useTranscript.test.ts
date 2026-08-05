@@ -97,11 +97,31 @@ describe('replay', () => {
     assert.equal(after.stream, 'live');
   });
 
-  it('epoch survives a reset, so a resize during a cleared session still replays', () => {
+  it('a reset advances the epoch rather than restarting it', () => {
     const state = run([
       { type: 'replay' },
       { type: 'reset', messages: [row('1')] },
     ]);
-    assert.equal(state.epoch, 1);
+    assert.ok(state.epoch > 1, 'a resize during a cleared session must still replay');
+  });
+
+  // Ink's <Static> renders items.slice(alreadyEmitted) and keeps that count in
+  // component state, so a shorter list under the same key renders nothing at
+  // all. /clear wiped the terminal and left it blank for exactly this reason.
+  it('a reset to fewer rows still changes the render key', () => {
+    const before = run([
+      { type: 'push', message: row('1') },
+      { type: 'push', message: row('2') },
+      { type: 'push', message: row('3') },
+    ]);
+    const after = transcriptReducer(before, { type: 'reset', messages: [row('9')] });
+    assert.notEqual(after.epoch, before.epoch);
+    assert.equal(after.messages.length, 1);
+  });
+
+  it('a push does not change the key — appending is what Static is built for', () => {
+    const before = run([{ type: 'push', message: row('1') }]);
+    const after = transcriptReducer(before, { type: 'push', message: row('2') });
+    assert.equal(after.epoch, before.epoch);
   });
 });

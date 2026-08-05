@@ -16,6 +16,11 @@ import type { Message } from './view/message.js';
 import type { LoginSession } from './login.js';
 import type { SetMode } from './mode.js';
 import { resolveSlashCommand, HELP } from './slashCommands.js';
+import { currentVersion, checkForUpdate } from './update-check.js';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
 
 /** The subset of the engine Session the commands need. */
 export interface CommandSession {
@@ -155,8 +160,10 @@ export function runSlashCommand(input: string, deps: CommandDeps): void {
           ? ['no MCP servers configured — /mcp add to connect one']
           : servers.map(describeServer);
         // Warnings last: they explain why the list above is shorter than the
-        // user expected, so they only make sense after seeing it.
-        transcript.push(warnings.length > 0 ? 'error' : 'info', [...lines, ...warnings].join('\n'));
+        // user expected, so they only make sense after seeing it. This is still
+        // a successful status listing; a dangling project selection is a config
+        // hint, not a failed MCP connection.
+        transcript.push('info', [...lines, ...warnings].join('\n'));
         return;
       }
 
@@ -194,6 +201,30 @@ export function runSlashCommand(input: string, deps: CommandDeps): void {
       if (command.target === 'off') deps.applyProfiles(deps.activeProfile, undefined);
       else if (command.target === 'both') setMode({ type: 'setup', tier: 'deep', chain: true });
       else setMode({ type: 'setup', tier: command.target, chain: false });
+      return;
+
+    case 'version':
+      transcript.push('info', `Marshall ${currentVersion}`);
+      return;
+
+    case 'update':
+      transcript.push('info', 'checking for updates…');
+      checkForUpdate()
+        .then(async notice => {
+          if (!notice) {
+            transcript.push('info', `Marshall ${currentVersion} is up to date`);
+            return;
+          }
+          transcript.push('info', `${notice}\ninstalling…`);
+          try {
+            await execFileAsync('npm', ['install', '-g', '@agentionai/marshall-cli@latest']);
+            transcript.push('info', 'updated successfully; restart Marshall to use the new version');
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            transcript.push('error', `update failed: ${message}`);
+          }
+        })
+        .catch((err: unknown) => transcript.push('error', `update check failed: ${err instanceof Error ? err.message : String(err)}`));
       return;
 
     case 'tokens': {

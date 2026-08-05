@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { describeAgentError, isConnectionError, endpointFor } from './errors.js';
+import { describeAgentError, isConnectionError, isContextLengthError, endpointFor } from './errors.js';
 import type { AgentProfile } from './config.js';
 
 const LOCAL: AgentProfile = { provider: 'llamacpp', model: 'Qwen3.6-35B', host: 'http://192.168.1.248:8080' };
@@ -48,6 +48,30 @@ test('connection failures are recognised across the shapes providers emit', () =
 test('a refusal from a reachable server is not treated as unreachable', () => {
   assert.equal(isConnectionError('401 Unauthorized'), false);
   assert.equal(isConnectionError('Response exceeded maximum token limit'), false);
+});
+
+test('context-length failures are classified and actionable', () => {
+  assert.equal(isContextLengthError('prompt is too long for the model context'), true);
+  const out = describeAgentError('coder', LOCAL, new Error('llama.cpp API error: Provider returned error'));
+  assert.match(out, /Provider returned error/);
+
+  const detailed = Object.assign(new Error('llama.cpp API error: Provider returned error'), {
+    statusCode: 400,
+    response: { error: { message: 'context length exceeded' } },
+  });
+  const detailedOut = describeAgentError('coder', LOCAL, detailed);
+  assert.match(detailedOut, /context length exceeded/);
+  assert.match(detailedOut, /context length exceeded.*Reduce the prompt\/history or lower max tokens/);
+});
+
+test('provider response details are included when the wrapper message is generic', () => {
+  const err = Object.assign(new Error('llama.cpp API error: Provider returned error'), {
+    statusCode: 400,
+    response: { error: { message: 'n_ctx is too small' } },
+  });
+  const out = describeAgentError('coder', LOCAL, err);
+  assert.match(out, /400/);
+  assert.match(out, /n_ctx is too small/);
 });
 
 test('endpointFor falls back to the provider default host', () => {

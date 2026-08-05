@@ -99,8 +99,9 @@ export interface HeaderMeta {
   fastProvider?: string;
 }
 
-/** The key/value block that sits under the wordmark. */
-function Meta({ meta, dim }: { meta: HeaderMeta; dim?: boolean }) {
+/** The key/value block that sits under the wordmark. `keys` is boot-time
+ *  orientation, so it is dropped once the user is already oriented. */
+function Meta({ meta, dim, showKeys = true }: { meta: HeaderMeta; dim?: boolean; showKeys?: boolean }) {
   const label = (text: string) => (
     <Text color={dim ? C.faint : C.muted}>{text.padEnd(8)}</Text>
   );
@@ -125,21 +126,46 @@ function Meta({ meta, dim }: { meta: HeaderMeta; dim?: boolean }) {
         {label('dir')}
         <Text color={dim ? C.faint : C.text}>{meta.dir}</Text>
       </Box>
-      <Box>
-        {label('keys')}
-        <Text color={C.faint}>
-          /help {G.bullet} tab completes {G.bullet} esc interrupts {G.bullet} esc esc quits
-        </Text>
-      </Box>
+      {showKeys && (
+        <Box>
+          {label('keys')}
+          <Text color={C.faint}>
+            /help {G.bullet} tab completes {G.bullet} esc interrupts {G.bullet} esc esc quits
+          </Text>
+        </Box>
+      )}
     </Box>
   );
 }
 
-/** The finished header — what stays in the scrollback once boot is over. */
-export function Header({ meta, columns = process.stdout.columns ?? 80 }: {
+/**
+ * The finished header — what stays in the scrollback once boot is over.
+ *
+ * `compact` drops the wordmark and the key hints, leaving just what changed.
+ * Used when the session is rebuilt mid-run (a model switch): Ink's `<Static>`
+ * has already written the original banner permanently to the terminal, so
+ * re-emitting the full one does not replace it, it prints a second logo
+ * underneath the first. The only ways out are to wipe the screen — which is
+ * what `/clear` does, and which would throw away the conversation above — or
+ * to print something that reads as a continuation. This is that.
+ */
+export function Header({ meta, columns = process.stdout.columns ?? 80, compact = false }: {
   meta: HeaderMeta;
   columns?: number;
+  compact?: boolean;
 }) {
+  if (compact) {
+    return (
+      <Box flexDirection="column" marginTop={1} marginBottom={1}>
+        <Box>
+          <Text color={C.faint}>{G.rule.repeat(3)} </Text>
+          <Text color={C.muted}>model changed</Text>
+        </Box>
+        <Box marginTop={1}><Meta meta={meta} showKeys={false} /></Box>
+      </Box>
+    );
+  }
+
   const rows = pickLogo(columns);
   return (
     <Box flexDirection="column" marginBottom={1}>

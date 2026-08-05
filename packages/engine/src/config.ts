@@ -14,6 +14,8 @@ export interface AgentProfile {
   /** Ollama/llamacpp: server base URL (e.g. http://localhost:11434 or http://localhost:8080).
    *  openrouter: override for an OpenRouter-compatible gateway/proxy; defaults to openrouter.ai. */
   host?: string;
+  /** OpenAI Responses API reasoning effort. Ignored by other providers. */
+  reasoningEffort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 }
 
 // ── model tiers ───────────────────────────────────────────────────────────────

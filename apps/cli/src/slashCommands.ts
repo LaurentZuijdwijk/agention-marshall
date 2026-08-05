@@ -1,6 +1,6 @@
 // ── slash command parsing (pure logic, testable) ────────────────────────────────
 
-export const SLASH_COMMANDS = ['/clear', '/cwd', '/exit', '/help', '/jobs', '/login', '/mcp', '/memory', '/model', '/plan', '/review', '/stream', '/tokens'] as const;
+export const SLASH_COMMANDS = ['/clear', '/cwd', '/exit', '/help', '/jobs', '/login', '/mcp', '/memory', '/model', '/plan', '/review', '/stream', '/tokens', '/update', '/version'] as const;
 
 /** Which tier `/model` is about to change. `both` is the first-run chain. */
 export type ModelTarget = 'both' | 'deep' | 'fast' | 'off';
@@ -18,6 +18,8 @@ export type SlashCommandResult =
   | { type: 'clear' }
   | { type: 'stream' }
   | { type: 'tokens' }
+  | { type: 'update' }
+  | { type: 'version' }
   | { type: 'plan'; args: string }
   | { type: 'review'; args: string }
   /** `/jobs` lists; `/jobs kill <id>` (or `kill all`) stops. */
@@ -57,6 +59,12 @@ export function resolveSlashCommand(input: string): SlashCommandResult {
     case '/clear': return { type: 'clear' };
     case '/stream': return { type: 'stream' };
     case '/tokens': return { type: 'tokens' };
+    case '/update': return args
+      ? { type: 'usage', message: `usage: /update — got "${args}"` }
+      : { type: 'update' };
+    case '/version': return args
+      ? { type: 'usage', message: `usage: /version — got "${args}"` }
+      : { type: 'version' };
     case '/plan':
       return args
         ? { type: 'plan', args }
@@ -104,6 +112,8 @@ export const HELP = `commands:
   /clear             — clear history, dedupe cache, and scratch notes
   /tokens            — toggle token usage (↑ in / ↓ out / time) after each response
   /stream            — toggle streaming tokens live vs showing the final response only
+  /version           — show the installed version
+  /update            — check for and install the latest version
   /cwd               — show workspace path
   /memory            — view AGENTS.md (project memory)
   /exit              — quit

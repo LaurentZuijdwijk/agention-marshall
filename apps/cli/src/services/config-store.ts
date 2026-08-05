@@ -31,6 +31,7 @@ export interface SavedProfile {
   model?: string;
   host?: string;
   apiKey?: string;
+  reasoningEffort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 }
 
 /** Last-used connection details for one provider, kept across switches. */
@@ -253,6 +254,21 @@ export function loadMcpServers(workspaceRoot: string): McpServerConfig[] {
   return resolveMcpServers(global, project);
 }
 
+/**
+ * Stored API keys, keyed by provider.
+ *
+ * The counterpart to `savedHosts`, and needed for the same reason: the wizard
+ * has to know a key already exists for the provider being chosen, or it asks
+ * for one the user has already given.
+ */
+export function savedKeys(config: SavedConfig): Record<string, string | undefined> {
+  return Object.fromEntries(
+    (config.providers ?? [])
+      .filter(e => e?.provider && e.apiKey)
+      .map(e => [e.provider, e.apiKey]),
+  );
+}
+
 /** Just the hosts, which is all the App needs to re-seed a provider switch. */
 export function savedHosts(config: SavedConfig): Record<string, string | undefined> {
   return Object.fromEntries(
@@ -271,6 +287,7 @@ function strip(profile: AgentProfile): SavedProfile {
     model: profile.model,
     ...(profile.host !== undefined ? { host: profile.host } : {}),
     ...(profile.apiKey ? { apiKey: profile.apiKey } : {}),
+    ...(profile.reasoningEffort !== undefined ? { reasoningEffort: profile.reasoningEffort } : {}),
   };
 }
 

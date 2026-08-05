@@ -13,7 +13,7 @@
     "@changesets/cli": "^2.31.0"
   },
   "dependencies": {
-    "@agentionai/agents": "^1.0.1",
+    "@agentionai/agents": "^1.1.0",
     "openai": "^6.42.0"
   }
 }

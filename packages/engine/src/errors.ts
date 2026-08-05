@@ -19,6 +19,36 @@ export function isConnectionError(message: string): boolean {
     .test(message);
 }
 
+/** Provider responses use several different spellings for an overlong prompt. */
+export function isContextLengthError(message: string): boolean {
+  return /context length|context.?size|maximum context|prompt.{0,30}(too long|too large|exceed)|(?:input|prompt).{0,30}token.{0,20}(limit|maximum)|token limit.{0,20}(exceed|reach)|n_ctx/i
+    .test(message);
+}
+
+/**
+ * Include useful response details that SDK wrappers often keep off `message`.
+ * In particular, OpenAI-compatible errors retain the llama.cpp JSON body as
+ * `response.error`, while the wrapper only says "Provider returned error".
+ */
+function errorDetails(err: unknown): string {
+  if (!err || typeof err !== 'object') return '';
+  const value = err as Record<string, unknown>;
+  const response = value.response;
+  const candidates = [
+    value.statusCode,
+    value.status,
+    value.code,
+    typeof response === 'object' && response !== null ? (response as Record<string, unknown>).status : undefined,
+    typeof response === 'object' && response !== null ? (response as Record<string, unknown>).data : undefined,
+    typeof response === 'object' && response !== null ? (response as Record<string, unknown>).error : undefined,
+  ];
+  const details = candidates
+    .filter(value => value !== undefined && value !== null && value !== '')
+    .map(value => typeof value === 'string' ? value : JSON.stringify(value))
+    .filter(Boolean);
+  return details.length > 0 ? details.join(' — ') : '';
+}
+
 /**
  * Turn a provider error into something a user can act on.
  *
@@ -29,11 +59,16 @@ export function isConnectionError(message: string): boolean {
  */
 export function describeAgentError(label: string, profile: AgentProfile, err: unknown): string {
   const raw = err instanceof Error ? err.message : String(err);
+  const details = errorDetails(err);
   const cleaned = raw.replace(/^llama\.cpp (?:API )?error(?: during tool response)?:\s*/i, '');
+  const full = details && !cleaned.includes(details) ? `${cleaned} (${details})` : cleaned;
   const who = `${label} · ${profile.provider}/${resolveModel(profile)}`;
 
-  if (isConnectionError(cleaned)) {
+  if (isConnectionError(full)) {
     return `${who} — cannot reach ${endpointFor(profile)}. Is the server running and reachable?`;
   }
-  return `${who} — ${cleaned}`;
+  if (isContextLengthError(full)) {
+    return `${who} — context length exceeded. Reduce the prompt/history or lower max tokens (server response: ${full})`;
+  }
+  return `${who} — ${full}`;
 }

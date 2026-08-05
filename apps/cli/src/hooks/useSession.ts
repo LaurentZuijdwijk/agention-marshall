@@ -17,6 +17,8 @@ export interface SessionController {
   fastProfile?: AgentProfile;
   /** Per-provider last-used host, for re-seeding the wizard on a switch. */
   savedHosts: Record<string, string | undefined>;
+  /** Per-provider stored API key, so the wizard can be confirmed with enter. */
+  savedKeys: Record<string, string | undefined>;
   /** Rebuild the session on both tiers and persist them. */
   applyProfiles(deep: AgentProfile, fast: AgentProfile | undefined): void;
   /**
@@ -37,6 +39,7 @@ export interface UseSessionOptions {
   enableWebSearch?: boolean;
   maxTokens?: number;
   savedHosts?: Record<string, string | undefined>;
+  savedKeys?: Record<string, string | undefined>;
   /** Servers loaded from the global config, connected at session start. */
   mcpServers?: McpServerConfig[];
   client: ClientInterface;
@@ -60,6 +63,9 @@ export function useSession(options: UseSessionOptions): SessionController {
   // instead of a single flat one.
   const [savedHosts, setSavedHosts] = useState<Record<string, string | undefined>>(
     options.savedHosts ?? {},
+  );
+  const [savedKeys, setSavedKeys] = useState<Record<string, string | undefined>>(
+    options.savedKeys ?? {},
   );
 
   const build = (deep: AgentProfile, fast: AgentProfile | undefined) =>
@@ -96,18 +102,26 @@ export function useSession(options: UseSessionOptions): SessionController {
       if (profile.host !== undefined) {
         setSavedHosts(prev => ({ ...prev, [profile.provider as Provider]: profile.host }));
       }
+      // Kept in step with the file we just wrote, so reopening the wizard in
+      // this same session offers the key that was just entered.
+      if (profile.apiKey) {
+        setSavedKeys(prev => ({ ...prev, [profile.provider as Provider]: profile.apiKey }));
+      }
     }
     void saveConfig(deep, fast).catch(() => {});
   };
 
   const applyProfiles = (deep: AgentProfile, fast: AgentProfile | undefined) => {
-    // The outgoing session owns detached background processes. Dropping the
-    // reference does not stop them, and the replacement knows nothing about
-    // them, so they would run on with no way left to reach them.
-    sessionRef.current?.dispose();
+    // Switch in place when there is a session to switch. Rebuilding it used to
+    // be the whole implementation, which silently discarded the conversation,
+    // the dedupe cache, running background jobs, MCP connections and the
+    // always-approved list — none of which have anything to do with which model
+    // is answering. Only the first run, before any model is chosen, constructs
+    // one; from then on the session outlives every model choice.
+    if (sessionRef.current) sessionRef.current.setProfiles(deep, fast);
+    else sessionRef.current = build(deep, fast);
     setActiveProfile(deep);
     setFastProfile(fast);
-    sessionRef.current = build(deep, fast);
     onProfilesChanged(deep, fast);
     persist(deep, fast);
   };
@@ -117,6 +131,7 @@ export function useSession(options: UseSessionOptions): SessionController {
     activeProfile,
     fastProfile,
     savedHosts,
+    savedKeys,
     applyProfiles,
     stageProfile: setActiveProfile,
   };

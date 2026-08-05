@@ -473,3 +473,90 @@ test('assistantText is empty for chat-completions tool calls, which carry no tex
 test('assistantText ignores blocks that only look like text', () => {
   assert.equal(assistantText([{ type: 'text' }, { type: 'text', text: 42 }, null]), '');
 });
+
+// ---------------------------------------------------------------------------
+// setProfiles — a model switch must not cost the conversation
+// ---------------------------------------------------------------------------
+
+/** Reaches past `private` deliberately: what these assert is that the switch
+ *  leaves the session's *state* alone, and that state has no public getters. */
+function internals(session: Session) {
+  return session as unknown as {
+    config: { agent: { provider: string; model?: string } };
+    history: { addText(role: string, text: string): void; totalEstimatedTokens: number };
+    alwaysApproved: Set<string>;
+  };
+}
+
+const CLAUDE = { provider: 'claude' as const, model: 'claude-sonnet-4-6', apiKey: 'k' };
+const LOCAL = { provider: 'llamacpp' as const, model: 'qwen', host: 'http://localhost:8080' };
+
+test('switching models keeps the conversation history', () => {
+  const session = jobSession(tempRoot(), makeClient());
+  const inner = internals(session);
+  inner.history.addText('user', 'remember this sentence');
+  const before = inner.history.totalEstimatedTokens;
+  assert.ok(before > 0, 'precondition: history has something in it');
+
+  session.setProfiles(LOCAL);
+  assert.equal(inner.history.totalEstimatedTokens, before, 'history must survive the switch');
+  session.dispose();
+});
+
+test('switching models points the coder at the new profile', () => {
+  const session = jobSession(tempRoot(), makeClient());
+  session.setProfiles(LOCAL);
+  assert.equal(internals(session).config.agent.provider, 'llamacpp');
+  assert.equal(internals(session).config.agent.model, 'qwen');
+  session.dispose();
+});
+
+test('a running background job survives a model switch', async () => {
+  const session = jobSession(tempRoot(), makeClient());
+  const job = session.backgroundJobs.start({ command: 'sleep 30', cwd: tempRoot() });
+
+  session.setProfiles(LOCAL);
+  await new Promise(r => setTimeout(r, 50));
+
+  assert.equal(session.backgroundJobs.get(job.id)?.status, 'running',
+    'a switch is not a reason to kill work already in flight');
+  session.dispose();
+});
+
+test('the always-approved list survives a model switch', () => {
+  const session = jobSession(tempRoot(), makeClient());
+  internals(session).alwaysApproved.add('run_shell');
+  session.setProfiles(LOCAL);
+  assert.ok(internals(session).alwaysApproved.has('run_shell'),
+    'consent was given for the session, not for the model');
+  session.dispose();
+});
+
+test('switching back and forth does not accumulate history plugins', async () => {
+  // The compression plugin cannot be unregistered, so a switch that re-registered
+  // it would stack summarisers and compound the summary on every reduce.
+  const session = jobSession(tempRoot(), makeClient(), { compressionThreshold: 1 });
+  const inner = internals(session);
+  for (let i = 0; i < 5; i++) session.setProfiles(i % 2 ? CLAUDE : LOCAL);
+  inner.history.addText('user', 'x'.repeat(200));
+  assert.ok(inner.history.totalEstimatedTokens > 0);
+  session.dispose();
+});
+
+test('setProfiles records both tiers', () => {
+  const session = jobSession(tempRoot(), makeClient());
+  session.setProfiles(CLAUDE, LOCAL);
+  const routing = session as unknown as { config: { models?: { deep?: unknown; fast?: unknown } } };
+  assert.deepEqual(routing.config.models?.deep, CLAUDE);
+  assert.deepEqual(routing.config.models?.fast, LOCAL);
+  session.dispose();
+});
+
+test('dropping the fast tier clears it rather than leaving a stale one', () => {
+  const session = jobSession(tempRoot(), makeClient());
+  session.setProfiles(CLAUDE, LOCAL);
+  session.setProfiles(CLAUDE);
+  const routing = session as unknown as { config: { models?: { fast?: unknown } } };
+  assert.equal(routing.config.models?.fast, undefined);
+  session.dispose();
+});

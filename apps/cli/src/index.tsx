@@ -13,7 +13,7 @@ import { resolveProfiles, StartupError } from './startup/profiles.js';
 import { installCrashLogging } from './startup/crash-log.js';
 import { installResizeRedraw } from './view/resize.js';
 import { checkForUpdate } from './update-check.js';
-import { loadConfig, savedHosts, loadMcpServers, loadMcpWarnings } from './services/config-store.js';
+import { loadConfig, savedHosts, savedKeys, loadMcpServers, loadMcpWarnings } from './services/config-store.js';
 
 const flags = parseCliArgs();
 
@@ -60,6 +60,7 @@ inkInstance = render(
     maxTokens={profiles.maxTokens}
     registerRedraw={fn => { replayTranscript = fn; }}
     savedHosts={savedHosts(savedConfig)}
+    savedKeys={savedKeys(savedConfig)}
     mcpServers={loadMcpServers(workspaceRoot)}
     mcpWarnings={loadMcpWarnings(workspaceRoot)}
   />,

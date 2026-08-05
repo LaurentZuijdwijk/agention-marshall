@@ -26,7 +26,7 @@ function CallerTag({ caller }: { caller?: string }) {
 export function MessageRow({ msg }: { msg: Message }) {
   switch (msg.role) {
     case 'header':
-      return msg.meta ? <Header meta={msg.meta} /> : null;
+      return msg.meta ? <Header meta={msg.meta} compact={msg.compact} /> : null;
 
     case 'user':
       return (

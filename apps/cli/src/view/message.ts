@@ -15,6 +15,10 @@ export interface Message {
   content: string;
   /** Header rows carry the session summary instead of text. */
   meta?: HeaderMeta;
+  /** Header rows only: render without the wordmark. Set on the header printed
+   *  after a mid-session model switch, where the full banner would appear as a
+   *  second logo rather than replacing the first. */
+  compact?: boolean;
   /** Tool name, or the heading above a markdown block. */
   title?: string;
   /** Dim aside next to the title. */
