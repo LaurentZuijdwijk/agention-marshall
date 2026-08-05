@@ -1,8 +1,8 @@
 import { Tool } from '@agentionai/agents/core';
 import type { ToolInputSchema } from '@agentionai/agents/core';
-import { readFile, readdir } from 'node:fs/promises';
+import { readFile, readdir, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { basename, join, relative } from 'node:path';
 import { createHash } from 'node:crypto';
 import { resolveInWorkspace } from '../primitives/resolve.js';
 import { cappedRead, DEFAULT_MAX_FILE_BYTES } from '../primitives/capped-read.js';
@@ -16,8 +16,15 @@ const SKIP_DIRS = new Set([
 ]);
 
 const MAX_SEARCH_RESULTS = 200;
+const MAX_SEARCH_FILE_BYTES = 256 * 1024;
 
 async function* walkFiles(dir: string): AsyncGenerator<string> {
+  const info = await stat(dir);
+  if (info.isFile()) {
+    yield dir;
+    return;
+  }
+
   const entries = await readdir(dir, { withFileTypes: true });
   for (const entry of entries) {
     if (SKIP_DIRS.has(entry.name)) continue;
@@ -166,27 +173,36 @@ function buildSearch(workspaceRoot: string, maxSearchResults: number): Tool<stri
     execute: async ({ pattern, path = '.', fileGlob }) => {
       try {
         const resolved = resolveInWorkspace(workspaceRoot, String(path));
-        const regex = new RegExp(String(pattern), 'g');
+        let regex: RegExp;
+        try {
+          regex = new RegExp(String(pattern), 'g');
+        } catch (err) {
+          return `Error: Invalid regex: ${safe(err)}`;
+        }
         const glob = fileGlob ? String(fileGlob) : null;
         const results: string[] = [];
+        let truncated = false;
 
         for await (const filePath of walkFiles(resolved)) {
-          if (glob && !filePath.includes(glob)) continue;
+          if (glob && !basename(filePath).includes(glob)) continue;
           let content: string;
-          try { content = await readFile(filePath, 'utf8'); } catch { continue; }
+          try { content = await cappedRead(filePath, MAX_SEARCH_FILE_BYTES); } catch { continue; }
           const lines = content.split('\n');
           for (let i = 0; i < lines.length; i++) {
             regex.lastIndex = 0;
             if (regex.test(lines[i])) {
               results.push(`${relative(workspaceRoot, filePath)}:${i + 1}: ${lines[i].trim()}`);
-              if (results.length >= maxSearchResults) break;
+              if (results.length > maxSearchResults) {
+                truncated = true;
+                break;
+              }
             }
           }
-          if (results.length >= maxSearchResults) break;
+          if (truncated) break;
         }
 
         if (results.length === 0) return 'No matches found.';
-        const truncated = results.length >= maxSearchResults;
+        if (truncated) results.length = maxSearchResults;
         return results.join('\n') + (truncated ? `\n[...truncated at ${maxSearchResults} matches...]` : '');
       } catch (err) {
         return `Error: ${safe(err)}`;

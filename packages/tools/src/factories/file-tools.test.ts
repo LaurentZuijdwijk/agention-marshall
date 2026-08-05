@@ -69,12 +69,23 @@ test('search finds matches with file:line: content', async () => {
 
 test('search supports fileGlob filtering', async () => {
   const root = tempRoot();
+  mkdirSync(join(root, 'src'));
   writeFileSync(join(root, 'keep.ts'), 'needle\n');
   writeFileSync(join(root, 'skip.md'), 'needle\n');
+  writeFileSync(join(root, 'src', 'nested.ts'), 'needle\n');
   const [, , search] = createReadOnlyFileTools(root);
   const result = await search.execute('a', 'b', { pattern: 'needle', fileGlob: '.ts' }, 'id');
   assert.match(result, /keep\.ts:1: needle/);
+  assert.match(result, /src[\\/]nested\.ts:1: needle/);
   assert.doesNotMatch(result, /skip\.md/);
+});
+
+test('search accepts a file path', async () => {
+  const root = tempRoot();
+  writeFileSync(join(root, 'target.txt'), 'needle\n');
+  const [, , search] = createReadOnlyFileTools(root);
+  const result = await search.execute('a', 'b', { pattern: 'needle', path: 'target.txt' }, 'id');
+  assert.match(result, /target\.txt:1: needle/);
 });
 
 test('search reports no matches', async () => {
@@ -83,6 +94,20 @@ test('search reports no matches', async () => {
   const [, , search] = createReadOnlyFileTools(root);
   const result = await search.execute('a', 'b', { pattern: 'zzz-not-present' }, 'id');
   assert.match(result, /No matches/);
+});
+
+test('search reports invalid regexes clearly', async () => {
+  const [, , search] = createReadOnlyFileTools(tempRoot());
+  const result = await search.execute('a', 'b', { pattern: '[' }, 'id');
+  assert.match(result, /^Error: Invalid regex:/);
+});
+
+test('search only reports truncation when the limit is reached', async () => {
+  const root = tempRoot();
+  writeFileSync(join(root, 'x.txt'), 'needle\n');
+  const [, , search] = createReadOnlyFileTools(root, { maxSearchResults: 1 });
+  const result = await search.execute('a', 'b', { pattern: 'needle' }, 'id');
+  assert.doesNotMatch(result, /truncated/);
 });
 
 test('write_file creates a new file (no read required)', async () => {
