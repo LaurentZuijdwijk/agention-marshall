@@ -36,7 +36,7 @@ import { agentTool } from './agent-tool.js';
 import { runAgent } from './streaming.js';
 import { checkAttachments, buildInput } from './images.js';
 import type { ImageAttachment } from './images.js';
-import { describeAgentError } from './errors.js';
+import { describeAgentError, providerErrorDiagnostics, isBadRequestError, isContextLengthError } from './errors.js';
 import { resolveRoleProfile, isDelegated, resolveModel, contextToolEnabled, routingSummary, resolveSearchProfile } from './config.js';
 import type { EngineConfig, AgentProfile, Role } from './config.js';
 import type { ClientInterface } from './types.js';
@@ -141,6 +141,8 @@ export class Session {
    * per switch would compound summarisation on every reduce.
    */
   private summaryAgent: BaseAgent<string, string> | null = null;
+  /** Local llama.cpp models are loaded by the first agent construction only. */
+  private llamaModelLoaded = false;
   private controller: AbortController | null = null;
   private currentTask: string | null = null;
   private steeringContext: string | null = null;
@@ -522,11 +524,25 @@ export class Session {
 
     const summaryProfile = resolveRoleProfile(this.config, 'summarizer');
     try {
-      this.summaryAgent = await createAgent(summaryProfile, [], new History(), { maxTokens: 1024 });
+      // `transient: true` is the whole point: it makes every provider's
+      // execute() clear this History before each call (see BaseAgent's own
+      // doc comment on the `history` param). Without it, the *same* agent
+      // instance is reused for every compression in the session — proactive
+      // and reactive alike — and each call would otherwise append its prompt
+      // and summary onto the last one's, so the summariser's own
+      // conversation grows without bound. On a setup with no distinct fast
+      // tier the summariser is the same small-context model that keeps
+      // failing, so a few compressions in, it starts failing on its *own*
+      // accumulated history — the exact problem it exists to fix.
+      this.summaryAgent = await createAgent(summaryProfile, [], new History([], { transient: true }), { maxTokens: 1024 });
       this.compressionThreshold = threshold;
-    } catch {
+      this.log(`COMPRESSION_READY summariser=${summaryProfile.provider}/${resolveModel(summaryProfile)} threshold=${threshold}`);
+    } catch (err) {
       // Skip compression if the summariser can't be created. Left registered:
-      // a later switch to a reachable model makes it work again.
+      // a later switch to a reachable model makes it work again. `compressionReady`
+      // is already true at this point, so without this log a failed creation here
+      // disables compression for the rest of the session with no visible trace.
+      this.log(`COMPRESSION_UNAVAILABLE summariser=${summaryProfile.provider}/${resolveModel(summaryProfile)} ${describeAgentError('summarizer', summaryProfile, err)} details=${providerErrorDiagnostics(err)}`);
       return;
     }
 
@@ -554,6 +570,48 @@ export class Session {
   }
 
   /**
+   * Upper bound on how much a single `history.reduce()` call is allowed to
+   * fold into the summariser's prompt.
+   *
+   * The summariser role has no dedicated cheap model on most local setups —
+   * `resolveRoleProfile('summarizer')` degrades to the same profile as the
+   * coder when the provider has no cheap alternative (llama.cpp, Ollama). So
+   * a summariser prompt shares the exact context window that just overflowed.
+   * Jumping straight from, say, 30k tokens of history to a 5k target hands the
+   * summariser the entire 25k-token gap in one prompt, which blows the same
+   * limit it exists to fix. Reducing in small steps keeps each individual
+   * summarisation prompt well under any local server's context window,
+   * regardless of how far over budget history has grown.
+   */
+  private static readonly COMPRESSION_STEP_TOKENS = 3_000;
+
+  /**
+   * Shrink history toward `target`, one bounded step at a time — see
+   * `COMPRESSION_STEP_TOKENS`. Stops early if a step makes no progress
+   * (summariser returned something no smaller) rather than spinning forever.
+   */
+  private async reduceToTarget(target: number): Promise<void> {
+    if (this.history.totalEstimatedTokens <= target) {
+      this.log(`REDUCE_SKIPPED current=${this.history.totalEstimatedTokens} target=${target} — already at or under target`);
+      return;
+    }
+    let step = 0;
+    while (this.history.totalEstimatedTokens > target) {
+      step += 1;
+      const before = this.history.totalEstimatedTokens;
+      const stepTarget = Math.max(target, before - Session.COMPRESSION_STEP_TOKENS);
+      this.log(`REDUCE_STEP #${step} before=${before} stepTarget=${stepTarget} finalTarget=${target}`);
+      await this.history.reduce({ maxTokens: stepTarget });
+      const after = this.history.totalEstimatedTokens;
+      this.log(`REDUCE_STEP #${step} after=${after}`);
+      if (after >= before) {
+        this.log(`REDUCE_STOPPED #${step} made no progress (before=${before} after=${after})`);
+        break;
+      }
+    }
+  }
+
+  /**
    * Compress history when it has outgrown the threshold. Best-effort: if the
    * summariser is unreachable we log and carry on with an uncompressed history,
    * because failing to shrink the context is not a reason to fail the task.
@@ -564,12 +622,102 @@ export class Session {
     if (this.history.totalEstimatedTokens < threshold) return;
 
     try {
-      await this.history.reduce({ maxTokens: threshold });
+      await this.reduceToTarget(threshold);
       this.log(`COMPRESSED to ~${this.history.totalEstimatedTokens} tokens`);
     } catch (err) {
       const profile = resolveRoleProfile(this.config, 'summarizer');
-      this.log(`COMPRESSION_FAILED ${describeAgentError('summarizer', profile, err)}`);
+      this.log(`COMPRESSION_FAILED ${describeAgentError('summarizer', profile, err)} details=${providerErrorDiagnostics(err)}`);
     }
+  }
+
+  /** Remove the failed request's final message before rebuilding the prompt. */
+  private popLastHistoryMessage(): boolean {
+    const entries = this.history.entries;
+    if (entries.length === 0) return false;
+
+    this.history.clear();
+    for (const entry of entries.slice(0, -1)) this.history.addEntry(entry);
+    this.log('CONTEXT_ERROR_POPPED_LAST_MESSAGE');
+    return true;
+  }
+
+  /**
+   * Extra room to cut beyond the measured overage — the retry adds a fresh
+   * copy of the current turn on top of whatever's left, so trimming to an
+   * exact fit just fails again.
+   */
+  private static readonly CONTEXT_ERROR_MARGIN = 1_024;
+
+  /**
+   * How far to shrink history for a context-overflow retry.
+   *
+   * llama.cpp's message names both numbers — how big the rejected request
+   * was, and how much room the server actually has — which lets the cut be
+   * sized to the *measured* overage instead of a flat fraction of the context
+   * window. That distinction matters most exactly when the overage is small:
+   * history can already sit well under any fixed percentage of `available`
+   * while still being, say, 900 tokens too big. A percentage-based target
+   * then lands *above* `current`, and `reduceToTarget`'s `totalEstimatedTokens
+   * > target` loop never runs at all — no compression attempted, no log line,
+   * and the original error goes straight back to the user.
+   *
+   * Other providers' wording isn't parsed yet, so they fall back to the
+   * percentage heuristic.
+   */
+  private contextErrorTarget(message: string, current: number): number {
+    const overflow = /request\s*\((\d+)\s*tokens?\)\s*exceeds the available context size\s*\((\d+)\s*tokens?\)/i.exec(message);
+    if (overflow) {
+      const requestTokens = Number(overflow[1]);
+      const availableTokens = Number(overflow[2]);
+      const overage = requestTokens - availableTokens;
+      const target = Math.max(0, current - overage - Session.CONTEXT_ERROR_MARGIN);
+      this.log(`CONTEXT_ERROR_TARGET_METHOD measured requestTokens=${requestTokens} availableTokens=${availableTokens} overage=${overage} -> target=${target}`);
+      return target;
+    }
+
+    const available = /available context size\s*\((\d+)\s*tokens?\)/i.exec(message)?.[1];
+    const target = available
+      ? Math.max(1_024, Math.floor(Number(available) * 0.4))
+      : Math.max(1_024, Math.floor(current * 0.4));
+    this.log(`CONTEXT_ERROR_TARGET_METHOD fallback available=${available ?? 'unknown'} current=${current} -> target=${target}`);
+    return target;
+  }
+
+  private async compressForContextError(message: string): Promise<boolean> {
+    this.log(`CONTEXT_ERROR_COMPRESS_START ${JSON.stringify(message)}`);
+
+    if (!this.summaryAgent) await this.ensureCompression();
+    if (!this.summaryAgent) {
+      this.log('CONTEXT_ERROR_COMPRESS_ABORTED no summariser available (see COMPRESSION_UNAVAILABLE above, or compressionThreshold: 0)');
+      return false;
+    }
+
+    const current = this.history.totalEstimatedTokens;
+    // Even when history already looks "small enough", it may still be the
+    // biggest lever we have — the overflow can equally come from tools/system
+    // prompt, which compression can never touch. Only skip when there is
+    // nothing left to compress at all.
+    if (current === 0) {
+      this.log('CONTEXT_ERROR_COMPRESS_ABORTED history is empty — nothing to compress');
+      return false;
+    }
+
+    const target = this.contextErrorTarget(message, current);
+    this.log(`CONTEXT_ERROR_COMPRESS_TARGET current=${current} target=${target}`);
+
+    try {
+      await this.reduceToTarget(target);
+    } catch (err) {
+      const profile = resolveRoleProfile(this.config, 'summarizer');
+      this.log(`COMPRESSION_FAILED ${describeAgentError('summarizer', profile, err)} details=${providerErrorDiagnostics(err)}`);
+    }
+    // Report progress even if a later step in reduceToTarget threw — partial
+    // compression from the steps that succeeded before the failure can still be
+    // enough to let the retry through.
+    const after = this.history.totalEstimatedTokens;
+    const reduced = after < current;
+    this.log(`CONTEXT_ERROR_COMPRESSED current=${current} after=${after} reduced=${reduced}`);
+    return reduced;
   }
 
   // ── background jobs ─────────────────────────────────────────────────────────
@@ -902,11 +1050,15 @@ export class Session {
         reviewerTool ? REVIEWER_TOOL_GUIDANCE : '',
       ].join('');
 
+      if (coderProfile.provider === 'llamacpp' && !this.llamaModelLoaded) {
+        this.client.onOutput({ type: 'model-loading' });
+      }
       const agent = await createAgent(coderProfile, tools, this.history, {
         maxTokens: this.config.maxTokens,
         projectMemory: projectMemory || undefined,
         extraInstructions: extraInstructions || undefined,
       }) as AgentWithUsage;
+      if (coderProfile.provider === 'llamacpp') this.llamaModelLoaded = true;
 
       // Shared with /plan and /review. The per-run file/shell tools die with the
       // run, but the context/search/planner/reviewer tools and the masking
@@ -916,8 +1068,17 @@ export class Session {
 
       agent.on(AgentEvent.ERROR, (err: unknown) => {
         if (signal.aborted) return;
-        errorReported = true;
         const message = err instanceof Error ? err.message : String(err);
+        const recoverable = isBadRequestError(err) || isContextLengthError(message);
+        this.log(`AGENT_ERROR recoverable=${recoverable} ${JSON.stringify(message)} details=${providerErrorDiagnostics(err)}`);
+        // Every agent error also rejects the promise `stream()` is awaiting (see
+        // createAgent's comment on the safety-net listener), so a recoverable
+        // error reaches the try/catch below regardless of whether it's reported
+        // here. Reporting it here too would show the raw provider error and end
+        // the turn in the client's UI before the try/catch below gets a chance
+        // to compress and hand back a friendlier `context-full` event instead.
+        if (recoverable) return;
+        errorReported = true;
         this.client.onOutput({ type: 'error', message });
         this.log(`ERROR ${message}`);
       });
@@ -927,17 +1088,46 @@ export class Session {
       // the run itself won't reject on abort — without this race, Esc would
       // do nothing until the model's current turn (and any tool-blocked retries it
       // attempts afterward) finished on its own, which can take minutes on local models.
-      const response = await new Promise<string>((resolve, reject) => {
-        runAgent(agent, buildInput(effectiveTask, images), chunk => {
-          if (signal.aborted) return;
-          this.client.onOutput(chunk.type === 'reasoning'
-            ? { type: 'reasoning', text: chunk.content }
-            : { type: 'token', text: chunk.content });
-        }).then(resolve, reject);
-        signal.addEventListener('abort', () => {
-          reject(new DOMException('Task interrupted by user', 'AbortError'));
-        }, { once: true });
-      });
+      const stream = (input: string | ReturnType<typeof buildInput>): Promise<string> =>
+        new Promise<string>((resolve, reject) => {
+          runAgent(agent, input, chunk => {
+            if (signal.aborted) return;
+            this.client.onOutput(chunk.type === 'reasoning'
+              ? { type: 'reasoning', text: chunk.content }
+              : { type: 'token', text: chunk.content });
+          }).then(resolve, reject);
+          signal.addEventListener('abort', () => {
+            reject(new DOMException('Task interrupted by user', 'AbortError'));
+          }, { once: true });
+        });
+
+      let response: string;
+      try {
+        response = await stream(buildInput(effectiveTask, images));
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        const shouldRecover = isBadRequestError(err) || isContextLengthError(message);
+        this.log(`STREAM_ERROR shouldRecover=${shouldRecover} aborted=${signal.aborted} ${JSON.stringify(message)}`);
+        if (!shouldRecover || signal.aborted) throw err;
+
+        // Our own token estimate is unreliable for code-heavy content (see
+        // contextErrorTarget's comment) — it can miss by 15k+ tokens on a
+        // single large file read — so a blind retry is a gamble that can burn
+        // a long time and still fail. Rather than guess again, compress once
+        // and hand the turn back to the user: fold the abandoned task into
+        // `steeringContext`, the same mechanism an Esc-interrupt uses, so
+        // their next message carries this one as context instead of losing it.
+        //
+        // A rejected request has already appended its final assistant/user
+        // turn to history. Remove that invalid tail before compressing,
+        // otherwise the bad message survives into the summary.
+        this.popLastHistoryMessage();
+        const compressed = await this.compressForContextError(message);
+        this.log(`CONTEXT_ERROR_HANDED_BACK compressed=${compressed}`);
+        this.steeringContext = task;
+        this.client.onOutput({ type: 'context-full', compressed });
+        return;
+      }
 
       const durationMs = Date.now() - startMs;
       const usage = agent.lastTokenUsage;
@@ -962,7 +1152,7 @@ export class Session {
         this.client.onOutput({ type: 'interrupted' });
       } else if (!errorReported) {
         const message = describeAgentError('coder', coderProfile, err);
-        this.log(`ERROR ${message}`);
+        this.log(`ERROR ${message} details=${providerErrorDiagnostics(err)}`);
         this.client.onOutput({ type: 'error', message });
       }
     } finally {

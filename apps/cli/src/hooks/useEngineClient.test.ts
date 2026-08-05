@@ -156,6 +156,20 @@ describe('turn completion', () => {
     assert.equal(h.calls.at(-1), 'turnEnded:interrupted');
   });
 
+  it('a full context window ends the turn like an interrupt, not an error', () => {
+    const h = harness();
+    h.send({ type: 'context-full', compressed: true });
+    assert.equal(h.pushed.at(-1)?.role, 'info');
+    assert.match(h.pushed.at(-1)?.content ?? '', /compressed the conversation/);
+    assert.equal(h.calls.at(-1), 'turnEnded:interrupted');
+  });
+
+  it('a full context window that could not be compressed says so', () => {
+    const h = harness();
+    h.send({ type: 'context-full', compressed: false });
+    assert.match(h.pushed.at(-1)?.content ?? '', /could not be compressed automatically/);
+  });
+
   it('an error ends the turn without steering', () => {
     const h = harness();
     h.send({ type: 'error', message: 'boom' });

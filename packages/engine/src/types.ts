@@ -5,6 +5,8 @@ export type { ApprovalRequest, ApprovalDecision };
 
 export type OutputEvent =
   | { type: 'thinking' }
+  /** Emitted before a local llama.cpp agent is created, while its model loads. */
+  | { type: 'model-loading' }
   | { type: 'agent-start'; agentName: string }
   /** `subagent` is set when the "tool" is really another agent — the client
    *  should present it as a delegation, not as a file read. `delegated` marks
@@ -62,6 +64,15 @@ export type OutputEvent =
   | { type: 'usage'; inputTokens: number; outputTokens: number; durationMs: number }
   | { type: 'error'; message: string }
   | { type: 'interrupted' }
+  /**
+   * The model's context window filled up mid-turn and the task was abandoned
+   * rather than retried — our own token estimate is unreliable enough for
+   * code-heavy content that a blind retry is a gamble, so recovery stops
+   * after one compression pass instead. `compressed` says whether that pass
+   * actually freed anything; either way the task is queued as steering
+   * context (like an Esc-interrupt), so the user's next message picks up
+   * where this one left off. */
+  | { type: 'context-full'; compressed: boolean }
   | { type: 'plan'; text: string }
   | { type: 'review'; text: string }
   /**

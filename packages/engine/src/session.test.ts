@@ -560,3 +560,166 @@ test('dropping the fast tier clears it rather than leaving a stale one', () => {
   assert.equal(routing.config.models?.fast, undefined);
   session.dispose();
 });
+
+// ---------------------------------------------------------------------------
+// reduceToTarget — bounded-step compression
+//
+// The summariser role has no dedicated cheap model on most local setups: with
+// no fast tier configured it falls back to the same profile as the coder (see
+// resolveRoleProfile), so a summarisation prompt can share the exact context
+// window that just overflowed. A one-shot jump from a large history straight
+// to the final target would hand the summariser the entire gap in a single
+// prompt. reduceToTarget must instead walk down in bounded steps.
+// ---------------------------------------------------------------------------
+
+type FakeEntry = {
+  role: string;
+  content: unknown[];
+  __metadata: { estimatedTokens: number; date: string; contentLength: number; isSummary?: boolean };
+};
+
+function withReduceToTarget(session: Session) {
+  return session as unknown as {
+    history: {
+      use(plugin: { reduce: (entries: FakeEntry[], options: { maxTokens?: number }) => Promise<FakeEntry[]> }): unknown;
+      addText(role: string, text: string): void;
+      totalEstimatedTokens: number;
+    };
+    reduceToTarget(target: number): Promise<void>;
+  };
+}
+
+test('reduceToTarget shrinks history in steps no larger than COMPRESSION_STEP_TOKENS', async () => {
+  const session = jobSession(tempRoot(), makeClient());
+  const inner = withReduceToTarget(session);
+
+  // How much each individual reduce() call was asked to close — this is what
+  // becomes the summariser's prompt size in the real compressionPlugin.
+  const requestedPerCallReduction: number[] = [];
+
+  inner.history.use({
+    // Mimics the real compressionPlugin's maxTokens branch (drop oldest
+    // entries until under budget, replace with one small summary), but skips
+    // the actual agent call so this test needs no network access.
+    reduce: async (entries, options) => {
+      const maxTokens = options.maxTokens!;
+      const totalBefore = entries.reduce((sum, e) => sum + e.__metadata.estimatedTokens, 0);
+      requestedPerCallReduction.push(totalBefore - maxTokens);
+
+      const nonSystem = entries.filter(e => e.role !== 'system');
+      let remaining = totalBefore;
+      const toCompress: FakeEntry[] = [];
+      for (const entry of nonSystem) {
+        if (remaining <= maxTokens) break;
+        toCompress.push(entry);
+        remaining -= entry.__metadata.estimatedTokens;
+      }
+      if (toCompress.length === 0) return entries;
+
+      const compressed = new Set(toCompress);
+      const kept = entries.filter(e => !compressed.has(e));
+      const summary: FakeEntry = {
+        role: 'user',
+        content: [{ type: 'text', text: '[summary]' }],
+        __metadata: { date: new Date().toISOString(), contentLength: 9, estimatedTokens: 10 },
+      };
+      return [...kept.filter(e => e.role === 'system'), summary, ...kept.filter(e => e.role !== 'system')];
+    },
+  });
+
+  // Large enough that a naive one-shot reduce would have to fold roughly
+  // 20k+ tokens into a single summarisation call.
+  for (let i = 0; i < 30; i++) inner.history.addText('user', 'x'.repeat(4_000));
+  const before = inner.history.totalEstimatedTokens;
+  assert.ok(before > 20_000, 'precondition: history is large enough to need multiple steps');
+
+  await inner.reduceToTarget(2_000);
+
+  assert.ok(inner.history.totalEstimatedTokens <= 2_010, 'history should converge to roughly the target');
+  assert.ok(requestedPerCallReduction.length > 1, 'a large overshoot must be closed across more than one call');
+  for (const reduction of requestedPerCallReduction) {
+    assert.ok(reduction <= 3_001,
+      `no single reduce() call should be asked to close more than COMPRESSION_STEP_TOKENS at once (got ${reduction})`);
+  }
+
+  session.dispose();
+});
+
+// ---------------------------------------------------------------------------
+// contextErrorTarget — size the cut to the measured overage
+//
+// llama.cpp's rejection names both the size of the failed request and the
+// server's actual context size. Before this, the target was a flat 40% of
+// the *window*, regardless of how much history actually needed to shrink —
+// so a modest history that still overflowed by a small amount (e.g. because
+// tool schemas ate most of the budget) produced a target *above* current
+// history size. reduceToTarget's `totalEstimatedTokens > target` loop then
+// never ran at all: no compression attempted, and the original error went
+// straight back to the user.
+// ---------------------------------------------------------------------------
+
+function withContextErrorTarget(session: Session) {
+  return session as unknown as { contextErrorTarget(message: string, current: number): number };
+}
+
+test('contextErrorTarget sizes the cut to the measured overage, not a fixed fraction of the window', () => {
+  const session = jobSession(tempRoot(), makeClient());
+  const inner = withContextErrorTarget(session);
+
+  // The exact shape of a real llama.cpp rejection: a modest overage (919
+  // tokens) against a small window (13312 tokens).
+  const message = 'llama.cpp API error: 400 request (14231 tokens) exceeds the available context size (13312 tokens), try increasing it';
+
+  // History well under 40% of the window (5324 tokens) — the old heuristic
+  // would target 5324, which sits *above* this, so reduceToTarget would do
+  // nothing.
+  const current = 4_000;
+  const target = inner.contextErrorTarget(message, current);
+
+  assert.ok(target < current, 'the target must sit below current or reduceToTarget never runs');
+  assert.equal(target, current - (14_231 - 13_312) - 1_024, 'target = current - overage - margin');
+
+  session.dispose();
+});
+
+test('contextErrorTarget clamps to zero rather than going negative when the overage swamps current', () => {
+  const session = jobSession(tempRoot(), makeClient());
+  const inner = withContextErrorTarget(session);
+
+  const message = 'llama.cpp API error: 400 request (40000 tokens) exceeds the available context size (13312 tokens), try increasing it';
+  const target = inner.contextErrorTarget(message, 500);
+
+  assert.equal(target, 0);
+  session.dispose();
+});
+
+test('contextErrorTarget falls back to the percentage heuristic for unrecognised phrasing', () => {
+  const session = jobSession(tempRoot(), makeClient());
+  const inner = withContextErrorTarget(session);
+
+  const target = inner.contextErrorTarget('some other provider: context length exceeded', 10_000);
+  assert.equal(target, Math.max(1_024, Math.floor(10_000 * 0.4)));
+
+  session.dispose();
+});
+
+test('reduceToTarget stops instead of looping forever when a step makes no progress', async () => {
+  const session = jobSession(tempRoot(), makeClient());
+  const inner = withReduceToTarget(session);
+
+  let calls = 0;
+  inner.history.use({
+    // A plugin that refuses to shrink anything — simulates a summariser that
+    // is unreachable or whose result didn't actually get smaller.
+    reduce: async (entries) => {
+      calls += 1;
+      return entries;
+    },
+  });
+
+  for (let i = 0; i < 10; i++) inner.history.addText('user', 'x'.repeat(4_000));
+  await inner.reduceToTarget(100);
+
+  assert.equal(calls, 1, 'a no-progress step must abort the loop rather than retrying indefinitely');
+  session.dispose();
+});

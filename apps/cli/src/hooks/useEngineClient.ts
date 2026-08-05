@@ -74,6 +74,11 @@ export function createEngineClient(port: TranscriptPort): ClientInterface {
           port.turnStarted();
           break;
 
+        case 'model-loading':
+          commitStep();
+          port.push('info', 'Loading model');
+          break;
+
         case 'mcp-state': {
           // Only failures are surfaced unprompted. A server connecting normally
           // is not news, and printing a block per server at every startup would
@@ -194,6 +199,14 @@ export function createEngineClient(port: TranscriptPort): ClientInterface {
           port.turnEnded('interrupted');
           break;
 
+        case 'context-full':
+          commitStep();
+          port.push('info', event.compressed
+            ? 'context window full — compressed the conversation; continue with a new message, or /clear to reset'
+            : 'context window full and could not be compressed automatically — try a shorter request, or /clear to reset');
+          port.turnEnded('interrupted');
+          break;
+
         case 'plan':
           port.push('markdown', event.text, {
             title: 'plan',
@@ -201,6 +214,7 @@ export function createEngineClient(port: TranscriptPort): ClientInterface {
           });
           port.turnEnded('done');
           break;
+
 
         case 'review':
           port.push('markdown', event.text, { title: 'review' });

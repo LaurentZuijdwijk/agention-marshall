@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { describeAgentError, isConnectionError, isContextLengthError, endpointFor } from './errors.js';
+import { describeAgentError, isConnectionError, isContextLengthError, endpointFor, providerErrorDiagnostics } from './errors.js';
 import type { AgentProfile } from './config.js';
 
 const LOCAL: AgentProfile = { provider: 'llamacpp', model: 'Qwen3.6-35B', host: 'http://192.168.1.248:8080' };
@@ -72,6 +72,20 @@ test('provider response details are included when the wrapper message is generic
   const out = describeAgentError('coder', LOCAL, err);
   assert.match(out, /400/);
   assert.match(out, /n_ctx is too small/);
+});
+
+test('provider diagnostics walk causes without dumping credentials or requests', () => {
+  const err = Object.assign(new Error('Provider returned error'), {
+    request: { headers: { authorization: 'secret' } },
+    cause: Object.assign(new Error('HTTP 400'), {
+      status: 400,
+      response: { data: { error: { message: 'invalid tool sequence' } } },
+    }),
+  });
+  const out = providerErrorDiagnostics(err);
+  assert.match(out, /400/);
+  assert.match(out, /invalid tool sequence/);
+  assert.doesNotMatch(out, /secret|authorization/);
 });
 
 test('endpointFor falls back to the provider default host', () => {

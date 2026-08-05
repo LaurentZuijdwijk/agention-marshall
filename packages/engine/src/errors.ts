@@ -25,28 +25,80 @@ export function isContextLengthError(message: string): boolean {
     .test(message);
 }
 
+/** Whether a provider error represents an HTTP 400 response. */
+export function isBadRequestError(err: unknown): boolean {
+  const seen = new Set<unknown>();
+  let current: unknown = err;
+  for (let depth = 0; current && typeof current === 'object' && depth < 5; depth++) {
+    if (seen.has(current)) break;
+    seen.add(current);
+    const value = current as Record<string, unknown>;
+    const response = value.response && typeof value.response === 'object'
+      ? value.response as Record<string, unknown>
+      : undefined;
+    if ([value.statusCode, value.status, response?.status, response?.statusCode].some(status => status === 400 || status === '400')) {
+      return true;
+    }
+    if (typeof value.message === 'string' && /(?:^|\D)400(?:\D|$)/.test(value.message)) return true;
+    current = value.cause;
+  }
+  return false;
+}
+
 /**
  * Include useful response details that SDK wrappers often keep off `message`.
  * In particular, OpenAI-compatible errors retain the llama.cpp JSON body as
  * `response.error`, while the wrapper only says "Provider returned error".
  */
 function errorDetails(err: unknown): string {
-  if (!err || typeof err !== 'object') return '';
-  const value = err as Record<string, unknown>;
-  const response = value.response;
-  const candidates = [
-    value.statusCode,
-    value.status,
-    value.code,
-    typeof response === 'object' && response !== null ? (response as Record<string, unknown>).status : undefined,
-    typeof response === 'object' && response !== null ? (response as Record<string, unknown>).data : undefined,
-    typeof response === 'object' && response !== null ? (response as Record<string, unknown>).error : undefined,
-  ];
-  const details = candidates
-    .filter(value => value !== undefined && value !== null && value !== '')
-    .map(value => typeof value === 'string' ? value : JSON.stringify(value))
-    .filter(Boolean);
-  return details.length > 0 ? details.join(' — ') : '';
+  const details: string[] = [];
+  const seen = new Set<unknown>();
+  let current: unknown = err;
+
+  // The agents SDK puts the HTTP response on ApiError.response, while fetch,
+  // OpenAI and gateway wrappers may put the useful body one or more `cause`
+  // levels down. Walk that chain, but only record diagnostic fields — never dump
+  // the complete error/request object, which could contain credentials.
+  for (let depth = 0; current && typeof current === 'object' && depth < 5; depth++) {
+    if (seen.has(current)) break;
+    seen.add(current);
+    const value = current as Record<string, unknown>;
+    const response = value.response;
+    const responseValue = response && typeof response === 'object'
+      ? response as Record<string, unknown>
+      : undefined;
+    const candidates = [
+      value.statusCode,
+      value.status,
+      value.code,
+      responseValue?.status,
+      responseValue?.statusCode,
+      responseValue?.data,
+      responseValue?.body,
+      responseValue?.error,
+    ];
+    for (const candidate of candidates) {
+      if (candidate === undefined || candidate === null || candidate === '') continue;
+      const rendered = typeof candidate === 'string' ? candidate : safeJson(candidate);
+      if (rendered && !details.includes(rendered)) details.push(rendered);
+    }
+    current = value.cause;
+  }
+  return details.join(' — ');
+}
+
+function safeJson(value: unknown): string {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return '[unserializable provider detail]';
+  }
+}
+
+/** Safe provider diagnostics for the session log; excludes stacks and requests. */
+export function providerErrorDiagnostics(err: unknown): string {
+  const details = errorDetails(err);
+  return details || (err instanceof Error ? err.name : typeof err);
 }
 
 /**
