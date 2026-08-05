@@ -58,6 +58,9 @@ export interface AppProps {
    * switches providers, instead of reusing a single flat host.
    */
   savedHosts?: Record<string, string | undefined>;
+  /** Per-provider stored API keys, so the wizard's key step can be confirmed
+   *  with a bare enter instead of retyping a secret already on disk. */
+  savedKeys?: Record<string, string | undefined>;
   /** MCP servers from the global config, connected when the session starts. */
   mcpServers?: McpServerConfig[];
   /** MCP config that resolves to nothing — surfaced at startup and by `/mcp`. */
@@ -93,6 +96,7 @@ export function App({
   enableWebSearch = true,
   maxTokens,
   savedHosts,
+  savedKeys,
   mcpServers,
   mcpWarnings,
   registerRedraw,
@@ -128,8 +132,8 @@ export function App({
     fastModel: fast?.model,
     fastProvider: fast?.provider,
   });
-  const headerMessage = (deep: AgentProfile, fast?: AgentProfile): Message =>
-    ({ key: transcript.nextKey(), role: 'header', content: '', meta: headerMeta(deep, fast) });
+  const headerMessage = (deep: AgentProfile, fast?: AgentProfile, compact = false): Message =>
+    ({ key: transcript.nextKey(), role: 'header', content: '', meta: headerMeta(deep, fast), compact });
 
   // ── engine client ──────────────────────────────────────────────────────────
   //
@@ -167,13 +171,19 @@ export function App({
     showUsage: () => live.current.prefs.read().showUsage,
   }), []));
 
-  const { session, activeProfile, fastProfile, savedHosts: hosts, applyProfiles, stageProfile } =
+  const { session, activeProfile, fastProfile, savedHosts: hosts, savedKeys: keys, applyProfiles, stageProfile } =
     useSession({
       workspaceRoot, agentProfile, fastProfile: initialFastProfile,
       contextAgentProfile, plannerAgentProfile, reviewerAgentProfile,
-      enableGitHub, enableWebSearch, maxTokens, savedHosts, mcpServers,
+      enableGitHub, enableWebSearch, maxTokens, savedHosts, savedKeys, mcpServers,
       client, SessionCtor,
-      onProfilesChanged: (deep, fast) => transcript.reset([headerMessage(deep, fast)]),
+      // Appended, not reset: the session keeps its history across a model
+      // switch now, so wiping the visible conversation would misrepresent what
+      // the new model can actually see. Compact because `<Static>` has already
+      // written the boot banner to the terminal for good — a second full header
+      // prints another logo rather than replacing the first.
+      onProfilesChanged: (deep, fast) =>
+        transcript.push('header', '', { meta: headerMeta(deep, fast), compact: true }),
     });
 
   useEffect(() => {
@@ -415,6 +425,7 @@ export function App({
           deepLabel={activeProfile.model}
           initial={{ provider: seed.provider, model: seed.model, host: seed.host }}
           savedHosts={hosts}
+          savedKeys={keys}
           onComplete={(p: Provider | null, m: string | null, h?: string, k?: string) =>
             handleSetupComplete(tier, chain, p, m, h, k)}
           onExit={() => setMode({ type: 'idle' })}

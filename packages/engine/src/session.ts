@@ -68,17 +68,6 @@ const AUTO_RESUME_INSTRUCTION =
   'If nothing further is needed, say so in one short sentence and stop.';
 
 /**
- * The text an assistant message carried alongside its tool calls.
- *
- * Anthropic sends text and tool_use blocks in one content array, so the prose
- * that led up to a call is right there. The chat-completions providers emit only
- * the tool calls on this event and stream their text separately, which is why
- * this returns '' for them rather than guessing.
- *
- * Exported for tests only — the provider shapes are the whole risk here, and
- * they are far cheaper to pin down directly than through a live agent.
- */
-/**
  * Walk an approval chain until something has an opinion.
  *
  * Denies if every link defers. That can only happen if the chain is
@@ -93,6 +82,17 @@ async function runChain(chain: ApprovalDecider[], req: ApprovalRequest): Promise
   return 'deny';
 }
 
+/**
+ * The text an assistant message carried alongside its tool calls.
+ *
+ * Anthropic sends text and tool_use blocks in one content array, so the prose
+ * that led up to a call is right there. The chat-completions providers emit only
+ * the tool calls on this event and stream their text separately, which is why
+ * this returns '' for them rather than guessing.
+ *
+ * Exported for tests only — the provider shapes are the whole risk here, and
+ * they are far cheaper to pin down directly than through a live agent.
+ */
 export function assistantText(content: unknown[]): string {
   return content
     .filter((block): block is { type: 'text'; text: string } =>
@@ -120,12 +120,27 @@ export class Session {
   private readonly logPath: string;
   private readonly logDirReady: Promise<void>;
   private compressionReady = false;
+  /** The plugin can only be added once — History has no removal. */
+  private compressionRegistered = false;
   /** Token threshold once the summariser is live; null while compression is off. */
   private compressionThreshold: number | null = null;
-  private readonly contextToolReady: Promise<Tool<string> | null>;
-  private readonly searchToolReady: Promise<Tool<string> | null>;
-  private readonly plannerToolReady: Promise<Tool<string> | null>;
-  private readonly reviewerToolReady: Promise<Tool<string> | null>;
+  // Rebuilt by setProfiles, so not readonly: these four are the only things
+  // besides the coder itself that are bound to a model, and the coder is
+  // resolved fresh on every turn.
+  private contextToolReady!: Promise<Tool<string> | null>;
+  private searchToolReady!: Promise<Tool<string> | null>;
+  private plannerToolReady!: Promise<Tool<string> | null>;
+  private reviewerToolReady!: Promise<Tool<string> | null>;
+  /**
+   * The agent the compression plugin summarises with.
+   *
+   * Held in a field rather than captured by the plugin because `History.use`
+   * has no counterpart — a plugin can be registered but never removed. So the
+   * plugin is registered once with a stable delegate (see ensureCompression)
+   * and a model switch swaps what sits behind it. Registering a second plugin
+   * per switch would compound summarisation on every reduce.
+   */
+  private summaryAgent: BaseAgent<string, string> | null = null;
   private controller: AbortController | null = null;
   private currentTask: string | null = null;
   private steeringContext: string | null = null;
@@ -163,7 +178,7 @@ export class Session {
   private readonly mcp: McpRegistry;
 
   constructor(
-    private readonly config: EngineConfig,
+    private config: EngineConfig,
     private readonly client: ClientInterface,
   ) {
     this.maskingPlugin = toolResultMaskingPlugin({
@@ -183,6 +198,20 @@ export class Session {
 
     this.logPath = join(config.workspaceRoot, '.marshall', 'logs', 'session.log');
     this.logDirReady = mkdir(dirname(this.logPath), { recursive: true }).then(() => {});
+
+    this.buildRoleTools();
+    this.logTierRouting();
+  }
+
+  /**
+   * Build every model-bound sub-agent tool from the current config.
+   *
+   * Called from the constructor and again on each model switch. The coder is
+   * absent on purpose — `run` resolves its profile per turn, so it follows a
+   * switch without help.
+   */
+  private buildRoleTools(): void {
+    const config = this.config;
 
     // Every role's model comes from resolveRoleProfile, so a `fast` tier set via
     // /model actually routes work at run time. Enablement is a separate question
@@ -217,7 +246,29 @@ export class Session {
           description: 'Get a second opinion on changes before finishing. Describe the task and what you changed; the reviewer reads the actual files and flags bugs or missed requirements.',
         })
       : Promise.resolve(null);
+  }
 
+  /**
+   * Point the session at different models, keeping the conversation.
+   *
+   * The session is the conversation, not the model behind it — so switching
+   * rebuilds only what is bound to a model and leaves everything that carries
+   * state: history, the dedupe cache, background jobs, MCP connections and the
+   * always-approved list. Rebuilding the Session instead, which is what this
+   * replaced, silently discarded all five.
+   *
+   * Safe to call mid-turn: the running turn captured its coder profile and its
+   * tool belt before this, so the change lands on the next one.
+   */
+  setProfiles(deep: AgentProfile, fast?: AgentProfile): void {
+    this.config = { ...this.config, agent: deep, models: { deep, ...(fast ? { fast } : {}) } };
+    this.buildRoleTools();
+    // The plugin stays registered and keeps working; only the model behind it
+    // changes. Rebuilt lazily so a switch costs nothing until history is big
+    // enough to compress.
+    this.summaryAgent = null;
+    this.compressionReady = false;
+    this.log(`PROFILES deep=${deep.provider}/${resolveModel(deep)}${fast ? ` fast=${fast.provider}/${resolveModel(fast)}` : ''}`);
     this.logTierRouting();
   }
 
@@ -471,15 +522,35 @@ export class Session {
 
     const summaryProfile = resolveRoleProfile(this.config, 'summarizer');
     try {
-      const summaryAgent = await createAgent(summaryProfile, [], new History(), { maxTokens: 1024 });
-      // Registered *without* `autoReduceWhen` on purpose. That option makes the
-      // plugin call `void history.reduce(...)` from afterAdd — fire-and-forget,
-      // no catch — so a summariser failure (its server going away, say) became an
-      // unhandled rejection and killed the process. Driving reduction ourselves
-      // from compressIfNeeded() keeps it awaited, catchable, and non-fatal.
-      this.history.use(compressionPlugin(summaryAgent));
+      this.summaryAgent = await createAgent(summaryProfile, [], new History(), { maxTokens: 1024 });
       this.compressionThreshold = threshold;
-    } catch { /* skip compression if summariser can't be created */ }
+    } catch {
+      // Skip compression if the summariser can't be created. Left registered:
+      // a later switch to a reachable model makes it work again.
+      return;
+    }
+
+    if (this.compressionRegistered) return;
+    this.compressionRegistered = true;
+
+    // Registered *without* `autoReduceWhen` on purpose. That option makes the
+    // plugin call `void history.reduce(...)` from afterAdd — fire-and-forget,
+    // no catch — so a summariser failure (its server going away, say) became an
+    // unhandled rejection and killed the process. Driving reduction ourselves
+    // from compressIfNeeded() keeps it awaited, catchable, and non-fatal.
+    //
+    // The plugin gets a delegate rather than the agent itself, because History
+    // has no way to unregister a plugin: registering a fresh one per model
+    // switch would stack them and compound the summary on every reduce. The
+    // delegate resolves `this.summaryAgent` at call time, so a switch is a
+    // field assignment.
+    this.history.use(compressionPlugin({
+      execute: (prompt: string) => {
+        const agent = this.summaryAgent;
+        if (!agent) throw new Error('no summariser is configured');
+        return agent.execute(prompt);
+      },
+    } as unknown as BaseAgent<string, string>));
   }
 
   /**

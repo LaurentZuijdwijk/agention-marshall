@@ -253,6 +253,21 @@ export function loadMcpServers(workspaceRoot: string): McpServerConfig[] {
   return resolveMcpServers(global, project);
 }
 
+/**
+ * Stored API keys, keyed by provider.
+ *
+ * The counterpart to `savedHosts`, and needed for the same reason: the wizard
+ * has to know a key already exists for the provider being chosen, or it asks
+ * for one the user has already given.
+ */
+export function savedKeys(config: SavedConfig): Record<string, string | undefined> {
+  return Object.fromEntries(
+    (config.providers ?? [])
+      .filter(e => e?.provider && e.apiKey)
+      .map(e => [e.provider, e.apiKey]),
+  );
+}
+
 /** Just the hosts, which is all the App needs to re-seed a provider switch. */
 export function savedHosts(config: SavedConfig): Record<string, string | undefined> {
   return Object.fromEntries(

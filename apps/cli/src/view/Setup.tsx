@@ -401,6 +401,9 @@ export interface SetupProps {
    * provider's own saved host rather than reusing one flat host.
    */
   savedHosts?: Record<Provider, string | undefined>;
+  /** Stored API key per provider. Presence is what lets the key step be
+   *  confirmed with a bare enter instead of retyping a secret. */
+  savedKeys?: Record<string, string | undefined>;
   /**
    * Which tier is being chosen. `fast` gets a "same as deep" escape and
    * different framing — it is the delegation target, not the main model.
@@ -415,6 +418,46 @@ export interface SetupProps {
    * default chat screen instead of proceeding — how a `/model` was aborted.
    */
   onExit?: () => void;
+}
+
+/**
+ * The prompt text for the API-key step.
+ *
+ * Extracted from the render so the one rule that matters here is testable: a
+ * stored key is *never* shown, not in full and not as a hint of itself. Only
+ * its existence is, and only as a changed instruction. The env var name is
+ * safe — it is a name, not a value.
+ *
+ * The obvious "helpful" change is to echo the last four characters so the user
+ * can tell which key is stored. Don't: this text is on screen during screen
+ * shares and lands in terminal scrollback, and four characters is enough to
+ * confirm a guessed key. The regression test pins this.
+ */
+export function keyStepText(envKey: string, stored?: string): { placeholder: string; hint: string } {
+  return stored
+    ? {
+        placeholder: `${envKey} — enter keeps the stored key`,
+        hint: `enter keeps the stored key ${G.bullet} type to replace it ${G.bullet} esc back`,
+      }
+    : {
+        placeholder: `${envKey} (stored in your global config)`,
+        hint: `enter confirms ${G.bullet} esc back ${G.bullet} or set ${envKey} in your environment instead`,
+      };
+}
+
+/**
+ * The key to proceed with, given what was typed and what is already stored.
+ *
+ * Typing wins, so a key can still be replaced. An empty field falls back to the
+ * stored key, which is what makes a bare enter mean "keep using that one" —
+ * before this, an empty submit was silently ignored and the only way past the
+ * step was to retype a secret the config already held.
+ *
+ * Returns undefined when there is nothing to proceed with, which the caller
+ * treats as "stay on this step".
+ */
+export function resolveKeyInput(typed: string, stored?: string): string | undefined {
+  return typed.trim() || stored || undefined;
 }
 
 /**
@@ -445,7 +488,7 @@ const TIER_BLURB: Record<Tier, string> = {
   fast: 'reads files, searches and summarises for the deep model',
 };
 
-export function Setup({ initial, tier = 'deep', deepLabel, savedHosts, onComplete, onExit }: SetupProps) {
+export function Setup({ initial, tier = 'deep', deepLabel, savedHosts, savedKeys, onComplete, onExit }: SetupProps) {
   const [step, setStep] = useState<Step>({ name: 'provider' });
   traceRender('Setup', `step=${step.name}`);
   const [hostInput, setHostInput] = useState('');
@@ -540,21 +583,26 @@ export function Setup({ initial, tier = 'deep', deepLabel, savedHosts, onComplet
   if (step.name === 'key') {
     const { provider, model, host } = step;
     const envKey = PROVIDER_DEFAULTS[provider].envKey!;
+    const stored = savedKeys?.[provider];
+    const text = keyStepText(envKey, stored);
     return (
       <Box flexDirection="column" gap={1}>
         <Title step={label(`${provider}  ${G.bullet}  API key`)} />
+        {/* `value` is the field, which starts empty and stays empty until the
+            user types — the stored key is never seeded into it, so there is
+            nothing for `mask` to have to hide. */}
         <BackableTextInput
           value={keyInput}
           onChange={setKeyInput}
           onSubmit={(val) => {
-            const k = val.trim();
+            const k = resolveKeyInput(val, stored);
             if (k) onComplete(provider, model, host, k);
           }}
           onBack={() => setStep({ name: 'model', provider, host })}
-          placeholder={`${envKey} (stored in .marshall/config.json)`}
+          placeholder={text.placeholder}
           mask="*"
         />
-        <Hint>{`enter confirms ${G.bullet} esc back ${G.bullet} or set ${envKey} in your environment instead`}</Hint>
+        <Hint>{text.hint}</Hint>
       </Box>
     );
   }
