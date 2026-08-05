@@ -126,6 +126,7 @@
     height: var(--nav-h);
   }
   nav .logo { font-weight: 700; letter-spacing: .5px; }
+  nav .logo a { color: inherit; text-decoration: none; }
   nav a { color: var(--muted); text-decoration: none; font-size: 13px; white-space: nowrap; }
   nav a:hover { color: var(--text); }
   nav .spacer { flex: 1; }
@@ -411,9 +412,9 @@
 
 <a class="skip" href="#main">skip to content</a>
 
-<nav>
+<nav aria-label="Primary navigation">
   <div class="wrap">
-    <span class="logo grad">marshall</span>
+    <span class="logo grad"><a href="#main" aria-label="marshall home">marshall</a></span>
     <a class="sections" href="#local">open weights</a>
     <a class="sections" href="#how">how it works</a>
     <a class="sections" href="#providers">providers</a>
@@ -437,7 +438,7 @@
       your approval.
     </p>
     <div class="cta">
-      <button class="install" type="button" data-copy="npm install -g @agentionai/marshall-cli">
+      <button class="install" type="button" data-copy="npm install -g @agentionai/marshall-cli" aria-label="Copy install command">
         <span class="cmd"><span class="prompt" aria-hidden="true">❯ </span>npm install -g @agentionai/marshall-cli</span>
         <span class="copy" aria-hidden="true">copy</span>
       </button>
@@ -657,7 +658,7 @@
       <h2>get started</h2>
       <h3>Your GPU is <span class="grad">already warm</span></h3>
       <p class="lede" style="margin: 0 auto; max-width: 520px;">Node 22+, one npm install, thirty seconds of setup wizard. If <code>llama-server</code> or <code>ollama</code> is already running, marshall finds it — no account, no API key, no cloud.</p>
-      <button class="install" type="button" data-copy="npm install -g @agentionai/marshall-cli && marshall">
+      <button class="install" type="button" data-copy="npm install -g @agentionai/marshall-cli && marshall" aria-label="Copy install and launch command">
         <span class="cmd"><span class="prompt" aria-hidden="true">❯ </span>npm install -g @agentionai/marshall-cli &amp;&amp; marshall</span>
         <span class="copy" aria-hidden="true">copy</span>
       </button>
@@ -698,9 +699,16 @@ document.querySelectorAll('.install[data-copy]').forEach(btn => {
       return;
     }
     btn.dataset.copied = '1';
+    btn.setAttribute('aria-label', 'Copied');
     label.textContent = 'copied';
     clearTimeout(reset);
-    reset = setTimeout(() => { btn.dataset.copied = '0'; label.textContent = 'copy'; }, 1600);
+    reset = setTimeout(() => {
+      btn.dataset.copied = '0';
+      btn.setAttribute('aria-label', btn.dataset.copy.includes('&&')
+        ? 'Copy install and launch command'
+        : 'Copy install command');
+      label.textContent = 'copy';
+    }, 1600);
   });
 });
 </script>
