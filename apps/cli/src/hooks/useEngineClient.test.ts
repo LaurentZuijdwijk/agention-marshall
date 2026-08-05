@@ -258,6 +258,14 @@ describe('plan and review', () => {
     h.send({ type: 'review', text: 'LGTM' });
     assert.equal(h.pushed[0].extra?.title, 'review');
   });
+
+  it('renders a goal as markdown and ends the turn, same as a plan', () => {
+    const h = harness();
+    h.send({ type: 'goal', text: 'done means users can log in with Google' });
+    assert.equal(h.pushed[0].role, 'markdown');
+    assert.equal(h.pushed[0].extra?.title, 'goal');
+    assert.deepEqual(h.calls, ['push:markdown', 'turnEnded:done']);
+  });
 });
 
 describe('streaming', () => {

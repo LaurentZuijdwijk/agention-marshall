@@ -1,6 +1,6 @@
 // ── slash command parsing (pure logic, testable) ────────────────────────────────
 
-export const SLASH_COMMANDS = ['/clear', '/cwd', '/exit', '/help', '/jobs', '/login', '/mcp', '/memory', '/model', '/plan', '/review', '/stream', '/tokens', '/update', '/version'] as const;
+export const SLASH_COMMANDS = ['/clear', '/cwd', '/exit', '/goal', '/help', '/jobs', '/login', '/mcp', '/memory', '/model', '/plan', '/review', '/stream', '/tokens', '/update', '/version'] as const;
 
 /** Which tier `/model` is about to change. `both` is the first-run chain. */
 export type ModelTarget = 'both' | 'deep' | 'fast' | 'off';
@@ -21,6 +21,7 @@ export type SlashCommandResult =
   | { type: 'update' }
   | { type: 'version' }
   | { type: 'plan'; args: string }
+  | { type: 'goal'; args: string }
   | { type: 'review'; args: string }
   /** `/jobs` lists; `/jobs kill <id>` (or `kill all`) stops. */
   | { type: 'jobs'; kill?: string }
@@ -69,6 +70,10 @@ export function resolveSlashCommand(input: string): SlashCommandResult {
       return args
         ? { type: 'plan', args }
         : { type: 'usage', message: 'usage: /plan <task> — describe what you want planned' };
+    case '/goal':
+      return args
+        ? { type: 'goal', args }
+        : { type: 'usage', message: 'usage: /goal <task> — describe what you want to achieve' };
     case '/review': return { type: 'review', args };
     case '/mcp': {
       if (!args) return { type: 'mcp', action: 'list' };
@@ -102,6 +107,7 @@ export const HELP = `commands:
   /model fast        — change the model that reads files and summarises for it
   /model off         — stop tiering; run everything on the deep model
   /plan <task>       — get a plan before making changes (used as context for your next task)
+  /goal <task>       — clarify what "done" looks like before making changes (used as context for your next task)
   /review [notes]    — get a second opinion on the current workspace state
   /jobs              — list background shell jobs from this session
   /jobs kill <id>    — stop one background job, or "all" for every one

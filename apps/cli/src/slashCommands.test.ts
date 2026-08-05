@@ -70,6 +70,12 @@ describe('slashCommands', () => {
       assert.equal((result as { args: string }).args, 'add a login form');
     });
 
+    it('returns goal with args for /goal <task>', () => {
+      const result = resolveSlashCommand('/goal add a login form');
+      assert.equal(result.type, 'goal');
+      assert.equal((result as { args: string }).args, 'add a login form');
+    });
+
     it('returns review with empty args for bare /review', () => {
       const result = resolveSlashCommand('/review');
       assert.equal(result.type, 'review');
@@ -104,6 +110,12 @@ describe('slashCommands', () => {
       const result = resolveSlashCommand('/plan');
       assert.equal(result.type, 'usage');
       assert.match((result as { message: string }).message, /usage: \/plan/);
+    });
+
+    it('returns usage for /goal with nothing to aim at', () => {
+      const result = resolveSlashCommand('/goal');
+      assert.equal(result.type, 'usage');
+      assert.match((result as { message: string }).message, /usage: \/goal/);
     });
 
     it('handles slash command with extra whitespace', () => {

@@ -26,6 +26,7 @@ import {
   CONTEXT_AGENT_PROMPT,
   SEARCH_AGENT_PROMPT,
   PLANNER_AGENT_PROMPT,
+  GOAL_AGENT_PROMPT,
   REVIEWER_AGENT_PROMPT,
   CONTEXT_TOOL_GUIDANCE,
   SURVEY_TOOL_GUIDANCE,
@@ -147,6 +148,10 @@ export class Session {
   private currentTask: string | null = null;
   private steeringContext: string | null = null;
   private pendingPlan: string | null = null;
+  /** Which side agent produced `pendingPlan` — only changes the label the next
+   *  run() prepends it under ("[Plan]" vs "[Goal]"); the injection itself is
+   *  identical either way. */
+  private pendingPlanLabel: 'Plan' | 'Goal' = 'Plan';
   /**
    * Background shell jobs, owned at *session* scope.
    *
@@ -979,6 +984,7 @@ export class Session {
     const steering = this.steeringContext;
     this.steeringContext = null;
     const plan = this.pendingPlan;
+    const planLabel = this.pendingPlanLabel;
     this.pendingPlan = null;
 
     // Every finished job is reported exactly once, at the front of the next
@@ -989,7 +995,7 @@ export class Session {
     const effectiveTask = jobBlock + (steering
       ? `[Previous task was interrupted: "${steering}"]\n\nNew direction: ${task}`
       : plan
-      ? `[Plan]\n${plan}\n\n[Task]\n${task}`
+      ? `[${planLabel}]\n${plan}\n\n[Task]\n${task}`
       : task);
 
     this.currentTask = task;
@@ -1166,13 +1172,13 @@ export class Session {
     }
   }
 
-  /** Shared runner for /plan and /review — a one-shot, read-only sub-agent call
-   *  that doesn't touch the main coder's history or tools. */
+  /** Shared runner for /plan, /goal and /review — a one-shot, read-only
+   *  sub-agent call that doesn't touch the main coder's history or tools. */
   private async runSideAgent(
     profile: AgentProfile,
     systemPrompt: string,
     prompt: string,
-    eventType: 'plan' | 'review',
+    eventType: 'plan' | 'goal' | 'review',
   ): Promise<void> {
     if (this.controller) {
       this.client.onOutput({ type: 'error', message: 'A task is already running.' });
@@ -1186,11 +1192,11 @@ export class Session {
     this.log(`${eventType.toUpperCase()} ${JSON.stringify(prompt)}`);
 
     try {
-      // /plan and /review are broad by nature — "review the CLI" means reading a
-      // whole subtree. Without the context tool the deep model does all of that
-      // reading itself, at deep-model prices, which is exactly what the fast tier
-      // exists to avoid. Handing it the same tool the coder gets lets it fan the
-      // survey out and reason over the summaries instead.
+      // /plan, /goal and /review are broad by nature — "review the CLI" means
+      // reading a whole subtree. Without the context tool the deep model does
+      // all of that reading itself, at deep-model prices, which is exactly what
+      // the fast tier exists to avoid. Handing it the same tool the coder gets
+      // lets it fan the survey out and reason over the summaries instead.
       //
       // No recursion risk: context sub-agents get read-only file tools only, so
       // they cannot call `context` themselves.
@@ -1220,7 +1226,15 @@ export class Session {
       const durationMs = Date.now() - startMs;
       const usage = agent.lastTokenUsage;
 
-      if (eventType === 'plan') this.pendingPlan = text;
+      // /goal shares the plan slot rather than getting its own: both exist to
+      // prime the next run() call with context the user approved beforehand,
+      // and juggling two independent pending-context fields (with their own
+      // precedence rules against `steeringContext`) would be complexity run()
+      // doesn't need for what is, to it, the same injection either way.
+      if (eventType === 'plan' || eventType === 'goal') {
+        this.pendingPlan = text;
+        this.pendingPlanLabel = eventType === 'goal' ? 'Goal' : 'Plan';
+      }
       this.client.onOutput({ type: eventType, text });
 
       // After the result, for the same reason as in run().
@@ -1249,6 +1263,15 @@ export class Session {
    *  before any code changes happen. */
   async plan(task: string): Promise<void> {
     await this.runSideAgent(resolveRoleProfile(this.config, 'planner'), PLANNER_AGENT_PROMPT, task, 'plan');
+  }
+
+  /** Same shape as /plan, but the prompt starts from the destination — what
+   *  "done" looks like — before it sketches a rough breakdown, rather than
+   *  starting from a step list. Runs on the same tier as /plan — it's a
+   *  different framing of the same class of work, not a capability that needs
+   *  its own model knob. */
+  async goal(task: string): Promise<void> {
+    await this.runSideAgent(resolveRoleProfile(this.config, 'planner'), GOAL_AGENT_PROMPT, task, 'goal');
   }
 
   /** Runs the reviewer alone against the current workspace state — usable any

@@ -25,6 +25,7 @@ const execFileAsync = promisify(execFile);
 /** The subset of the engine Session the commands need. */
 export interface CommandSession {
   plan(task: string): Promise<unknown>;
+  goal(task: string): Promise<unknown>;
   review(notes?: string): Promise<unknown>;
   clear(): Promise<string>;
   backgroundJobs: {
@@ -105,6 +106,10 @@ export function runSlashCommand(input: string, deps: CommandDeps): void {
 
     case 'plan':
       start(`/plan ${command.args}`, s => s.plan(command.args));
+      return;
+
+    case 'goal':
+      start(`/goal ${command.args}`, s => s.goal(command.args));
       return;
 
     case 'review':

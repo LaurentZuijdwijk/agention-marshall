@@ -215,6 +215,13 @@ export function createEngineClient(port: TranscriptPort): ClientInterface {
           port.turnEnded('done');
           break;
 
+        case 'goal':
+          port.push('markdown', event.text, {
+            title: 'goal',
+            note: 'will be used as context for your next task',
+          });
+          port.turnEnded('done');
+          break;
 
         case 'review':
           port.push('markdown', event.text, { title: 'review' });

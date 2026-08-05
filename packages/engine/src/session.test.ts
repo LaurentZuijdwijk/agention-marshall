@@ -304,6 +304,26 @@ test('plan() while a run is already in progress emits an error event', async () 
   assert.ok(concurrencyError, 'expected an "already running" error event');
 });
 
+test('goal() while a run is already in progress emits an error event', async () => {
+  const root = tempRoot();
+  const events: OutputEvent[] = [];
+  const client = makeClient(events);
+  const session = makeSession(root, client);
+
+  const first = session.run('task one').catch(() => {});
+  const second = session.goal('achieve this').catch(() => {});
+
+  await Promise.all([first, second]);
+
+  const errorEvents = events.filter(
+    (e): e is Extract<OutputEvent, { type: 'error' }> => e.type === 'error',
+  );
+  const concurrencyError = errorEvents.find((e) =>
+    e.message.toLowerCase().includes('already running'),
+  );
+  assert.ok(concurrencyError, 'expected an "already running" error event');
+});
+
 test('review() while a run is already in progress emits an error event', async () => {
   const root = tempRoot();
   const events: OutputEvent[] = [];

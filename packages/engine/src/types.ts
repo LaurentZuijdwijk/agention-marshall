@@ -74,6 +74,9 @@ export type OutputEvent =
    * where this one left off. */
   | { type: 'context-full'; compressed: boolean }
   | { type: 'plan'; text: string }
+  /** Same idea as `plan`, but the sub-agent was asked for the destination
+   *  (success criteria, what "done" means) rather than the route. */
+  | { type: 'goal'; text: string }
   | { type: 'review'; text: string }
   /**
    * The full picture of every configured MCP server, pushed on each change.

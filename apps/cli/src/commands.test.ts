@@ -35,6 +35,7 @@ function setup(overrides: Partial<CommandDeps> & { jobs?: BackgroundJob[]; serve
   const modes: Mode[] = [];
   const calls = {
     plan: [] as string[],
+    goal: [] as string[],
     review: [] as (string | undefined)[],
     cleared: 0,
     denyAll: 0,
@@ -53,6 +54,7 @@ function setup(overrides: Partial<CommandDeps> & { jobs?: BackgroundJob[]; serve
 
   const session: CommandSession = {
     plan: async (task) => { calls.plan.push(task); },
+    goal: async (task) => { calls.goal.push(task); },
     review: async (notes) => { calls.review.push(notes); },
     clear: async () => { calls.cleared++; return 'history cleared'; },
     backgroundJobs: {
@@ -132,6 +134,14 @@ describe('runSlashCommand', () => {
     assert.deepEqual(modes, [{ type: 'running' }]);
   });
 
+  it('echoes /goal, runs it, and goes busy', async () => {
+    const { deps, calls, pushed, modes } = setup();
+    runSlashCommand('/goal add a login form', deps);
+    assert.deepEqual(calls.goal, ['add a login form']);
+    assert.deepEqual(pushed, [{ role: 'user', content: '/goal add a login form' }]);
+    assert.deepEqual(modes, [{ type: 'running' }]);
+  });
+
   it('passes undefined for a bare /review', () => {
     const { deps, calls } = setup();
     runSlashCommand('/review', deps);
@@ -142,6 +152,7 @@ describe('runSlashCommand', () => {
     const { deps, pushed, modes } = setup({
       session: {
         plan: async () => { throw new Error('provider unreachable'); },
+        goal: async () => {},
         review: async () => {},
         clear: async () => 'cleared',
         backgroundJobs: { list: () => [], kill: () => false, killAll: () => {} },
