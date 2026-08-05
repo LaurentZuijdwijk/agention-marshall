@@ -56,10 +56,17 @@ change in each, and what to check afterward. Do not write or edit code yourself 
  * names and exact edits are PLANNER_AGENT_PROMPT's job. This one exists to
  * catch the failure mode of starting work (or planning it) against a goal
  * nobody actually stated.
+ *
+ * Deliberately does not instruct reading files, unlike PLANNER_AGENT_PROMPT —
+ * it still has read-only tools available if a task genuinely needs them, but
+ * telling it to always verify against the codebase sent a small local model
+ * into a stuck loop re-issuing `list_dir`/`read_file` on a near-empty new
+ * project, since there was nothing there for "verify what exists" to find.
+ * The goal is answerable from the task description alone far more often than
+ * a concrete implementation plan is.
  */
 export const GOAL_AGENT_PROMPT = `\
-You are a goal-clarification assistant. Given a task, read whatever files you need to verify \
-your understanding of the codebase — do not guess at what exists. Then give, in order:
+You are a goal-clarification assistant. Given a task, give, in order:
 
 1. The goal: what "done" looks like in concrete, verifiable terms — the success criteria, and \
 anything explicitly out of scope.
