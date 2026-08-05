@@ -17,6 +17,17 @@ import type { CliFlags } from './args.js';
 /** A startup problem the user can fix — reported as a message, not a stack. */
 export class StartupError extends Error {}
 
+type ReasoningEffort = NonNullable<AgentProfile['reasoningEffort']>;
+const REASONING_EFFORTS: readonly ReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+
+function checkReasoningEffort(value: string | undefined): ReasoningEffort | undefined {
+  if (value === undefined) return undefined;
+  if (!REASONING_EFFORTS.includes(value as ReasoningEffort)) {
+    throw new StartupError(`Unknown reasoning effort "${value}". Valid: ${REASONING_EFFORTS.join(', ')}`);
+  }
+  return value as ReasoningEffort;
+}
+
 export interface ResolvedProfiles {
   /** The deep tier: the model that writes code, plans and reviews. */
   agentProfile: AgentProfile;
@@ -50,6 +61,7 @@ export function resolveProfiles(flags: CliFlags, config: SavedConfig): ResolvedP
     model:  flags.model ?? saved.model,
     apiKey: flags.apiKey ?? saved.apiKey ?? byProvider[provider]?.apiKey,
     host:   flags.host   ?? saved.host   ?? byProvider[provider]?.host,
+    reasoningEffort: checkReasoningEffort(flags.reasoningEffort ?? saved.reasoningEffort),
   };
 
   return {
@@ -101,6 +113,7 @@ function resolveFastProfile(
       ?? saved?.host
       ?? savedProviders(config)[fastProvider]?.host
       ?? (sameProvider ? deep.host : undefined),
+    reasoningEffort: saved?.reasoningEffort,
   };
 }
 

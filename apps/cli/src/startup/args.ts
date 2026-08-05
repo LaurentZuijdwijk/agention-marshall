@@ -21,6 +21,7 @@ const OPTIONS = {
   'planner-model':  { type: 'string'  },
   'reviewer-model': { type: 'string'  },
   'max-tokens':     { type: 'string'  },
+  'reasoning-effort': { type: 'string' },
   'fast-model':     { type: 'string'  },
   'fast-provider':  { type: 'string'  },
   'fast-host':      { type: 'string'  },
@@ -35,6 +36,7 @@ export interface CliFlags {
   apiKey?: string;
   host?: string;
   maxTokens?: string;
+  reasoningEffort?: string;
   fastProvider?: string;
   fastModel?: string;
   fastHost?: string;
@@ -65,6 +67,7 @@ export function parseCliArgs(argv: string[] = process.argv.slice(2)): CliFlags {
     apiKey:         str(values['api-key']),
     host:           str(values.host),
     maxTokens:      str(values['max-tokens']),
+    reasoningEffort: str(values['reasoning-effort']),
     fastProvider:   str(values['fast-provider']),
     fastModel:      str(values['fast-model']),
     fastHost:       str(values['fast-host']),

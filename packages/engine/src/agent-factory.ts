@@ -3,10 +3,23 @@ import type { Tool } from '@agentionai/agents/core';
 import type { History } from '@agentionai/agents/core';
 import type { BaseAgent } from '@agentionai/agents/core';
 import type { BuiltInTool } from '@agentionai/agents/core';
+import { OpenAICompatibleAgent } from '@agentionai/agents';
+import type { OpenAICompatibleConfig } from '@agentionai/agents';
 import { resolveAuth, resolveModel, resolveMaxTokens, PROVIDER_DEFAULTS } from './config.js';
 import type { AgentProfile } from './config.js';
 
 const PROJECT_MEMORY_HEADER = '\n\n## Project memory (AGENTS.md)\n\n';
+
+/** OpenRouter uses the generic chat-completions protocol, not llama.cpp. */
+class OpenRouterAgent extends OpenAICompatibleAgent {
+  constructor(config: OpenAICompatibleConfig, history: History) {
+    super({ ...config, vendor: 'openai' }, history);
+  }
+
+  protected getVendorName(): string {
+    return 'OpenRouter';
+  }
+}
 
 const SYSTEM_PROMPT = `\
 You are Marshall, a coding assistant. Be terse and direct — no filler, no emojis, no padding.
@@ -122,6 +135,9 @@ export async function createAgent(
     model,
     tools,
     ...(cap !== undefined ? { maxTokens: cap } : {}),
+    ...(profile.provider === 'openai' && profile.reasoningEffort !== undefined
+      ? { reasoningEffort: profile.reasoningEffort }
+      : {}),
   };
 
   const agent = await instantiate();
@@ -172,14 +188,11 @@ export async function createAgent(
         return new LlamaCppAgent({ ...base, baseURL: `${llamaHost}/v1` } as ConstructorParameters<typeof LlamaCppAgent>[0], history);
       }
       case 'openrouter': {
-        // OpenRouter speaks the same OpenAI-compatible /v1/chat/completions API as
-        // llama.cpp — reuse LlamaCppAgent (it's really just "OpenAI chat-completions
-        // client with a configurable baseURL", not llama.cpp-specific) rather than
-        // OpenAiAgent, which targets OpenAI's newer Responses API that OpenRouter
-        // doesn't support.
-        const { LlamaCppAgent } = await import('@agentionai/agents/llamacpp');
         const routerHost = profile.host ?? PROVIDER_DEFAULTS.openrouter.host;
-        return new LlamaCppAgent({ ...base, baseURL: routerHost } as ConstructorParameters<typeof LlamaCppAgent>[0], history);
+        return new OpenRouterAgent({
+          ...base,
+          baseURL: routerHost,
+        } as OpenAICompatibleConfig, history);
       }
       default: {
         const _: never = profile.provider;

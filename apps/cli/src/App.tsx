@@ -194,7 +194,9 @@ export function App({
   // server nothing defines otherwise looks exactly like a project with no MCP,
   // and the user has no reason to go looking.
   useEffect(() => {
-    for (const warning of mcpWarnings ?? []) transcript.push('error', warning);
+    // A dangling project selection is actionable configuration guidance, not a
+    // failed connection; keep it in the informational MCP status style.
+    for (const warning of mcpWarnings ?? []) transcript.push('info', warning);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── quitting ───────────────────────────────────────────────────────────────

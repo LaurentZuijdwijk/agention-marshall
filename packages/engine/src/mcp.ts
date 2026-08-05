@@ -1,6 +1,6 @@
-import { MCPClient } from '@agentionai/agents/core';
+import { MCPClient, MCPClientEvent } from '@agentionai/agents/core';
 import type { Tool } from '@agentionai/agents/core';
-import { adaptMcpTools } from '@agentionai/marshall-tools';
+import { adaptMcpTools, namespaceMcpTool } from '@agentionai/marshall-tools';
 import type { ToolConfig } from '@agentionai/marshall-tools';
 
 /**
@@ -97,6 +97,15 @@ export class McpRegistry {
         clientName: 'marshall',
         ...(record.config.headers ? { headers: record.config.headers } : {}),
       });
+      // MCPClient is an EventEmitter and emits errors in addition to rejecting
+      // calls. Keep the process alive and refresh the registry when the server
+      // changes its tool list or reconnects.
+      client.on(MCPClientEvent.ERROR, () => {});
+      const refresh = () => {
+        record.tools = client.getTools();
+      };
+      client.on(MCPClientEvent.TOOLS_CHANGED, refresh);
+      client.on(MCPClientEvent.RECONNECTED, refresh);
       // MCPClient.connect has no timeout of its own, and a URL that accepts a
       // socket but never completes the handshake would otherwise hang the first
       // turn with no way to interrupt it.
@@ -188,7 +197,7 @@ function adaptedNames(record: ServerRecord): string[] {
   if (record.status !== 'connected') return [];
   // Read through getPrompt rather than `.name`, for the same reason the adapter
   // does: it is the public accessor for a Tool's advertised triple.
-  return record.tools.map(t => t.getPrompt().name);
+  return record.tools.map(t => namespaceMcpTool(record.config.name, t.getPrompt().name));
 }
 
 async function close(record: ServerRecord): Promise<void> {

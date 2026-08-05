@@ -58,6 +58,12 @@ describe('slashCommands', () => {
       assert.equal(result.type, 'tokens');
     });
 
+    it('returns version and update commands', () => {
+      assert.deepEqual(resolveSlashCommand('/version'), { type: 'version' });
+      assert.deepEqual(resolveSlashCommand('/update'), { type: 'update' });
+      assert.equal(resolveSlashCommand('/update now').type, 'usage');
+    });
+
     it('returns plan with args for /plan <task>', () => {
       const result = resolveSlashCommand('/plan add a login form');
       assert.equal(result.type, 'plan');

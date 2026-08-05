@@ -31,6 +31,7 @@ export interface SavedProfile {
   model?: string;
   host?: string;
   apiKey?: string;
+  reasoningEffort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 }
 
 /** Last-used connection details for one provider, kept across switches. */
@@ -286,6 +287,7 @@ function strip(profile: AgentProfile): SavedProfile {
     model: profile.model,
     ...(profile.host !== undefined ? { host: profile.host } : {}),
     ...(profile.apiKey ? { apiKey: profile.apiKey } : {}),
+    ...(profile.reasoningEffort !== undefined ? { reasoningEffort: profile.reasoningEffort } : {}),
   };
 }
 

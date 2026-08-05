@@ -331,6 +331,15 @@ describe('/mcp', () => {
     assert.match(pushed[0].content, /ECONNREFUSED/);
   });
 
+  it('keeps dangling project selections in the informational status style', () => {
+    const { deps, pushed } = setup({
+      mcpWarnings: ['"garmin" is selected but no server is defined'],
+    });
+    runSlashCommand('/mcp', deps);
+    assert.equal(pushed[0].role, 'info');
+    assert.match(pushed[0].content, /garmin/);
+  });
+
   it('opens the wizard for /mcp add rather than doing anything itself', () => {
     const { deps, modes, pushed } = setup();
     runSlashCommand('/mcp add', deps);
