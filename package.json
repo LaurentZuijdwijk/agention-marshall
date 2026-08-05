@@ -6,7 +6,7 @@
     "packages/*"
   ],
   "scripts": {
-    "cli": "node --import tsx/esm apps/cli/src/index.tsx",
+    "cli": "npm run build -w packages/tools -w packages/engine && node --import tsx/esm apps/cli/src/index.tsx",
     "test": "npm run test --workspaces --if-present"
   },
   "devDependencies": {

@@ -15,6 +15,7 @@
     "access": "public"
   },
   "scripts": {
+    "build": "tsc",
     "prepare": "tsc",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx/esm --test 'src/**/*.test.ts'"
