@@ -1,5 +1,42 @@
 # @agentionai/marshall-cli
 
+## 0.8.0
+
+### Minor Changes
+
+- 6f94195: Add `/goal`, a destination-first sibling to `/plan`.
+
+  `/plan` starts from "what steps"; `/goal` starts from "what does done look like" and only
+  sketches a rough breakdown once that's pinned down — success criteria and scope stay separate
+  from exact files and edits, which is still `/plan`'s job. Runs on the same tier as `/plan` and
+  shares its pending-context slot, so the result primes the next task the same way a plan does.
+
+### Patch Changes
+
+- 6f94195: Recover from a full context window instead of failing the turn.
+
+  llama.cpp's small local context windows were surfacing raw 400s to the user, sometimes after a
+  multi-attempt retry storm that still failed. The token estimate used to size compression is
+  unreliable for code-heavy content, so guessing a fixed compression target or retrying blindly
+  wasted time and often failed anyway.
+
+  A context-length error now triggers one bounded compression pass — `reduceToTarget` walks down
+  in small steps so no single summarisation prompt can itself blow the same small context window
+  it's trying to recover from — sized to the actual measured overage in the provider's own error
+  rather than a flat percentage of the window. The task is then handed back to the user via the
+  existing steering-context mechanism (same as an Esc-interrupt) instead of auto-retrying, and the
+  CLI shows a plain "context window full" message instead of the raw provider error.
+
+  Also: the summariser agent's own history is now transient, so repeated compressions in one
+  session don't silently accumulate their own unbounded context; and provider error details
+  (status, response body) are now logged end-to-end for diagnosing recovery in production.
+
+- Updated dependencies [6f94195]
+- Updated dependencies [6f94195]
+- Updated dependencies [6f94195]
+  - @agentionai/marshall-engine@0.6.0
+  - @agentionai/marshall-tools@0.4.1
+
 ## 0.7.0
 
 ### Minor Changes
