@@ -1,5 +1,13 @@
 # @agentionai/marshall-cli
 
+## 0.8.1
+
+### Patch Changes
+
+- 91a4334: Bump alongside `@agentionai/marshall-engine`'s fix for `/goal` getting stuck in a repeated
+  tool-call loop on small local models — the CLI is where that loop was actually experienced, so
+  its own version should reflect the fix too.
+
 ## 0.8.0
 
 ### Minor Changes
