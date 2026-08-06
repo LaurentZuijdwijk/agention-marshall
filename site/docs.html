@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>marshall — documentation</title>
+<meta name="description" content="marshall CLI documentation: installation, configuration, models, commands, tools, MCP and troubleshooting.">
+<meta name="color-scheme" content="dark">
+<style>
+:root{--bg:#0B0D10;--bg2:#10131A;--border:#1F2430;--text:#E5E7EB;--muted:#8A93A6;--accent:#A78BFA;--code:#7DD3FC;--ok:#34D399;--mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace}*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.7 var(--mono)}a{color:var(--accent)}nav,footer{border-color:var(--border);border-style:solid}nav{border-width:0 0 1px;position:sticky;top:0;background:rgba(11,13,16,.94);z-index:2}.wrap{max-width:1100px;margin:auto;padding:0 24px}.nav{height:52px;display:flex;align-items:center;gap:22px}.logo{font-size:19px;font-weight:700;background:linear-gradient(90deg,#8B5CF6,#22D3EE);color:transparent;background-clip:text}.spacer{flex:1}.nav a{text-decoration:none;color:var(--muted);font-size:12px}.nav .logo a{color:inherit;font-size:19px}.layout{display:grid;grid-template-columns:210px minmax(0,720px);gap:58px;padding-top:54px}.toc{position:sticky;top:85px;align-self:start;border-left:1px solid var(--border);padding-left:18px}.toc a{display:block;color:var(--muted);font-size:12px;text-decoration:none;margin:6px 0}.toc a:hover{color:var(--text)}h1{font-size:32px;line-height:1.2;margin:0 0 10px}h2{font-size:21px;color:var(--accent);border-top:1px solid var(--border);padding-top:28px;margin:52px 0 12px}h3{font-size:16px;margin:25px 0 4px;color:var(--code)}p{margin:8px 0 18px}ul{padding-left:25px}code,pre{background:var(--bg2);border:1px solid var(--border);border-radius:4px}code{padding:1px 5px;color:var(--code)}pre{padding:15px;overflow:auto;color:var(--code);font-size:13px}table{border-collapse:collapse;width:100%;margin:15px 0 22px}th,td{text-align:left;border-bottom:1px solid var(--border);padding:8px 10px;vertical-align:top}th{color:var(--muted);font-size:12px}footer{border-width:1px 0 0;margin-top:70px;padding:24px 0;color:var(--muted);font-size:12px}@media(max-width:760px){.layout{display:block;padding-top:30px}.toc{position:static;margin:25px 0 40px;padding:12px 0 4px;border-left:0;border-top:1px solid var(--border)}.toc a{display:inline-block;margin:4px 14px 4px 0}.nav{gap:12px}.nav .optional{display:none}}
+</style>
+</head>
+<body>
+<nav><div class="wrap nav"><span class="logo"><a href="index.html">marshall</a></span><a class="optional" href="index.html">home</a><a class="optional" href="index.html#commands">commands</a><span class="spacer"></span><a href="https://github.com/LaurentZuijdwijk/agention-marshall">github ↗</a></div></nav>
+<main class="wrap layout">
+<aside class="toc" aria-label="On this page"><strong>docs</strong><a href="#install">install</a><a href="#config">configuration</a><a href="#models">models & tiering</a><a href="#commands">commands</a><a href="#tools">tools & approvals</a><a href="#jobs">background jobs</a><a href="#mcp">MCP</a><a href="#memory">project memory</a><a href="#troubleshooting">troubleshooting</a></aside>
+<article>
+<h1>documentation</h1><p>marshall is a terminal coding agent. It plans, reads, edits and runs your project, while keeping you in control of every mutation.</p>
+<h2 id="install">install & first run</h2>
+<p>Install the CLI globally from npm, then run <code>marshall</code> from the workspace you want it to change. Node.js 22 or newer is required:</p>
+<pre><code>npm install --global @agentionai/marshall-cli
+cd /path/to/project
+marshall</code></pre>
+<p>Use <code>marshall --workspace /path/to/project</code> to select a project explicitly from any directory. Local providers such as llama.cpp and Ollama need no account or API key. Hosted providers can be configured when you need them.</p>
+<h2 id="config">configuration</h2>
+<p>Configuration has a deliberate security boundary:</p>
+<ul><li><code>~/.config/marshall/config.json</code> is private, mode <code>0600</code>, and may contain credentials.</li><li><code>&lt;workspace&gt;/.marshall/config.json</code> is project configuration and may be committed. It must never contain tokens, API keys or other secrets.</li></ul>
+<p>Runtime credentials and OAuth material belong in the global config or your home directory, never in the workspace.</p>
+<h2 id="models">models & tiering</h2>
+<p>Marshall supports local and hosted providers. The deep model handles coding, planning and review; the fast model reads files and summarises context. Use <code>/model</code> to choose them, or <code>/model off</code> to use one model for everything.</p>
+<h2 id="commands">slash commands</h2>
+<table><thead><tr><th>command</th><th>purpose</th></tr></thead><tbody>
+<tr><td><code>/help</code></td><td>Show command help.</td></tr><tr><td><code>/login</code></td><td>Authenticate with your Claude account.</td></tr><tr><td><code>/model [deep|fast|off]</code></td><td>Choose models and tiering.</td></tr><tr><td><code>/plan &lt;task&gt;</code></td><td>Get a plan for the next task.</td></tr><tr><td><code>/goal &lt;task&gt;</code></td><td>Clarify what done means.</td></tr><tr><td><code>/review [notes]</code></td><td>Request a second opinion on the workspace.</td></tr><tr><td><code>/jobs [kill &lt;id&gt;|kill all]</code></td><td>List or stop background jobs.</td></tr><tr><td><code>/mcp [add|remove|reconnect]</code></td><td>Manage MCP servers.</td></tr><tr><td><code>/clear</code></td><td>Clear history, dedupe cache and scratch notes.</td></tr><tr><td><code>/tokens</code>, <code>/stream</code></td><td>Toggle usage details or live streaming.</td></tr><tr><td><code>/light</code></td><td>Use a smaller tool belt for small models.</td></tr><tr><td><code>/version</code>, <code>/update</code></td><td>Show or update marshall.</td></tr><tr><td><code>/cwd</code>, <code>/memory</code></td><td>Show workspace path or project memory.</td></tr><tr><td><code>/exit</code></td><td>Quit.</td></tr></tbody></table>
+<p><strong>Keyboard:</strong> Esc interrupts and enters steering mode; Ctrl-R toggles live reasoning; Ctrl-V attaches a clipboard image; Ctrl-C interrupts or quits; press Esc twice or Ctrl-C twice to force quit.</p>
+<h2 id="tools">tools & approval</h2>
+<p>The agent can inspect files, edit files, run commands, delegate context work and manage background jobs. Operations that can change your project or execute commands pass through the approval gate. Review the command, caller and proposed input before allowing it. Read-only inspection does not mutate files.</p>
+<h2 id="jobs">background jobs</h2>
+<p>Long-running shell commands can continue in the background. Use <code>/jobs</code> to see them and <code>/jobs kill &lt;id&gt;</code> or <code>/jobs kill all</code> to stop them. Completed jobs can resume the conversation with their output.</p>
+<h2 id="mcp">MCP</h2>
+<p>Use <code>/mcp add</code> to connect an HTTP MCP server, <code>/mcp</code> to list its tools, and <code>/mcp remove &lt;name&gt;</code> or <code>/mcp reconnect &lt;name&gt;</code> to manage it. Project-declared servers may use a URL, but authentication headers are taken only from trusted global configuration.</p>
+<h2 id="memory">project memory</h2>
+<p><code>AGENTS.md</code> contains durable instructions and project context. Use <code>/memory</code> to inspect the memory visible to the agent. Keep credentials out of it and out of committed project configuration.</p>
+<h2 id="troubleshooting">troubleshooting</h2>
+<h3>Context window full</h3><p>Start a fresh task or use <code>/clear</code>. Reduce unnecessary context and use the fast tier for file-reading work.</p>
+<h3>Local server unreachable</h3><p>Check that llama.cpp or Ollama is running, its host and port are correct, and the selected model is loaded.</p>
+<h3>Where are logs?</h3><p>Session logs are stored under <code>.marshall/logs/session.log</code> in the workspace.</p>
+</article></main>
+<footer><div class="wrap"><span>◆ marshall — built on <a href="https://docs.agention.ai">agention</a></span><span style="float:right"><a href="index.html">home</a> · <a href="https://github.com/LaurentZuijdwijk/agention-marshall">github</a> · MIT licensed</span></div></footer>
+</body></html>
