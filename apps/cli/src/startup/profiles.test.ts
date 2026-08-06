@@ -111,8 +111,12 @@ describe('resolveProfiles — roles and limits', () => {
   it('reuses the deep provider, key and host for role overrides', () => {
     const config: SavedConfig = { models: { deep: { provider: 'openai', model: 'gpt-4o', apiKey: 'k', host: 'http://h' } } };
     const { plannerAgentProfile } = resolveProfiles(flags({ plannerModel: 'o3-mini' }), config);
+    // `reasoningEffort` is present-but-undefined, like `model`/`apiKey`/`host`
+    // when those are unset: resolveProfiles always writes the key. deepStrictEqual
+    // tells that apart from an absent key, so it has to be spelled out here.
     assert.deepStrictEqual(plannerAgentProfile, {
       provider: 'openai', model: 'o3-mini', apiKey: 'k', host: 'http://h',
+      reasoningEffort: undefined,
     });
   });
 
@@ -146,10 +150,33 @@ describe('parseCliArgs', () => {
     assert.strictEqual(parseCliArgs(['--no-web-search']).webSearch, false);
   });
 
+  it('leaves --light undefined when absent, so the config still has a say', () => {
+    assert.strictEqual(parseCliArgs([]).light, undefined);
+    assert.strictEqual(parseCliArgs(['--light']).light, true);
+  });
+
   it('maps kebab-case flags onto camelCase fields', () => {
     const parsed = parseCliArgs(['--fast-model', 'small', '--fast-host', 'http://box:8080', '--reviewer-model', 'r']);
     assert.strictEqual(parsed.fastModel, 'small');
     assert.strictEqual(parsed.fastHost, 'http://box:8080');
     assert.strictEqual(parsed.reviewerModel, 'r');
+  });
+});
+
+describe('resolveProfiles — light mode', () => {
+  it('is off unless asked for', () => {
+    assert.strictEqual(resolveProfiles(flags(), {}).light, false);
+  });
+
+  it('is on with --light', () => {
+    assert.strictEqual(resolveProfiles(flags({ light: true }), {}).light, true);
+  });
+
+  it('is on from the config, so a machine with a small local model starts lean', () => {
+    assert.strictEqual(resolveProfiles(flags(), { light: true }).light, true);
+  });
+
+  it('takes --light on top of a config that does not set it', () => {
+    assert.strictEqual(resolveProfiles(flags({ light: true }), { light: false }).light, true);
   });
 });

@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { isNewer, updateNotice, checkForUpdate } from './update-check.js';
+import { isNewer, describeUpdate, manualInstallCommand, checkForUpdate } from './update-check.js';
 
 describe('isNewer', () => {
   it('compares fields numerically, not as strings', () => {
@@ -32,17 +32,22 @@ describe('isNewer', () => {
   });
 });
 
-describe('updateNotice', () => {
-  it('names both versions and how to upgrade', () => {
-    const notice = updateNotice('2.0.0', '1.0.0', '@agentionai/marshall-cli');
-    assert.match(notice!, /1\.0\.0 → 2\.0\.0/);
-    assert.match(notice!, /npm install -g @agentionai\/marshall-cli@latest/);
+describe('describeUpdate', () => {
+  it('names both versions', () => {
+    assert.match(describeUpdate({ current: '1.0.0', latest: '2.0.0' }), /1\.0\.0 → 2\.0\.0/);
   });
 
-  it('says nothing when there is nothing newer', () => {
-    assert.equal(updateNotice('1.0.0', '1.0.0', 'x'), null);
-    assert.equal(updateNotice('0.9.0', '1.0.0', 'x'), null,
-      'a dev build ahead of the registry must not be told to "update" backwards');
+  it('does not say how to install — the caller decides that', () => {
+    // The startup row points at `/update`; `/update` itself is already
+    // installing. A baked-in instruction always read wrong for one of them.
+    assert.doesNotMatch(describeUpdate({ current: '1.0.0', latest: '2.0.0' }), /npm install/);
+  });
+});
+
+describe('manualInstallCommand', () => {
+  it('is a command the user can paste when the automatic install fails', () => {
+    assert.equal(manualInstallCommand('@agentionai/marshall-cli'),
+      'npm install -g @agentionai/marshall-cli@latest');
   });
 });
 
@@ -70,10 +75,20 @@ describe('checkForUpdate', () => {
     }
   });
 
-  it('reports a newer published version', async () => {
+  it('reports the version pair when the registry is ahead', async () => {
     stubFetch(async () => ({ ok: true, json: async () => ({ version: '99.0.0' }) }));
     try {
-      assert.match((await checkForUpdate())!, /update available: .* → 99\.0\.0/);
+      assert.deepEqual(await checkForUpdate('1.2.3'), { current: '1.2.3', latest: '99.0.0' });
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  it('returns null when the local build is ahead of the registry', async () => {
+    stubFetch(async () => ({ ok: true, json: async () => ({ version: '0.1.0' }) }));
+    try {
+      assert.equal(await checkForUpdate('9.9.9'), null,
+        'a dev build ahead of the registry must not be told to "update" backwards');
     } finally {
       globalThis.fetch = realFetch;
     }

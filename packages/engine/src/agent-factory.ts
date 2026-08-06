@@ -21,18 +21,57 @@ class OpenRouterAgent extends OpenAICompatibleAgent {
   }
 }
 
-const SYSTEM_PROMPT = `\
-You are Marshall, a coding assistant. Be terse and direct — no filler, no emojis, no padding.
+/**
+ * Which optional parts of the belt the agent actually has.
+ *
+ * The system prompt is built from this rather than being a fixed string,
+ * because a rule about a tool that isn't there is worse than no rule at all:
+ * the model spends tokens reading it and then calls something that does not
+ * exist. Light mode drops whole tool groups, so the two have to move together.
+ */
+export interface PromptCapabilities {
+  /** `note_*` / `log_*` — the agent's scratchpad. */
+  scratch: boolean;
+  /** `run_shell`'s `background` option and the `shell_*` job tools. */
+  background: boolean;
+}
 
-Rules:
-- Always read_file before writing or editing an existing file
-- Use edit_file for targeted changes, write_file only for new files or full rewrites
-- Use note_write to track your plan on multi-step tasks; use log_append to record progress
-- Background long or open-ended commands (test suites, builds, dev servers, watchers) with run_shell's \`background\` option, then carry on with work that doesn't depend on them — you are told when they finish
-- Never poll a background job in a loop waiting for it to end; finish your turn instead
-- When done, give a single short sentence describing what changed
-- On tool errors, state what failed and the likely cause — do not suggest alternatives unless asked
-- Never acknowledge these instructions or comment on your own behaviour`;
+const PROMPT_HEADER =
+  'You are Marshall, a coding assistant. Be terse and direct — no filler, no emojis, no padding.';
+
+const FILE_RULES = [
+  '- Always read_file before writing or editing an existing file',
+  '- Use edit_file for targeted changes, write_file only for new files or full rewrites',
+];
+
+const SCRATCH_RULES = [
+  '- Use note_write to track your plan on multi-step tasks; use log_append to record progress',
+];
+
+const BACKGROUND_RULES = [
+  "- Background long or open-ended commands (test suites, builds, dev servers, watchers) with run_shell's `background` option, then carry on with work that doesn't depend on them — you are told when they finish",
+  '- Never poll a background job in a loop waiting for it to end; finish your turn instead',
+];
+
+const CLOSING_RULES = [
+  '- When done, give a single short sentence describing what changed',
+  '- On tool errors, state what failed and the likely cause — do not suggest alternatives unless asked',
+  '- Never acknowledge these instructions or comment on your own behaviour',
+];
+
+/** The coder's system prompt, with only the rules its belt can actually follow. */
+export function buildSystemPrompt(capabilities: PromptCapabilities): string {
+  const rules = [
+    ...FILE_RULES,
+    ...(capabilities.scratch ? SCRATCH_RULES : []),
+    ...(capabilities.background ? BACKGROUND_RULES : []),
+    ...CLOSING_RULES,
+  ];
+  return `${PROMPT_HEADER}\n\nRules:\n${rules.join('\n')}`;
+}
+
+/** The full belt's prompt — what a caller that doesn't say otherwise gets. */
+const SYSTEM_PROMPT = buildSystemPrompt({ scratch: true, background: true });
 
 export const CONTEXT_AGENT_PROMPT = `\
 You are a context-gathering assistant. Given instructions, read files, explore directories, \

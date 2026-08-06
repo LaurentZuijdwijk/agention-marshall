@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   parseLlamaCppModels, applyLlamaCppProps, parseOllamaModels, parseOpenRouterModels,
-  formatContext, formatParams, formatBytes,
+  formatContext, formatParams, formatBytes, formatPrice,
 } from './models.js';
 
 // Shapes below are trimmed from real responses: a llama.cpp router at
@@ -211,6 +211,13 @@ describe('formatting', () => {
     assert.equal(formatBytes(23595286784), '22.0 GB');
     assert.equal(formatBytes(0), '');
   });
+
+  it('formats OpenRouter prices per million tokens', () => {
+    assert.equal(formatPrice(0), 'free');
+    assert.equal(formatPrice(0.00000014), '$0.14/M');
+    assert.equal(formatPrice(0.000002), '$2/M');
+    assert.equal(formatPrice(-1), '');
+  });
 });
 
 // ── openrouter ────────────────────────────────────────────────────────────────
@@ -252,6 +259,34 @@ const OR_NO_TOOLS = {
   supported_parameters: ['temperature'],
   pricing: { prompt: '0.0000001', completion: '0.0000004' },
 };
+const OR_POOLSIDE = {
+  id: 'poolside/laguna-s-2.1',
+  created: 1784652683,
+  context_length: 1048576,
+  architecture: { input_modalities: ['text'], output_modalities: ['text'] },
+  supported_parameters: ['tools', 'reasoning'],
+  pricing: { prompt: '0.00000009', completion: '0.00000018' },
+};
+const OR_POOLSIDE_FREE = {
+  ...OR_POOLSIDE,
+  id: 'poolside/laguna-s-2.1:free',
+  context_length: 262144,
+  pricing: { prompt: '0', completion: '0' },
+};
+const OR_COHERE_FREE = {
+  id: 'cohere/north-mini-code:free',
+  created: 1781723748,
+  architecture: { input_modalities: ['text'], output_modalities: ['text'] },
+  supported_parameters: ['tools', 'reasoning'],
+  pricing: { prompt: '0', completion: '0' },
+};
+const OR_LING_FREE = {
+  id: 'inclusionai/ling-3.0-flash:free',
+  created: 1784818580,
+  architecture: { input_modalities: ['text'], output_modalities: ['text'] },
+  supported_parameters: ['tools', 'reasoning'],
+  pricing: { prompt: '0', completion: '0' },
+};
 const OR_ROLEPLAY = {
   id: 'thedrummer/cydonia-24b-v4.1',
   created: 1758931878,
@@ -265,38 +300,50 @@ describe('parseOpenRouterModels', () => {
 
   it('keeps text-out tool-calling models from headline families', () => {
     const ids = parseOpenRouterModels(payload).map(m => m.id);
-    assert.deepEqual(ids, [OR_CODING.id, OR_OLDER.id]);
+    assert.deepEqual(ids, [OR_CODING.id, OR_OLDER.id, OR_ROLEPLAY.id]);
   });
 
-  it('drops image generation, meta-routers, non-tool and off-family models', () => {
+  it('drops image generation, meta-routers and non-tool models', () => {
     const ids = parseOpenRouterModels(payload).map(m => m.id);
-    for (const dropped of [OR_IMAGE_GEN.id, OR_ROUTER.id, OR_NO_TOOLS.id, OR_ROLEPLAY.id]) {
+    for (const dropped of [OR_IMAGE_GEN.id, OR_ROUTER.id, OR_NO_TOOLS.id]) {
       assert.ok(!ids.includes(dropped), `${dropped} should be filtered out`);
     }
+    assert.ok(ids.includes(OR_ROLEPLAY.id), 'supported text models are not family-filtered');
   });
 
   it('sorts pinned presets first, then newest first', () => {
     const ids = parseOpenRouterModels(payload, [OR_OLDER.id]).map(m => m.id);
-    assert.deepEqual(ids, [OR_OLDER.id, OR_CODING.id]);
+    assert.deepEqual(ids, [OR_OLDER.id, OR_CODING.id, OR_ROLEPLAY.id]);
   });
 
-  it('puts free models first within each tier', () => {
-    const freeOlder = { ...OR_OLDER, id: OR_OLDER.id + ':free' };
-    const data = [OR_CODING, freeOlder];
-    assert.deepEqual(parseOpenRouterModels({ data }).map(m => m.id), [freeOlder.id, OR_CODING.id]);
+  it('includes newer free provider families and puts zero-priced models first', () => {
+    const data = [OR_CODING, OR_COHERE_FREE, OR_LING_FREE, OR_POOLSIDE_FREE];
+    assert.deepEqual(parseOpenRouterModels({ data }).map(m => m.id), [
+      OR_LING_FREE.id, OR_POOLSIDE_FREE.id, OR_COHERE_FREE.id, OR_CODING.id,
+    ]);
   });
 
-  it('drops the removed pinned defaults', () => {
-    const id = 'anthropic/claude-sonnet-4.6';
-    const removed = parseOpenRouterModels({ data: [OR_CODING, { ...OR_NO_TOOLS, id }] }).map(m => m.id);
-    assert.ok(!removed.includes(id), `${id} should be excluded`);
+  it('keeps the full catalogue beyond 60 models', () => {
+    const freeOlder = { ...OR_OLDER, id: OR_OLDER.id + ':free', pricing: { prompt: '0', completion: '0' } };
+    const freeNewest = { ...OR_CODING, id: OR_CODING.id + ':free', pricing: { prompt: '0', completion: '0' } };
+    const data = [OR_CODING, freeOlder, freeNewest];
+    assert.deepEqual(parseOpenRouterModels({ data }).map(m => m.id), [freeNewest.id, freeOlder.id, OR_CODING.id]);
+
+    const many = Array.from({ length: 61 }, (_, i) => ({
+      ...OR_OLDER, id: `deepseek/model-${i}`, created: OR_OLDER.created - i,
+    }));
+    assert.equal(parseOpenRouterModels({ data: many }).length, 61);
   });
 
-  it('carries context and extra input modalities', () => {
-    const [m] = parseOpenRouterModels(payload);
+  it('carries context and OpenRouter metadata', () => {
+    const [m] = parseOpenRouterModels({ data: [{ ...OR_CODING, name: 'Claude Sonnet', top_provider: { max_completion_tokens: 8192 }, reasoning: { default_enabled: true } }] });
     assert.equal(m.context, 1000000);
     assert.equal(m.contextSource, 'configured');
     assert.deepEqual(m.extraModalities, ['image', 'file']);
+    assert.equal(m.label, 'Claude Sonnet');
+    assert.deepEqual(m.pricing, { prompt: 0.000002, completion: 0.00001 });
+    assert.equal(m.maxOutput, 8192);
+    assert.equal(m.reasoning, true);
   });
 
   it('returns an empty list for an unrecognised payload', () => {

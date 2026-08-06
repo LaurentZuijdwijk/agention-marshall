@@ -6,7 +6,13 @@ const { version: currentVersion, name: packageName } = require('../package.json'
   name: string;
 };
 
-export { currentVersion };
+export { currentVersion, packageName };
+
+/** A published release that is newer than the one running. */
+export interface UpdateInfo {
+  current: string;
+  latest: string;
+}
 
 /**
  * Is `candidate` a later release than `current`?
@@ -26,22 +32,31 @@ export function isNewer(candidate: string, current: string): boolean {
   return false;
 }
 
-/** The notice for a version pair, or null when there is nothing to say. */
-export function updateNotice(latest: string, current = currentVersion, pkg = packageName): string | null {
-  return isNewer(latest, current)
-    ? `update available: ${current} → ${latest}  (npm install -g ${pkg}@latest)`
-    : null;
+/**
+ * The bare fact, with no opinion about what to do next.
+ *
+ * Callers disagree on that part — the startup row points at `/update`, while
+ * `/update` itself is already installing — so baking an instruction in here
+ * meant one of them always read wrong.
+ */
+export function describeUpdate(info: UpdateInfo): string {
+  return `update available: ${info.current} → ${info.latest}`;
 }
 
-/** Resolves to an update notice string, or null if up-to-date or the check fails. */
-export async function checkForUpdate(): Promise<string | null> {
+/** The command to run when we could not do it for them. */
+export function manualInstallCommand(pkg = packageName): string {
+  return `npm install -g ${pkg}@latest`;
+}
+
+/** Resolves to the newer release, or null if up-to-date or the check fails. */
+export async function checkForUpdate(current = currentVersion): Promise<UpdateInfo | null> {
   try {
     const res = await fetch(`https://registry.npmjs.org/${packageName}/latest`, {
       signal: AbortSignal.timeout(3000),
     });
     if (!res.ok) return null;
     const { version: latest } = await res.json() as { version: string };
-    return updateNotice(latest);
+    return isNewer(latest, current) ? { current, latest } : null;
   } catch {
     // network unavailable or timed out — silently skip
     return null;

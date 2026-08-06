@@ -4,7 +4,7 @@ import { TextInput } from './TextInput.js';
 import {
   PROVIDER_DEFAULTS,
   parseLlamaCppModels, applyLlamaCppProps, parseOllamaModels, parseOpenRouterModels,
-  formatContext, formatBytes,
+  formatContext, formatBytes, formatPrice,
 } from '@agentionai/marshall-engine';
 import type { Provider, Tier, ModelInfo } from '@agentionai/marshall-engine';
 import { C, G, brand } from './theme.js';
@@ -295,6 +295,10 @@ function ModelDetail({ model }: { model: ModelInfo }) {
   if (model.sizeBytes)   facts.push(formatBytes(model.sizeBytes));
   if (model.extraModalities) facts.push(...model.extraModalities);
 
+  if (model.pricing) {
+    facts.push(`${formatPrice(model.pricing.prompt)} in · ${formatPrice(model.pricing.completion)} out`);
+  }
+  if (model.label) facts.push(model.label);
   if (model.context) {
     const ceiling = model.contextTrain && model.contextTrain > model.context
       ? ` of ${formatContext(model.contextTrain)} trained`
@@ -305,6 +309,8 @@ function ModelDetail({ model }: { model: ModelInfo }) {
         : `${formatContext(model.context)} context when loaded`,
     );
   }
+  if (model.maxOutput) facts.push(`${formatContext(model.maxOutput)} max output`);
+  if (model.reasoning) facts.push('reasoning');
 
   if (model.failed) facts.push('last start failed');
   else if (!model.loaded) facts.push('not loaded — first request will load it');
@@ -330,8 +336,9 @@ function ModelList({
     if (key.leftArrow || key.escape) { onBack?.(); return; }
   });
 
-  // Leave room for the gutter, status glyph and the context column.
-  const available = Math.max(24, (process.stdout.columns ?? 80) - 18);
+  // Leave room for the gutter, status glyph, context and optional price column.
+  const showPrice = models.some(m => m.pricing) && (process.stdout.columns ?? 80) >= 64;
+  const available = Math.max(24, (process.stdout.columns ?? 80) - (showPrice ? 34 : 18));
   const nameWidth = Math.min(available, Math.max(...items.map(m => m.id.length)));
 
   const { start, end } = windowRange(items.length, cursor, VISIBLE_MODELS);
@@ -368,6 +375,15 @@ function ModelList({
               <Box flexShrink={0}>
                 <Text color={model.contextSource === 'active' ? C.accent : C.faint}>
                   {'  '}{formatContext(model.context).padStart(5)}
+                </Text>
+              </Box>
+            )}
+            {showPrice && model.pricing && (
+              <Box flexShrink={0}>
+                <Text color={C.faint}>
+                  {'  '}{model.pricing.prompt === 0 && model.pricing.completion === 0
+                    ? 'free'
+                    : `${formatPrice(model.pricing.prompt)}/${formatPrice(model.pricing.completion)}`}
                 </Text>
               </Box>
             )}

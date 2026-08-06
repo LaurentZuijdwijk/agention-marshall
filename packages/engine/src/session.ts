@@ -23,6 +23,7 @@ import { McpRegistry } from './mcp.js';
 import type { McpServerConfig, McpServerState } from './mcp.js';
 import {
   createAgent,
+  buildSystemPrompt,
   CONTEXT_AGENT_PROMPT,
   SEARCH_AGENT_PROMPT,
   PLANNER_AGENT_PROMPT,
@@ -220,6 +221,18 @@ export class Session {
   private buildRoleTools(): void {
     const config = this.config;
 
+    // Light mode is single-agent by definition: every sub-agent tool costs a
+    // schema in the prompt *and* a guidance block explaining when to delegate,
+    // which is exactly the overhead light mode exists to remove. Nothing else
+    // here needs a light branch — the four fields below are the only sub-agents.
+    if (config.light) {
+      this.contextToolReady = Promise.resolve(null);
+      this.searchToolReady = Promise.resolve(null);
+      this.plannerToolReady = Promise.resolve(null);
+      this.reviewerToolReady = Promise.resolve(null);
+      return;
+    }
+
     // Every role's model comes from resolveRoleProfile, so a `fast` tier set via
     // /model actually routes work at run time. Enablement is a separate question
     // from which model runs it: the planner and reviewer stay opt-in because they
@@ -380,6 +393,29 @@ export class Session {
     return this.steeringContext !== null;
   }
 
+  get light(): boolean {
+    return this.config.light === true;
+  }
+
+  /**
+   * Turn light mode on or off, keeping the conversation.
+   *
+   * Safe mid-turn for the same reason `setProfiles` is: the running turn built
+   * its belt and prompt before this, so the change lands on the next one.
+   *
+   * The history will then contain turns made under two different tool lists.
+   * That is survivable — each request carries the current belt, and the model
+   * is answering against that — but it is why this is a deliberate toggle
+   * rather than something the engine flips on its own: switching every other
+   * turn would leave a history describing tools that come and go.
+   */
+  setLight(light: boolean): void {
+    if (this.light === light) return;
+    this.config = { ...this.config, light };
+    this.buildRoleTools();
+    this.log(`LIGHT ${light ? 'on' : 'off'}`);
+  }
+
   get hasPendingPlan(): boolean {
     return this.pendingPlan !== null;
   }
@@ -510,7 +546,10 @@ export class Session {
       .filter(r => r.role !== 'search')
       .map(r => `${r.role}=${r.provider}/${r.model}${r.delegated ? '*' : ''}`)
       .join(' ');
-    this.log(`TIERS ${summary} search=${searchLabel}`);
+    // Light is recorded here because it silently overrules every row above it:
+    // the roles are still routed, they just have no tool to reach them through.
+    // "Why did the context agent never run" is answered by this line or nothing.
+    this.log(`TIERS ${summary} search=${searchLabel}${this.config.light ? ' light=on (sub-agents off)' : ''}`);
   }
 
   private log(entry: string): void {
@@ -1020,6 +1059,8 @@ export class Session {
     const coderProfile = resolveRoleProfile(this.config, 'coder');
 
     try {
+      const light = this.config.light === true;
+
       const toolConfig: ToolConfig = {
         workspaceRoot: this.config.workspaceRoot,
         approval: this.makeApproval(),
@@ -1030,14 +1071,17 @@ export class Session {
         // write tools today, but "who is asking me to approve this" should be
         // answered on the panel rather than assumed.
         caller: { role: 'coder', model: `${coderProfile.provider}/${resolveModel(coderProfile)}` },
-        jobs: this.jobs,
+        // Withholding the registry is what removes `background` from run_shell's
+        // schema — the factory keys the option off its presence, so light mode
+        // does not need the shell tool to know it exists.
+        ...(light ? {} : { jobs: this.jobs }),
       };
 
       const tools = [
         ...createFileTools(toolConfig, this.dedupeCache),
         createShellTool(toolConfig),
-        ...createJobTools(toolConfig),
-        ...createScratchTools(toolConfig),
+        ...(light ? [] : createJobTools(toolConfig)),
+        ...(light ? [] : createScratchTools(toolConfig)),
         ...(this.config.enableGitHub ? createGitHubTools(toolConfig) : []),
         ...(contextTool ? [contextTool] : []),
         ...(searchTool ? [searchTool] : []),
@@ -1063,6 +1107,11 @@ export class Session {
         maxTokens: this.config.maxTokens,
         projectMemory: projectMemory || undefined,
         extraInstructions: extraInstructions || undefined,
+        // Built from the belt above, so a rule can never describe a tool this
+        // turn does not have. The guidance blocks already work this way — they
+        // key off whether their tool resolved — and this closes the same gap for
+        // the fixed rules.
+        systemPrompt: buildSystemPrompt({ scratch: !light, background: !light }),
       }) as AgentWithUsage;
       if (coderProfile.provider === 'llamacpp') this.llamaModelLoaded = true;
 

@@ -71,6 +71,14 @@ export interface SavedProjectMcp {
 
 export interface SavedConfig extends SavedProfile {
   models?: { deep?: SavedProfile; fast?: SavedProfile };
+  /**
+   * Start with the lean tool belt — see EngineConfig.light.
+   *
+   * Safe in the project file as well as the global one: it selects behaviour
+   * and cannot carry a credential, which is the line AGENTS.md draws. A repo
+   * that is normally driven by a small local model can commit it.
+   */
+  light?: boolean;
   providers?: SavedProviderEntry[];
   mcpServers?: SavedMcpServer[];
   mcp?: SavedProjectMcp;

@@ -37,6 +37,12 @@ export interface ModelInfo {
   quant?: string;
   /** Input modalities beyond text — servers report `image`, `audio`, … */
   extraModalities?: string[];
+  /** OpenRouter's per-token USD prices. */
+  pricing?: { prompt: number; completion: number };
+  /** OpenRouter's vendor-facing display name. */
+  label?: string;
+  maxOutput?: number;
+  reasoning?: boolean;
 }
 
 // ── formatting ────────────────────────────────────────────────────────────────
@@ -64,6 +70,15 @@ export function formatBytes(n: number): string {
   const gb = n / 1024 ** 3;
   if (gb >= 1) return `${gb.toFixed(1)} GB`;
   return `${Math.round(n / 1024 ** 2)} MB`;
+}
+
+/** Format an OpenRouter per-token USD price as dollars per million tokens. */
+export function formatPrice(perToken: number): string {
+  if (!Number.isFinite(perToken) || perToken < 0) return '';
+  if (perToken === 0) return 'free';
+  const perMillion = perToken * 1_000_000;
+  const digits = perMillion < 1 ? 2 : perMillion < 10 ? 2 : perMillion < 100 ? 1 : 0;
+  return `$${perMillion.toFixed(digits).replace(/\.?0+$/, '')}/M`;
 }
 
 // ── llama.cpp ─────────────────────────────────────────────────────────────────
@@ -204,25 +219,10 @@ export function parseOllamaModels(tags: unknown, running?: unknown): ModelInfo[]
 /**
  * Parse OpenRouter's /api/v1/models catalogue. No auth needed.
  *
- * The full list is ~340 entries, much of it image/audio generation,
- * roleplay fine-tunes and dated snapshots — not useful in a coding-agent
- * picker. We keep text-out models that can call tools, drop routers and
- * preview/beta variants, prefer the vendor's headline families, and cap the
- * result so the list stays navigable. Anything missing is one "(custom…)"
- * away.
+ * The catalogue contains models for many modalities and capabilities. Keep
+ * every text-output model that supports tools; the UI can expose the complete
+ * result and users can still add arbitrary custom IDs.
  */
-const OPENROUTER_KEEP_FAMILIES = [
-  'anthropic/', 'openai/', 'google/', 'deepseek/', 'moonshotai/', 'z-ai/',
-  'qwen/', 'minimax/', 'x-ai/', 'mistralai/', 'meta-llama/', 'openrouter/',
-];
-// Previously the pinned openrouter defaults; now excluded from the picker.
-const OPENROUTER_REMOVE = new Set([
-  'anthropic/claude-sonnet-4.6',
-  'openai/gpt-4o',
-  'meta-llama/llama-3.1-70b-instruct',
-]);
-const OPENROUTER_MAX = 60;
-
 export function parseOpenRouterModels(payload: unknown, pinned: string[] = []): ModelInfo[] {
   const data = (payload as { data?: unknown })?.data;
   if (!Array.isArray(data)) return [];
@@ -241,14 +241,24 @@ export function parseOpenRouterModels(payload: unknown, pinned: string[] = []): 
     if (!outputs.includes('text') || outputs.some(o => o !== 'text')) continue;
     // Meta-routers price at -1 and just forward elsewhere.
     if (entry.pricing?.prompt === '-1') continue;
-    if (!OPENROUTER_KEEP_FAMILIES.some(f => id.startsWith(f))) continue;
-    if (OPENROUTER_REMOVE.has(id)) continue;
-
     seen.add(id);
     const info: ModelInfo = { id };
     if (typeof entry.context_length === 'number' && entry.context_length > 0) {
       info.context = entry.context_length;
       info.contextSource = 'configured';
+    }
+    const prompt = Number(entry.pricing?.prompt);
+    const completion = Number(entry.pricing?.completion);
+    if (Number.isFinite(prompt) && prompt >= 0 && Number.isFinite(completion) && completion >= 0) {
+      info.pricing = { prompt, completion };
+    }
+    if (typeof entry.name === 'string' && entry.name !== '') info.label = entry.name;
+    const maxOutput = entry.top_provider?.max_completion_tokens;
+    if (typeof maxOutput === 'number' && maxOutput > 0) info.maxOutput = maxOutput;
+    if (entry.reasoning?.mandatory === true || entry.reasoning?.default_enabled === true) {
+      info.reasoning = true;
+    } else if (Array.isArray(supported) && supported.includes('reasoning')) {
+      info.reasoning = true;
     }
     const inputs: unknown[] = entry.architecture?.input_modalities ?? [];
     const extra = inputs.filter((m): m is string => typeof m === 'string' && m !== 'text');
@@ -261,15 +271,21 @@ export function parseOpenRouterModels(payload: unknown, pinned: string[] = []): 
   const pinnedSet = new Set(pinned);
   const withCreated = models.map(m => {
     const raw = (data as any[]).find(e => e?.id === m.id);
-    return { m, created: typeof raw?.created === 'number' ? raw.created : 0 };
+    const prompt = Number(raw?.pricing?.prompt);
+    const completion = Number(raw?.pricing?.completion);
+    return {
+      m,
+      created: typeof raw?.created === 'number' ? raw.created : 0,
+      free: prompt === 0 && completion === 0,
+    };
   });
   withCreated.sort((a, b) => {
-    // Free (:free) models first — they're the zero-cost way to try a family,
-    // and the paid lookalike is usually right below it.
-    const aFree = a.m.id.endsWith(':free') ? 1 : 0;
-    const bFree = b.m.id.endsWith(':free') ? 1 : 0;
-    return Number(pinnedSet.has(b.m.id)) - Number(pinnedSet.has(a.m.id)) ||
-      bFree - aFree || b.created - a.created;
+    // Any zero-priced model first, including providers that do not use :free IDs.
+    const aFree = a.free ? 1 : 0;
+    const bFree = b.free ? 1 : 0;
+    return bFree - aFree ||
+      Number(pinnedSet.has(b.m.id)) - Number(pinnedSet.has(a.m.id)) ||
+      b.created - a.created;
   });
-  return withCreated.slice(0, OPENROUTER_MAX).map(x => x.m);
+  return withCreated.map(x => x.m);
 }

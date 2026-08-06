@@ -38,6 +38,7 @@ export interface UseSessionOptions {
   enableGitHub?: boolean;
   enableWebSearch?: boolean;
   maxTokens?: number;
+  light?: boolean;
   savedHosts?: Record<string, string | undefined>;
   savedKeys?: Record<string, string | undefined>;
   /** Servers loaded from the global config, connected at session start. */
@@ -52,7 +53,7 @@ export function useSession(options: UseSessionOptions): SessionController {
   const {
     workspaceRoot, agentProfile, fastProfile: initialFast,
     contextAgentProfile, plannerAgentProfile, reviewerAgentProfile,
-    enableGitHub, enableWebSearch, maxTokens,
+    enableGitHub, enableWebSearch, maxTokens, light,
     client, onProfilesChanged, SessionCtor = Session,
   } = options;
 
@@ -72,7 +73,7 @@ export function useSession(options: UseSessionOptions): SessionController {
     new SessionCtor({
       agent: deep,
       models: { deep, fast },
-      workspaceRoot, enableGitHub, enableWebSearch, maxTokens,
+      workspaceRoot, enableGitHub, enableWebSearch, maxTokens, light,
       mcpServers: options.mcpServers,
       contextAgent: contextAgentProfile,
       plannerAgent: plannerAgentProfile,

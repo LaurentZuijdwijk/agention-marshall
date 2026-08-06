@@ -31,6 +31,8 @@ import { useKeyBindings } from './hooks/useKeyBindings.js';
 import { startLogin, completeLogin } from './login.js';
 import type { LoginSession } from './login.js';
 import { runSlashCommand } from './commands.js';
+import { describeUpdate } from './update-check.js';
+import type { UpdateInfo } from './update-check.js';
 import { saveMcpServers, saveProjectMcpSelection } from './services/config-store.js';
 import { SLASH_COMMANDS } from './slashCommands.js';
 import { completeAtPath, expandFileMentions } from './fileCompletion.js';
@@ -52,6 +54,8 @@ export interface AppProps {
   enableGitHub?: boolean;
   enableWebSearch?: boolean;
   maxTokens?: number;
+  /** Start with the lean tool belt — see EngineConfig.light. `/light` toggles it. */
+  light?: boolean;
   /**
    * Per-provider last-used host, loaded from the config `providers` array.
    * Lets the setup wizard re-seed each provider's own host when the user
@@ -65,6 +69,14 @@ export interface AppProps {
   mcpServers?: McpServerConfig[];
   /** MCP config that resolves to nothing — surfaced at startup and by `/mcp`. */
   mcpWarnings?: string[];
+  /**
+   * The startup version check, started before render so the network round trip
+   * overlaps with boot. A newer release becomes one row in the transcript.
+   *
+   * Passed in rather than called here so it is a seam: a test hands over a
+   * resolved promise, and nothing reaches the npm registry.
+   */
+  updateCheck?: Promise<UpdateInfo | null>;
   /**
    * Hands the parent a way to force a full transcript replay. Used on resize:
    * the terminal reflows what is already on screen, so Ink's line-count erase
@@ -95,10 +107,12 @@ export function App({
   enableGitHub = false,
   enableWebSearch = true,
   maxTokens,
+  light = false,
   savedHosts,
   savedKeys,
   mcpServers,
   mcpWarnings,
+  updateCheck,
   registerRedraw,
   animate = Boolean(process.stdout.isTTY),
   SessionCtor = Session,
@@ -175,7 +189,7 @@ export function App({
     useSession({
       workspaceRoot, agentProfile, fastProfile: initialFastProfile,
       contextAgentProfile, plannerAgentProfile, reviewerAgentProfile,
-      enableGitHub, enableWebSearch, maxTokens, savedHosts, savedKeys, mcpServers,
+      enableGitHub, enableWebSearch, maxTokens, light, savedHosts, savedKeys, mcpServers,
       client, SessionCtor,
       // Appended, not reset: the session keeps its history across a model
       // switch now, so wiping the visible conversation would misrepresent what
@@ -198,6 +212,20 @@ export function App({
     // failed connection; keep it in the informational MCP status style.
     for (const warning of mcpWarnings ?? []) transcript.push('info', warning);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Held until boot finishes, because the animation's `onDone` *replaces* the
+  // transcript with a fresh header — a row pushed before that is thrown away.
+  // The check is a network round trip racing an animation, so which one wins is
+  // luck, and the losing case is a notice that silently never appears.
+  useEffect(() => {
+    if (booting || !updateCheck) return;
+    let cancelled = false;
+    void updateCheck.then((info) => {
+      if (cancelled || !info) return;
+      transcript.push('info', `${describeUpdate(info)} — type /update to install`);
+    });
+    return () => { cancelled = true; };
+  }, [booting, updateCheck]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── quitting ───────────────────────────────────────────────────────────────
   const quit = () => {

@@ -16,7 +16,7 @@ import type { Message } from './view/message.js';
 import type { LoginSession } from './login.js';
 import type { SetMode } from './mode.js';
 import { resolveSlashCommand, HELP } from './slashCommands.js';
-import { currentVersion, checkForUpdate } from './update-check.js';
+import { currentVersion, checkForUpdate, describeUpdate, manualInstallCommand } from './update-check.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
@@ -36,6 +36,8 @@ export interface CommandSession {
   mcpState(): McpServerState[];
   removeMcpServer(name: string): Promise<boolean>;
   reconnectMcpServer(name: string): Promise<McpServerState | null>;
+  readonly light: boolean;
+  setLight(light: boolean): void;
 }
 
 export interface CommandDeps {
@@ -215,18 +217,22 @@ export function runSlashCommand(input: string, deps: CommandDeps): void {
     case 'update':
       transcript.push('info', 'checking for updates…');
       checkForUpdate()
-        .then(async notice => {
-          if (!notice) {
+        .then(async info => {
+          if (!info) {
             transcript.push('info', `Marshall ${currentVersion} is up to date`);
             return;
           }
-          transcript.push('info', `${notice}\ninstalling…`);
+          transcript.push('info', `${describeUpdate(info)}\ninstalling…`);
           try {
             await execFileAsync('npm', ['install', '-g', '@agentionai/marshall-cli@latest']);
             transcript.push('info', 'updated successfully; restart Marshall to use the new version');
           } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
-            transcript.push('error', `update failed: ${message}`);
+            // A global install fails for reasons we cannot fix from in here —
+            // a root-owned prefix, most often — so hand over the command rather
+            // than leaving them with only an error.
+            transcript.push('error',
+              `update failed: ${message}\ninstall it yourself with: ${manualInstallCommand()}`);
           }
         })
         .catch((err: unknown) => transcript.push('error', `update check failed: ${err instanceof Error ? err.message : String(err)}`));
@@ -235,6 +241,23 @@ export function runSlashCommand(input: string, deps: CommandDeps): void {
     case 'tokens': {
       const on = deps.prefs.toggle('showUsage');
       transcript.push('info', `token usage ${on ? 'shown' : 'hidden'} after each response`);
+      return;
+    }
+
+    case 'light': {
+      if (!session) {
+        transcript.push('error', 'no model chosen yet — finish setup first');
+        return;
+      }
+      const on = !session.light;
+      session.setLight(on);
+      // Says what actually changed rather than just "on": the whole point is
+      // which tools just disappeared, and a model that can no longer background
+      // a test run should not be a surprise mid-task.
+      transcript.push('info', on
+        ? 'light mode on — no scratchpad, background jobs or sub-agents; ~1100 fewer tokens per request.\n'
+          + 'Takes effect on your next message. /light again to restore them.'
+        : 'light mode off — the full tool belt is back from your next message');
       return;
     }
 

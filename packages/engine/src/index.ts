@@ -9,7 +9,7 @@ export { checkAttachments, decodedBytes, IMAGE_MIME_TYPES, MAX_IMAGE_BYTES } fro
 export type { ModelInfo } from './models.js';
 export {
   parseLlamaCppModels, applyLlamaCppProps, parseOllamaModels, parseOpenRouterModels,
-  formatContext, formatParams, formatBytes,
+  formatContext, formatParams, formatBytes, formatPrice,
 } from './models.js';
 export { Session } from './session.js';
 export { McpRegistry } from './mcp.js';

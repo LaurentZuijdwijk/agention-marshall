@@ -6,6 +6,10 @@
     ".": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
+    },
+    "./testing": {
+      "import": "./dist/testing/fake-provider.js",
+      "types": "./dist/testing/fake-provider.d.ts"
     }
   },
   "files": [

@@ -37,6 +37,8 @@ export interface ResolvedProfiles {
   plannerAgentProfile?: AgentProfile;
   reviewerAgentProfile?: AgentProfile;
   maxTokens?: number;
+  /** Lean tool belt — see EngineConfig.light. */
+  light: boolean;
 }
 
 function checkProvider(name: string, label: string): Provider {
@@ -78,6 +80,10 @@ export function resolveProfiles(flags: CliFlags, config: SavedConfig): ResolvedP
     // hosted fast tier. Left undefined, the engine's resolveMaxTokens picks per
     // profile, which is the case it exists for.
     maxTokens: flags.maxTokens ? parseInt(flags.maxTokens, 10) : undefined,
+    // `--light` turns it on; it cannot turn a configured `light: true` off,
+    // which is the same one-way shape as `--github`. Off is the default, so
+    // "unset it for this run" is just not passing the flag.
+    light: flags.light === true || config.light === true,
   };
 }
 

@@ -48,6 +48,15 @@ describe('slashCommands', () => {
       assert.equal(result.type, 'clear');
     });
 
+    it('returns light for /light', () => {
+      assert.equal(resolveSlashCommand('/light').type, 'light');
+    });
+
+    it('rejects /light with an argument rather than guessing on/off', () => {
+      const result = resolveSlashCommand('/light on');
+      assert.equal(result.type, 'usage');
+    });
+
     it('returns stream for /stream', () => {
       const result = resolveSlashCommand('/stream');
       assert.equal(result.type, 'stream');

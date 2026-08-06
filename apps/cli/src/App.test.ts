@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { Readable, Writable, Transform } from 'node:stream';
 import { readFileSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,6 +10,7 @@ import { Session } from '@agentionai/marshall-engine';
 import React from 'react';
 import { App } from './App.js';
 import { render } from 'ink';
+import { fakeStdout, fakeStdin, waitFor } from './testing/ink.js';
 
 // ── test helpers ───────────────────────────────────────────────────────────────
 
@@ -27,50 +27,9 @@ afterEach(() => {
   capturedOutput = '';
 });
 
-/**
- * Ink only renders incrementally when stdout looks like a TTY; against a plain
- * Writable it stays in non-interactive mode and writes nothing until unmount.
- * Every assertion here therefore ran against an empty buffer — which the
- * negative assertions passed trivially, hiding the fact that they checked
- * nothing at all.
- */
-function fakeStdout(sink: (chunk: string) => void): Writable {
-  const stdout = new Writable({
-    write(chunk, _encoding, cb) { sink(chunk.toString()); cb(); },
-  }) as Writable & { isTTY: boolean; columns: number; rows: number };
-  stdout.isTTY = true;
-  stdout.columns = 100;
-  stdout.rows = 30;
-  return stdout;
-}
-
-/**
- * Ink's useInput needs raw mode, and a bare Readable has neither `isTTY` nor
- * `setRawMode` — so Ink renders "Raw mode is not supported" instead of the app.
- * Tests that only assert a negative never noticed.
- */
-function fakeStdin(): Readable {
-  const stdin = new Readable({ read() {} }) as Readable & {
-    isTTY: boolean;
-    setRawMode: (mode: boolean) => void;
-    ref: () => void;
-    unref: () => void;
-  };
-  stdin.isTTY = true;
-  stdin.setRawMode = () => {};
-  stdin.ref = () => {};
-  stdin.unref = () => {};
-  return stdin;
-}
-
-/** Poll until `predicate` holds or the budget runs out, so tests wait on the
- *  rendered frame rather than a guessed number of ticks. */
-async function waitFor(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!predicate() && Date.now() < deadline) {
-    await new Promise(resolve => setTimeout(resolve, 10));
-  }
-}
+// fakeStdout/fakeStdin/waitFor live in ../testing/ink.js — the integration suite
+// needs the same two carefully-shaped streams, and a second copy of them is a
+// second chance to get the TTY flags subtly wrong.
 
 function mkTemp(): string {
   const dir = join(here, '..', '..', '.tmp-test-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8));
@@ -403,9 +362,7 @@ describe('App component', () => {
 
     for (const agentProfile of configs) {
       const ws = mkTemp();
-      const stream = new Writable({
-        write(chunk, _encoding, cb) { capturedOutput += chunk.toString(); cb(); },
-      });
+      const stream = fakeStdout(chunk => { capturedOutput += chunk; });
 
       const instance = render(
         React.createElement(App, {
@@ -418,6 +375,65 @@ describe('App component', () => {
         { stdout: stream, stdin: fakeStdin(), patchConsole: false, exitOnCtrlG: false },
       );
 
+      instance.unmount();
+    }
+  });
+});
+
+describe('the startup update check', () => {
+  const agentProfile = { provider: 'claude' as const, model: 'claude-sonnet-4-6' };
+
+  /** Renders the App with a pre-resolved check, so no test touches the network. */
+  function renderWith(result: { current: string; latest: string } | null, animate = false) {
+    const stream = fakeStdout(chunk => { capturedOutput += chunk; });
+    return render(
+      React.createElement(App, {
+        workspaceRoot: mkTemp(),
+        agentProfile,
+        updateCheck: Promise.resolve(result),
+        animate,
+        SessionCtor: MockSession as any,
+        startLoginCtor: mockStartLogin,
+        completeLoginCtor: mockCompleteLogin,
+      } as any),
+      { stdout: stream, stdin: fakeStdin(), patchConsole: false, exitOnCtrlG: false },
+    );
+  }
+
+  it('offers /update when a newer release exists', async () => {
+    const instance = renderWith({ current: '0.8.2', latest: '0.9.0' });
+    try {
+      await waitFor(() => capturedOutput.includes('update available'), 'the update row');
+      assert.match(capturedOutput, /0\.8\.2 → 0\.9\.0/, 'both versions are named');
+      assert.match(capturedOutput, /\/update/,
+        'the row has to say what to do — it is the only place this is now surfaced');
+    } finally {
+      instance.unmount();
+    }
+  });
+
+  it('says nothing when there is nothing newer', async () => {
+    const instance = renderWith(null);
+    try {
+      await waitFor(() => capturedOutput.includes('type a task'), 'the idle prompt');
+      // The prompt being up means the App has settled; a notice would be here by now.
+      assert.doesNotMatch(capturedOutput, /update available/);
+    } finally {
+      instance.unmount();
+    }
+  });
+
+  it('survives the boot animation, which replaces the transcript when it ends', async () => {
+    // The regression this guards: the banner's onDone calls transcript.reset(),
+    // so a row pushed while it was still animating is discarded. The check is a
+    // network round trip racing an animation, so before the fix which one won
+    // was luck — and losing meant the notice silently never appeared.
+    const instance = renderWith({ current: '0.8.2', latest: '0.9.0' }, true);
+    try {
+      await waitFor(() => capturedOutput.includes('type a task'), 'boot to finish', 10_000);
+      await waitFor(() => capturedOutput.includes('update available'),
+        'the update row after boot', 10_000);
+    } finally {
       instance.unmount();
     }
   });

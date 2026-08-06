@@ -47,10 +47,12 @@ function setup(overrides: Partial<CommandDeps> & { jobs?: BackgroundJob[]; serve
     mcpRemoved: [] as string[],
     mcpReconnected: [] as string[],
     mcpChanged: 0,
+    light: [] as boolean[],
   };
 
   const jobs = overrides.jobs ?? [];
   const servers = overrides.servers ?? [];
+  let light = false;
 
   const session: CommandSession = {
     plan: async (task) => { calls.plan.push(task); },
@@ -71,6 +73,8 @@ function setup(overrides: Partial<CommandDeps> & { jobs?: BackgroundJob[]; serve
       calls.mcpReconnected.push(name);
       return servers.find(s => s.name === name) ?? null;
     },
+    get light() { return light; },
+    setLight: (next) => { light = next; calls.light.push(next); },
   };
 
   const prefs = {
@@ -395,5 +399,40 @@ describe('/mcp', () => {
     runSlashCommand('/mcp', deps);
     assert.equal(pushed[0].role, 'error');
     assert.deepEqual(modes, []);
+  });
+});
+
+describe('/light', () => {
+  it('turns the lean belt on and says which tools just went away', () => {
+    const { deps, pushed, calls } = setup();
+    runSlashCommand('/light', deps);
+    assert.deepEqual(calls.light, [true]);
+    assert.equal(pushed[0].role, 'info');
+    // The saving is the reason to use it, and the missing tools are the cost —
+    // a bare "light mode on" leaves the user to discover the cost mid-task.
+    assert.match(pushed[0].content, /scratchpad|background|sub-agents/);
+    assert.match(pushed[0].content, /next message/,
+      'the belt is rebuilt per turn, so the change is not retroactive');
+  });
+
+  it('toggles back off', () => {
+    const { deps, calls } = setup();
+    runSlashCommand('/light', deps);
+    runSlashCommand('/light', deps);
+    assert.deepEqual(calls.light, [true, false], 'reads the session, not a local flag');
+  });
+
+  it('rejects an argument with usage', () => {
+    const { deps, pushed, calls } = setup();
+    runSlashCommand('/light on', deps);
+    assert.equal(pushed[0].role, 'error');
+    assert.match(pushed[0].content, /usage: \/light/);
+    assert.deepEqual(calls.light, [], 'nothing is toggled by a misuse');
+  });
+
+  it('refuses before a model is chosen', () => {
+    const { deps, pushed } = setup({ session: null });
+    runSlashCommand('/light', deps);
+    assert.equal(pushed[0].role, 'error');
   });
 });

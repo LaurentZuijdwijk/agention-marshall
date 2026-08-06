@@ -17,6 +17,7 @@ const OPTIONS = {
   host:             { type: 'string'  },
   github:           { type: 'boolean' },
   'no-web-search':  { type: 'boolean' },
+  light:            { type: 'boolean' },
   'context-model':  { type: 'string'  },
   'planner-model':  { type: 'string'  },
   'reviewer-model': { type: 'string'  },
@@ -45,6 +46,8 @@ export interface CliFlags {
   reviewerModel?: string;
   github: boolean;
   webSearch: boolean;
+  /** Undefined means "not asked for on the CLI" — the config still gets a say. */
+  light?: boolean;
   help: boolean;
 }
 
@@ -75,6 +78,7 @@ export function parseCliArgs(argv: string[] = process.argv.slice(2)): CliFlags {
     plannerModel:   str(values['planner-model']),
     reviewerModel:  str(values['reviewer-model']),
     github:         values.github === true,
+    light:          values.light === true ? true : undefined,
     webSearch:      values['no-web-search'] !== true,
     help:           values.help === true,
   };
@@ -105,6 +109,10 @@ Options:
       --reviewer-model <id>  Model for /review and the \`reviewer\` tool, same provider
       --github            Enable GitHub tools (requires gh CLI)
       --no-web-search     Disable web search (on by default for the claude provider)
+      --light             Lean belt for small models: no scratchpad, background jobs or
+                           sub-agents, and a prompt with only the rules that still apply
+                           (~1100 fewer tokens per request). Also "light": true in config,
+                           or /light in the session
   -h, --help              Show this help
 
 Provider defaults:

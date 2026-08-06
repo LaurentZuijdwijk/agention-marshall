@@ -41,7 +41,9 @@ try {
 
 installCrashLogging(workspaceRoot);
 
-const updatePromise = checkForUpdate();
+// Started before render so the round trip overlaps with boot; the App shows the
+// result as a transcript row once the banner is done.
+const updateCheck = checkForUpdate();
 
 let inkInstance: ReturnType<typeof render> | undefined;
 let replayTranscript: () => void = () => {};
@@ -58,11 +60,13 @@ inkInstance = render(
     enableGitHub={flags.github}
     enableWebSearch={flags.webSearch}
     maxTokens={profiles.maxTokens}
+    light={profiles.light}
     registerRedraw={fn => { replayTranscript = fn; }}
     savedHosts={savedHosts(savedConfig)}
     savedKeys={savedKeys(savedConfig)}
     mcpServers={loadMcpServers(workspaceRoot)}
     mcpWarnings={loadMcpWarnings(workspaceRoot)}
+    updateCheck={updateCheck}
   />,
   // The App owns Ctrl-C so it can interrupt a running task before quitting;
   // ink's built-in handler would unmount without cancelling anything.
@@ -71,14 +75,7 @@ inkInstance = render(
 
 await inkInstance.waitUntilExit();
 
-// Show the update notice after the TUI exits so it doesn't interfere with rendering.
-const notice = await Promise.race([
-  updatePromise,
-  new Promise<null>(resolve => setTimeout(() => resolve(null), 500)),
-]);
-if (notice) process.stderr.write(`\n${notice}\n`);
-
-// Leave explicitly. An aborted LLM request or the update check above can leave
+// Leave explicitly. An aborted LLM request or the update check can leave
 // a socket pending, and node would sit there indefinitely with the UI already
 // torn down. Everything we needed to write has been written by this point.
 process.exit(0);

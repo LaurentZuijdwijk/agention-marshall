@@ -71,6 +71,19 @@ export interface EngineConfig {
   commandPolicy?: CommandPolicy;
   /** Whether GitHub tools are available (requires gh CLI) */
   enableGitHub?: boolean;
+  /**
+   * Strip the belt back to the tools a small model can actually keep track of.
+   *
+   * Drops the scratchpad (`note_*`/`log_*`), background jobs (`run_shell`'s
+   * `background` option and the `shell_*` tools) and every sub-agent
+   * (`context`, `search`, `planner`, `reviewer`) — along with the prompt rules
+   * and tool guidance that describe them. Roughly 1100 tokens of fixed
+   * per-request overhead, which is a quarter of an 8k context window.
+   *
+   * Read/list/search/write/edit/run_shell remain: the set needed to do the job,
+   * and no more.
+   */
+  light?: boolean;
   /** Whether the agent gets Anthropic's server-side web search tool.
    *  Requires the main agent to be claude, or a searchAgent to be configured. */
   enableWebSearch?: boolean;
