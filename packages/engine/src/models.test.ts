@@ -287,6 +287,13 @@ const OR_LING_FREE = {
   supported_parameters: ['tools', 'reasoning'],
   pricing: { prompt: '0', completion: '0' },
 };
+const OR_SAFETY = {
+  id: 'nvidia/nemotron-3.5-content-safety:free',
+  created: 1780581864,
+  architecture: { input_modalities: ['text', 'image'], output_modalities: ['text'] },
+  supported_parameters: ['max_tokens', 'temperature'],
+  pricing: { prompt: '0', completion: '0' },
+};
 const OR_ROLEPLAY = {
   id: 'thedrummer/cydonia-24b-v4.1',
   created: 1758931878,
@@ -314,6 +321,12 @@ describe('parseOpenRouterModels', () => {
   it('sorts pinned presets first, then newest first', () => {
     const ids = parseOpenRouterModels(payload, [OR_OLDER.id]).map(m => m.id);
     assert.deepEqual(ids, [OR_OLDER.id, OR_CODING.id, OR_ROLEPLAY.id]);
+  });
+
+  it('keeps free content-safety models without tool support', () => {
+    const [model] = parseOpenRouterModels({ data: [OR_SAFETY] });
+    assert.equal(model.id, OR_SAFETY.id);
+    assert.deepEqual(model.pricing, { prompt: 0, completion: 0 });
   });
 
   it('includes newer free provider families and puts zero-priced models first', () => {

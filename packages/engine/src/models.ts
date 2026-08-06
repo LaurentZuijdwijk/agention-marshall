@@ -43,6 +43,8 @@ export interface ModelInfo {
   label?: string;
   maxOutput?: number;
   reasoning?: boolean;
+  /** Whether the model advertises native tool-call support. */
+  supportsTools?: boolean;
 }
 
 // ── formatting ────────────────────────────────────────────────────────────────
@@ -236,7 +238,10 @@ export function parseOpenRouterModels(payload: unknown, pinned: string[] = []): 
     if (seen.has(id)) continue; // :free variants share a canonical slug
 
     const supported: unknown[] = Array.isArray(entry.supported_parameters) ? entry.supported_parameters : [];
-    if (!supported.includes('tools')) continue;
+    // Guardrail/content-safety models may omit `tools`; they are useful in the
+    // catalogue but cannot be selected as the ordinary tool-calling agent.
+    const isSafetyModel = /content[-_ ]?safety|guardrail|safety/i.test(id);
+    if (!supported.includes('tools') && !isSafetyModel) continue;
     const outputs: unknown[] = entry.architecture?.output_modalities ?? [];
     if (!outputs.includes('text') || outputs.some(o => o !== 'text')) continue;
     // Meta-routers price at -1 and just forward elsewhere.
@@ -255,6 +260,7 @@ export function parseOpenRouterModels(payload: unknown, pinned: string[] = []): 
     if (typeof entry.name === 'string' && entry.name !== '') info.label = entry.name;
     const maxOutput = entry.top_provider?.max_completion_tokens;
     if (typeof maxOutput === 'number' && maxOutput > 0) info.maxOutput = maxOutput;
+    info.supportsTools = true;
     if (entry.reasoning?.mandatory === true || entry.reasoning?.default_enabled === true) {
       info.reasoning = true;
     } else if (Array.isArray(supported) && supported.includes('reasoning')) {

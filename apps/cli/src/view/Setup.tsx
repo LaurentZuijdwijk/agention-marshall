@@ -279,6 +279,16 @@ function ModelSelect({
 /** How many rows to show before the list starts scrolling around the cursor. */
 const VISIBLE_MODELS = 9;
 
+/** Case-insensitive typeahead matching against both the provider ID and label. */
+export function filterModels(models: ModelInfo[], query: string): ModelInfo[] {
+  const needle = query.trim().toLocaleLowerCase();
+  if (!needle) return models;
+  return models.filter(model =>
+    model.id.toLocaleLowerCase().includes(needle) ||
+    model.label?.toLocaleLowerCase().includes(needle),
+  );
+}
+
 function statusGlyph(model: ModelInfo): { glyph: string; color: string } {
   if (model.failed)   return { glyph: G.no,   color: C.error };
   if (model.loaded)   return { glyph: G.tool, color: C.ok    };
@@ -327,13 +337,26 @@ function ModelList({
 }) {
   traceRender('ModelList');
   const [cursor, setCursor] = useState(0);
-  const items = [...models, { id: CUSTOM } as ModelInfo];
+  const [query, setQuery] = useState('');
+  const filtered = filterModels(models, query);
+  const items = [...filtered, { id: CUSTOM } as ModelInfo];
 
-  useInput((_, key) => {
+  useEffect(() => {
+    setCursor(0);
+  }, [query]);
+
+  useInput((input, key) => {
     if (key.upArrow)   { setCursor(c => (c - 1 + items.length) % items.length); return; }
     if (key.downArrow) { setCursor(c => (c + 1) % items.length); return; }
     if (key.return)    { onSelect(items[cursor].id); return; }
-    if (key.leftArrow || key.escape) { onBack?.(); return; }
+    if (key.leftArrow || key.escape) {
+      if (query) { setQuery(''); setCursor(0); } else onBack?.();
+      return;
+    }
+    if (key.backspace || key.delete) { setQuery(q => q.slice(0, -1)); return; }
+    if (!key.ctrl && !key.meta && !key.tab && input && /^[\\x20-\\x7e]+$/.test(input)) {
+      setQuery(q => q + input);
+    }
   });
 
   // Leave room for the gutter, status glyph, context and optional price column.
@@ -347,6 +370,12 @@ function ModelList({
 
   return (
     <Box flexDirection="column">
+      <Box paddingLeft={2}>
+        <Text color={C.faint}>search </Text>
+        <Text color={query ? C.brandTo : C.faint}>{query || 'type to filter'}</Text>
+        {query && <Text color={C.faint}>  ({filtered.length} match{filtered.length === 1 ? '' : 'es'})</Text>}
+      </Box>
+      {filtered.length === 0 && <Hint>no matching models — press escape to clear</Hint>}
       {above > 0 && <Text color={C.faint}>  ↑ {above} more</Text>}
 
       {items.slice(start, end).map((model, i) => {
