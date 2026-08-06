@@ -136,6 +136,35 @@ describe('loadConfig', () => {
     assert.equal(merged.apiKey, 'global-secret', 'global-only fields survive the merge');
     assert.deepEqual(merged.models?.fast, { provider: 'claude', model: 'haiku' }, 'untouched nested global fields survive');
   });
+
+  // The reported bug: a project pinning llamacpp (no key needed) made the
+  // wizard forget the OpenRouter key stored globally, because a plain
+  // deep-merge replaces the whole `providers` array rather than merging it
+  // per provider. Enter at the key step then had nothing to fall back to and
+  // did nothing — indistinguishable from being stuck.
+  it('does not let a project-local provider entry hide an unrelated global one', () => {
+    writeGlobal({
+      providers: [
+        { provider: 'llamacpp', host: 'http://localhost:8080' },
+        { provider: 'openrouter', apiKey: 'or-secret' },
+      ],
+    });
+    const root = ws();
+    write(root, { providers: [{ provider: 'llamacpp', host: 'http://localhost:8080' }] });
+
+    const hosts = savedHosts(loadConfig(root));
+    const byProvider = savedProviders(loadConfig(root));
+    assert.equal(hosts.llamacpp, 'http://localhost:8080');
+    assert.equal(byProvider.openrouter?.apiKey, 'or-secret', 'the global-only provider survives the merge');
+  });
+
+  it('lets a project-local entry override the same provider’s global one', () => {
+    writeGlobal({ providers: [{ provider: 'llamacpp', host: 'http://global:8080' }] });
+    const root = ws();
+    write(root, { providers: [{ provider: 'llamacpp', host: 'http://project:8080' }] });
+
+    assert.equal(savedHosts(loadConfig(root)).llamacpp, 'http://project:8080');
+  });
 });
 
 describe('reading tiers back', () => {

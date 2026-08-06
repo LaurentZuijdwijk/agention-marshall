@@ -129,6 +129,28 @@ function deepMerge<T>(base: T, override: T): T {
 }
 
 /**
+ * Merge two provider-entry lists by provider name, project entries winning a
+ * conflict.
+ *
+ * `deepMerge` alone would let a project pin one provider and, as a side
+ * effect, wholesale-replace the *entire* `providers` array — silently hiding
+ * every other provider's stored host and API key, including ones the project
+ * never mentioned. `mcpServers` gets the same wholesale-replace treatment,
+ * which is why it is resolved through `resolveMcpServers` instead of the
+ * merged config; `providers` needs the same escape hatch since it is where
+ * credentials live.
+ */
+function mergeProviders(
+  global: SavedProviderEntry[],
+  project: SavedProviderEntry[],
+): SavedProviderEntry[] {
+  const byProvider = new Map<string, SavedProviderEntry>();
+  for (const entry of global) if (entry?.provider) byProvider.set(entry.provider, entry);
+  for (const entry of project) if (entry?.provider) byProvider.set(entry.provider, entry);
+  return [...byProvider.values()];
+}
+
+/**
  * Read at startup. Never throws — a corrupt file behaves like no file.
  *
  * Loads the global config (creating it if this is the first run), then, if the
@@ -141,7 +163,10 @@ export function loadConfig(workspaceRoot: string): SavedConfig {
   const global = readJsonConfig(globalConfigPath());
   const projectPath = configPath(workspaceRoot);
   if (!existsSync(projectPath)) return global;
-  return deepMerge(global, readJsonConfig(projectPath));
+  const project = readJsonConfig(projectPath);
+  const merged = deepMerge(global, project);
+  const providers = mergeProviders(global.providers ?? [], project.providers ?? []);
+  return providers.length > 0 ? { ...merged, providers } : merged;
 }
 
 /**
