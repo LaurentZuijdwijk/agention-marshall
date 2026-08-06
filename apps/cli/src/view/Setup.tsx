@@ -354,7 +354,7 @@ function ModelList({
       return;
     }
     if (key.backspace || key.delete) { setQuery(q => q.slice(0, -1)); return; }
-    if (!key.ctrl && !key.meta && !key.tab && input && /^[\\x20-\\x7e]+$/.test(input)) {
+    if (!key.ctrl && !key.meta && !key.tab && input && /^[\x20-\x7e]+$/.test(input)) {
       setQuery(q => q + input);
     }
   });

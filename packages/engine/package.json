@@ -20,7 +20,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "prepare": "tsc",
+    "prepare": "npm run build -w @agentionai/marshall-tools 2>/dev/null; tsc",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx/esm --test 'src/**/*.test.ts'"
   },
