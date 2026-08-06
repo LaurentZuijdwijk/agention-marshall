@@ -1,5 +1,43 @@
 # @agentionai/marshall-engine
 
+## 0.7.0
+
+### Minor Changes
+
+- 81cac61: Add a fake OpenAI-compatible model server, exported as `@agentionai/marshall-engine/testing`.
+
+  Every test so far stopped at the edge of the provider, so nothing covered the loop that
+  actually breaks: a tool call reaching a tool, the approval gate sitting between the two, a
+  job exiting and waking the agent. `startFakeProvider` serves `/v1/chat/completions` in both
+  shapes the engine uses — SSE for `run()`, one JSON body for `/plan` and `/review` — from a
+  scripted list of turns, and records what the model was sent. A test points an
+  `AgentProfile.host` at it and everything below stays real: the `openai` SDK, the tool-call
+  loop, the tool belt, the event stream.
+
+  New integration suites cover a gated `write_file` end to end, the denial path, an
+  interrupted turn, and a background job auto-resuming a turn on its own.
+
+- 81cac61: Add light mode — a lean tool belt for small models.
+
+  `--light`, `"light": true` in config, or `/light` in the session. It drops the scratchpad
+  (`note_*`/`log_*`), background jobs (`run_shell`'s `background` option and the `shell_*`
+  tools) and every sub-agent (`context`, `search`, `planner`, `reviewer`), leaving
+  read_file/list_dir/search/write_file/edit_file/run_shell. Measured on a tiered setup: 16
+  tools down to 7, and the fixed per-request overhead from ~2130 tokens to ~955 — a 55% cut,
+  which on an 8k local model is a quarter of the window handed back.
+
+  The system prompt is now built from the belt rather than being a fixed string. It had
+  hardcoded rules about `note_write`, `log_append` and backgrounding, and a rule describing a
+  tool the model does not have is worse than no rule: it spends tokens teaching a call that can
+  only fail. `buildSystemPrompt` composes only the rules whose tools are present, which is the
+  same way the `context`/`planner`/`reviewer` guidance blocks already worked.
+
+  `/light` takes effect on the next message, since the belt and prompt are rebuilt per turn.
+
+### Patch Changes
+
+- 81cac61: Show OpenRouter model pricing and capability metadata in the model picker.
+
 ## 0.6.1
 
 ### Patch Changes

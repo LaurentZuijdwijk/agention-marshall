@@ -1,5 +1,62 @@
 # @agentionai/marshall-cli
 
+## 0.9.0
+
+### Minor Changes
+
+- 81cac61: Add light mode — a lean tool belt for small models.
+
+  `--light`, `"light": true` in config, or `/light` in the session. It drops the scratchpad
+  (`note_*`/`log_*`), background jobs (`run_shell`'s `background` option and the `shell_*`
+  tools) and every sub-agent (`context`, `search`, `planner`, `reviewer`), leaving
+  read_file/list_dir/search/write_file/edit_file/run_shell. Measured on a tiered setup: 16
+  tools down to 7, and the fixed per-request overhead from ~2130 tokens to ~955 — a 55% cut,
+  which on an 8k local model is a quarter of the window handed back.
+
+  The system prompt is now built from the belt rather than being a fixed string. It had
+  hardcoded rules about `note_write`, `log_append` and backgrounding, and a rule describing a
+  tool the model does not have is worse than no rule: it spends tokens teaching a call that can
+  only fail. `buildSystemPrompt` composes only the rules whose tools are present, which is the
+  same way the `context`/`planner`/`reviewer` guidance blocks already worked.
+
+  `/light` takes effect on the next message, since the belt and prompt are rebuilt per turn.
+
+- 81cac61: Show the update notice in the session instead of after it.
+
+  The startup check ran, found a newer release, and then printed it to stderr _after_ Ink had
+  exited — into a terminal nobody is looking at any more. It now arrives as a transcript row
+  that says what to do: `update available: 0.8.2 → 0.9.0 — type /update to install`.
+
+  The row is held until the boot animation finishes, because the banner's `onDone` replaces
+  the transcript wholesale; a row pushed while it was still animating was discarded. Since the
+  check is a network round trip racing an animation, which one won was luck, and losing meant
+  the notice silently never appeared.
+
+  `checkForUpdate` now resolves to `{ current, latest }` rather than a pre-formatted string,
+  so the two callers can each say the right thing — the startup row points at `/update`, while
+  `/update` is already installing. When a global install fails (a root-owned prefix, usually)
+  `/update` now hands over the `npm install -g` command instead of only reporting the error.
+
+### Patch Changes
+
+- 15a1b68: Stop a project-local `.marshall/config.json` from hiding stored API keys for providers it
+  doesn't mention.
+
+  `loadConfig` deep-merged the project config on top of the global one, and the generic merge
+  replaces arrays wholesale — so a project pinning one provider (e.g. a `providers` entry for
+  `llamacpp` left over from before credentials moved to the global config) silently discarded
+  every other provider's entry from the merged view, including a stored API key. The `/model`
+  wizard's key step then saw no stored key and correctly refused to advance on a bare enter,
+  which looked like the enter key had stopped working. `providers` is now merged by provider
+  name — a project can still override a provider it names, but no longer erases providers it
+  doesn't mention.
+
+- 81cac61: Show OpenRouter model pricing and capability metadata in the model picker.
+- Updated dependencies [81cac61]
+- Updated dependencies [81cac61]
+- Updated dependencies [81cac61]
+  - @agentionai/marshall-engine@0.7.0
+
 ## 0.8.2
 
 ### Patch Changes
