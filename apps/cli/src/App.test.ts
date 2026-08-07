@@ -9,8 +9,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 import { Session } from '@agentionai/marshall-engine';
 import React from 'react';
 import { App } from './App.js';
-import { render } from 'ink';
-import { fakeStdout, fakeStdin, waitFor } from './testing/ink.js';
+import { fakeStdout, fakeStdin, renderTui, waitFor } from './testing/ink.js';
 
 // ── test helpers ───────────────────────────────────────────────────────────────
 
@@ -88,7 +87,7 @@ describe('App component', () => {
     const ws = mkTemp();
     const stream = fakeStdout(chunk => { capturedOutput += chunk; });
 
-    const instance = render(
+    const instance = renderTui(
       React.createElement(App, {
         workspaceRoot: ws,
         agentProfile,
@@ -96,7 +95,7 @@ describe('App component', () => {
         startLoginCtor: mockStartLogin,
         completeLoginCtor: mockCompleteLogin,
       }),
-      { stdout: stream, stdin: fakeStdin(), patchConsole: false, exitOnCtrlG: false },
+      { stdout: stream },
     );
 
     assert.ok(instance, 'render should return an instance');
@@ -109,7 +108,7 @@ describe('App component', () => {
     const stream = fakeStdout(chunk => { capturedOutput += chunk; });
 
     // Setup mock that completes synchronously via onMount-like approach
-    const { unmount, wait } = render(
+    const { unmount, wait } = renderTui(
       React.createElement(App, {
         workspaceRoot: ws,
         agentProfile,
@@ -118,7 +117,7 @@ describe('App component', () => {
         startLoginCtor: mockStartLogin,
         completeLoginCtor: mockCompleteLogin,
       }),
-      { stdout: stream, stdin: fakeStdin(), patchConsole: false, exitOnCtrlG: false },
+      { stdout: stream },
     );
 
     // In non-TTY mode, useEffect won't fire. We need a different strategy.
@@ -145,7 +144,7 @@ describe('App component', () => {
 
     const stream = fakeStdout(chunk => { capturedOutput += chunk; });
 
-    const instance = render(
+    const instance = renderTui(
       React.createElement(App, {
         workspaceRoot: ws,
         agentProfile,
@@ -156,7 +155,7 @@ describe('App component', () => {
         startLoginCtor: mockStartLogin,
         completeLoginCtor: mockCompleteLogin,
       }),
-      { stdout: stream, stdin: fakeStdin(), patchConsole: false, exitOnCtrlG: false },
+      { stdout: stream },
     );
 
     assert.ok(sessionOpts, 'Session should be constructed');
@@ -185,7 +184,7 @@ describe('App component', () => {
 
     const stream = fakeStdout(chunk => { capturedOutput += chunk; });
 
-    const instance = render(
+    const instance = renderTui(
       React.createElement(App, {
         workspaceRoot: ws,
         agentProfile,
@@ -194,7 +193,7 @@ describe('App component', () => {
         startLoginCtor: mockStartLogin,
         completeLoginCtor: mockCompleteLogin,
       }),
-      { stdout: stream, stdin: fakeStdin(), patchConsole: false, exitOnCtrlG: false },
+      { stdout: stream },
     );
 
     assert.ok(contextAgentVal, 'contextAgent should be passed');
@@ -220,7 +219,7 @@ describe('App component', () => {
 
     const stream = fakeStdout(chunk => { capturedOutput += chunk; });
 
-    const instance = render(
+    const instance = renderTui(
       React.createElement(App, {
         workspaceRoot: deepPath,
         agentProfile,
@@ -228,7 +227,7 @@ describe('App component', () => {
         startLoginCtor: mockStartLogin,
         completeLoginCtor: mockCompleteLogin,
       }),
-      { stdout: stream, stdin: fakeStdin(), patchConsole: false, exitOnCtrlG: false },
+      { stdout: stream },
     );
 
     assert.strictEqual(sessionWs, deepPath);
@@ -240,7 +239,7 @@ describe('App component', () => {
     const ws = mkTemp();
     const stream = fakeStdout(chunk => { capturedOutput += chunk; });
 
-    const instance = render(
+    const instance = renderTui(
       React.createElement(App, {
         workspaceRoot: ws,
         agentProfile,
@@ -248,7 +247,7 @@ describe('App component', () => {
         startLoginCtor: mockStartLogin,
         completeLoginCtor: mockCompleteLogin,
       }),
-      { stdout: stream, stdin: fakeStdin(), patchConsole: false, exitOnCtrlG: false },
+      { stdout: stream },
     );
 
     try {
@@ -280,7 +279,7 @@ describe('App component', () => {
     const stream = fakeStdout(chunk => { capturedOutput += chunk; });
     const stdin = fakeStdin();
 
-    const instance = render(
+    const instance = renderTui(
       React.createElement(App, {
         workspaceRoot: ws,
         agentProfile: { provider: 'claude' as const, model: 'claude-sonnet-4-6' },
@@ -290,7 +289,7 @@ describe('App component', () => {
         readClipboardImageCtor: () =>
           ({ image: { data: png.toString('base64'), mimeType: 'image/png' as const } }),
       } as any),
-      { stdout: stream, stdin, patchConsole: false, exitOnCtrlG: false },
+      { stdout: stream, stdin },
     );
 
     try {
@@ -323,7 +322,7 @@ describe('App component', () => {
     const ws = mkTemp();
     const stream = fakeStdout(chunk => { capturedOutput += chunk; });
 
-    const instance = render(
+    const instance = renderTui(
       React.createElement(App, {
         workspaceRoot: ws,
         agentProfile,
@@ -331,7 +330,7 @@ describe('App component', () => {
         startLoginCtor: mockStartLogin,
         completeLoginCtor: mockCompleteLogin,
       }),
-      { stdout: stream, stdin: fakeStdin(), patchConsole: false, exitOnCtrlG: false },
+      { stdout: stream },
     );
 
     try {
@@ -364,7 +363,7 @@ describe('App component', () => {
       const ws = mkTemp();
       const stream = fakeStdout(chunk => { capturedOutput += chunk; });
 
-      const instance = render(
+      const instance = renderTui(
         React.createElement(App, {
           workspaceRoot: ws,
           agentProfile,
@@ -372,7 +371,7 @@ describe('App component', () => {
           startLoginCtor: mockStartLogin,
           completeLoginCtor: mockCompleteLogin,
         }),
-        { stdout: stream, stdin: fakeStdin(), patchConsole: false, exitOnCtrlG: false },
+        { stdout: stream },
       );
 
       instance.unmount();
@@ -386,7 +385,7 @@ describe('the startup update check', () => {
   /** Renders the App with a pre-resolved check, so no test touches the network. */
   function renderWith(result: { current: string; latest: string } | null, animate = false) {
     const stream = fakeStdout(chunk => { capturedOutput += chunk; });
-    return render(
+    return renderTui(
       React.createElement(App, {
         workspaceRoot: mkTemp(),
         agentProfile,
@@ -396,7 +395,7 @@ describe('the startup update check', () => {
         startLoginCtor: mockStartLogin,
         completeLoginCtor: mockCompleteLogin,
       } as any),
-      { stdout: stream, stdin: fakeStdin(), patchConsole: false, exitOnCtrlG: false },
+      { stdout: stream },
     );
   }
 

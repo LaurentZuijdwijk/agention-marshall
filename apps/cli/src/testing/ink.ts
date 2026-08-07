@@ -3,14 +3,20 @@
 // Shared by the App unit tests and the integration suite, because getting these
 // two streams wrong fails silently rather than loudly:
 //
-//   * Ink only renders incrementally when stdout looks like a TTY. Against a
-//     plain Writable it stays in non-interactive mode and writes nothing until
-//     unmount — so every assertion runs against an empty buffer, and the
-//     negative ones ("does not show the wizard") pass for the wrong reason.
+//   * Ink only renders incrementally in interactive mode. Against a plain
+//     Writable it writes nothing until unmount — so every assertion runs against
+//     an empty buffer, and the negative ones ("does not show the wizard") pass
+//     for the wrong reason. A TTY-shaped stdout is necessary but *not* enough:
+//     see `renderTui` for the half that only bites on CI.
 //   * useInput needs raw mode. A bare Readable has neither `isTTY` nor
 //     `setRawMode`, so Ink renders "Raw mode is not supported" instead of the app.
+//
+// Render through `renderTui` rather than Ink's `render` directly, so a new test
+// cannot miss either half.
 
 import { Readable, Writable } from 'node:stream';
+import type { ReactElement } from 'react';
+import { render, type Instance, type RenderOptions } from 'ink';
 
 export type FakeStdout = Writable & { isTTY: boolean; columns: number; rows: number };
 export type FakeStdin = Readable & {
@@ -39,6 +45,36 @@ export function fakeStdin(): FakeStdin {
   stdin.ref = () => {};
   stdin.unref = () => {};
   return stdin;
+}
+
+export type RenderTuiOptions = Omit<RenderOptions, 'stdout' | 'stdin'> & {
+  stdout: FakeStdout;
+  stdin?: FakeStdin;
+};
+
+/**
+ * Render into the fake streams with the options every test needs.
+ *
+ * `interactive: true` is the load-bearing one. Ink resolves interactive as
+ * `!isInCi && stdout.isTTY`, and `is-in-ci` snapshots `process.env.CI` at module
+ * load — so on GitHub Actions a TTY-shaped stdout is still non-interactive, and
+ * Ink writes only the <Static> transcript, holding the dynamic frame back until
+ * unmount. Waiting on anything in that frame (the idle prompt, the wizard, live
+ * output) then times out: green locally, red on CI, for every test that types.
+ * Clearing CI in a beforeEach is too late to help — is-in-ci has already read it
+ * — so the option is the only reliable override.
+ */
+export function renderTui(node: ReactElement, options: RenderTuiOptions): Instance {
+  const { stdout, stdin = fakeStdin(), ...rest } = options;
+  return render(node, {
+    interactive: true,
+    patchConsole: false,
+    exitOnCtrlC: false,
+    // After the defaults, so a test that needs one of them back can say so.
+    ...rest,
+    stdout: stdout as unknown as NodeJS.WriteStream,
+    stdin: stdin as unknown as NodeJS.ReadStream,
+  });
 }
 
 /**
