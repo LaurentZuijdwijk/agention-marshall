@@ -4,10 +4,9 @@
 
 import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { Readable, Writable } from 'node:stream';
 import React, { useState } from 'react';
-import { render } from 'ink';
 import { TextInput } from './TextInput.js';
+import { fakeStdout, fakeStdin, renderTui } from '../testing/ink.js';
 
 // ── harness ───────────────────────────────────────────────────────────────────
 
@@ -20,27 +19,6 @@ const KEY = {
 
 /** What a terminal in bracketed-paste mode actually puts on stdin. */
 const paste = (text: string) => `\u001B[200~${text}\u001B[201~`;
-
-function fakeStdout(sink: (chunk: string) => void): Writable {
-  const stdout = new Writable({
-    write(chunk, _encoding, cb) { sink(chunk.toString()); cb(); },
-  }) as Writable & { isTTY: boolean; columns: number; rows: number };
-  stdout.isTTY = true;
-  stdout.columns = 100;
-  stdout.rows = 30;
-  return stdout;
-}
-
-function fakeStdin(): Readable & { isTTY: boolean; setRawMode(m: boolean): void } {
-  const stdin = new Readable({ read() {} }) as Readable & {
-    isTTY: boolean; setRawMode: (mode: boolean) => void; ref: () => void; unref: () => void;
-  };
-  stdin.isTTY = true;
-  stdin.setRawMode = () => {};
-  stdin.ref = () => {};
-  stdin.unref = () => {};
-  return stdin;
-}
 
 const strip = (s: string) => s.replace(/\u001B\[[0-9;?]*[a-zA-Z]/g, '');
 const tick = () => new Promise(resolve => setTimeout(resolve, 20));
@@ -77,10 +55,9 @@ function mount(options: {
   }
 
   const stdin = fakeStdin();
-  const instance = render(React.createElement(Harness), {
+  const instance = renderTui(React.createElement(Harness), {
     stdout: fakeStdout(chunk => { output += chunk; }),
     stdin,
-    patchConsole: false,
   });
 
   return {

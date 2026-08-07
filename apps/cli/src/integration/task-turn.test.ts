@@ -13,11 +13,10 @@ import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'no
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import React from 'react';
-import { render } from 'ink';
 import { startFakeProvider } from '@agentionai/marshall-engine/testing';
 import type { ScriptedTurn } from '@agentionai/marshall-engine/testing';
 import { App } from '../App.js';
-import { fakeStdout, fakeStdin, waitFor, KEY } from '../testing/ink.js';
+import { fakeStdout, fakeStdin, renderTui, waitFor, KEY } from '../testing/ink.js';
 
 /**
  * Everything a driven session needs, torn down together.
@@ -41,13 +40,13 @@ async function drive(t: TestContext, script: ScriptedTurn[], workspaceFiles: Rec
   const stdout = fakeStdout(chunk => { output += chunk; });
   const stdin = fakeStdin();
 
-  const instance = render(
+  const instance = renderTui(
     React.createElement(App, {
       workspaceRoot: workspace,
       // The real Session is the default SessionCtor — that is the point here.
       agentProfile: { provider: 'llamacpp', host: fake.host, model: 'test-model' },
     }),
-    { stdout, stdin, patchConsole: false, exitOnCtrlC: false },
+    { stdout, stdin },
   );
   t.after(() => instance.unmount());
 

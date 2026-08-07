@@ -5,11 +5,10 @@
 
 import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { Readable, Writable } from 'node:stream';
 import React, { useState } from 'react';
-import { render } from 'ink';
 import { InputPrompt } from './InputPrompt.js';
 import { createPasteBuffer } from '../hooks/usePasteBuffer.js';
+import { fakeStdout, fakeStdin, renderTui } from '../testing/ink.js';
 
 const bracketed = (text: string) =>
   `\u001B[200~${text.replace(/\n/g, '\r')}\u001B[201~`;
@@ -28,20 +27,9 @@ async function mount() {
   let output = '';
   const submitted: string[] = [];
 
-  const stdout = new Writable({
-    write(chunk, _encoding, cb) { output += chunk.toString(); cb(); },
-  }) as Writable & { isTTY: boolean; columns: number; rows: number };
-  stdout.isTTY = true;
-  stdout.columns = 76;
-  stdout.rows = 30;
-
-  const stdin = new Readable({ read() {} }) as Readable & {
-    isTTY: boolean; setRawMode: (m: boolean) => void; ref: () => void; unref: () => void;
-  };
-  stdin.isTTY = true;
-  stdin.setRawMode = () => {};
-  stdin.ref = () => {};
-  stdin.unref = () => {};
+  // 76 columns: narrow enough that a long paste has to wrap.
+  const stdout = fakeStdout(chunk => { output += chunk; }, 76);
+  const stdin = fakeStdin();
 
   // The App's own wiring: capture on the way in, expand on the way out.
   const paste = createPasteBuffer();
@@ -58,7 +46,7 @@ async function mount() {
     });
   }
 
-  const instance = render(React.createElement(Harness), { stdout, stdin, patchConsole: false });
+  const instance = renderTui(React.createElement(Harness), { stdout, stdin });
   // Ink commits its first frame, and the paste listener attaches, a tick after
   // mount. Sending before that drops the paste on the floor.
   await waitForFrame(() => output.length);
