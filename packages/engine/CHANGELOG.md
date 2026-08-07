@@ -1,5 +1,11 @@
 # @agentionai/marshall-engine
 
+## 0.8.0
+
+### Minor Changes
+
+- 958e40f: Add typeahead search to the model picker and include OpenRouter content-safety models, including free NVIDIA Nemotron guardrails, in the catalogue.
+
 ## 0.7.0
 
 ### Minor Changes
