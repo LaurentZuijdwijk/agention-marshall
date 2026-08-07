@@ -12,6 +12,7 @@ import {
   createScratchTools,
   createGitHubTools,
   createJobTools,
+  createAskTool,
   createDedupeCache,
   createBackgroundJobs,
   summariseJob,
@@ -1087,6 +1088,7 @@ export class Session {
         ...(searchTool ? [searchTool] : []),
         ...(plannerTool ? [plannerTool] : []),
         ...(reviewerTool ? [reviewerTool] : []),
+        ...(this.client.askUser ? [createAskTool((request) => this.client.askUser!(request))] : []),
         // Rebuilt per turn: the wrapping binds this turn's approval fn, abort
         // signal and caller identity, none of which outlive the turn.
         ...this.mcp.tools(toolConfig),
@@ -1098,6 +1100,7 @@ export class Session {
         contextTool ? CONTEXT_TOOL_GUIDANCE : '',
         plannerTool ? PLANNER_TOOL_GUIDANCE : '',
         reviewerTool ? REVIEWER_TOOL_GUIDANCE : '',
+        this.client.askUser ? '\n\nUse ask_user for genuine ambiguity that blocks progress, not for confirmation.\n' : '',
       ].join('');
 
       if (coderProfile.provider === 'llamacpp' && !this.llamaModelLoaded) {
@@ -1253,6 +1256,9 @@ export class Session {
       const tools = [
         ...createReadOnlyFileTools(this.config.workspaceRoot, this.config.limits),
         ...(contextTool ? [contextTool] : []),
+        ...((eventType === 'plan' || eventType === 'goal') && this.client.askUser
+          ? [createAskTool((request) => this.client.askUser!(request))]
+          : []),
       ];
       const agent = await createAgent(profile, tools, new History(), {
         // No cap unless one is configured — a whole-codebase review legitimately
