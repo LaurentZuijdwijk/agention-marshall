@@ -222,8 +222,8 @@ export function parseOllamaModels(tags: unknown, running?: unknown): ModelInfo[]
  * Parse OpenRouter's /api/v1/models catalogue. No auth needed.
  *
  * The catalogue contains models for many modalities and capabilities. Keep
- * every text-output model that supports tools; the UI can expose the complete
- * result and users can still add arbitrary custom IDs.
+ * every text-only-output model; `supportsTools` records whether the model can
+ * call tools so the picker can warn before selection.
  */
 export function parseOpenRouterModels(payload: unknown, pinned: string[] = []): ModelInfo[] {
   const data = (payload as { data?: unknown })?.data;
@@ -238,10 +238,6 @@ export function parseOpenRouterModels(payload: unknown, pinned: string[] = []): 
     if (seen.has(id)) continue; // :free variants share a canonical slug
 
     const supported: unknown[] = Array.isArray(entry.supported_parameters) ? entry.supported_parameters : [];
-    // Guardrail/content-safety models may omit `tools`; they are useful in the
-    // catalogue but cannot be selected as the ordinary tool-calling agent.
-    const isSafetyModel = /content[-_ ]?safety|guardrail|safety/i.test(id);
-    if (!supported.includes('tools') && !isSafetyModel) continue;
     const outputs: unknown[] = entry.architecture?.output_modalities ?? [];
     if (!outputs.includes('text') || outputs.some(o => o !== 'text')) continue;
     // Meta-routers price at -1 and just forward elsewhere.
@@ -260,7 +256,7 @@ export function parseOpenRouterModels(payload: unknown, pinned: string[] = []): 
     if (typeof entry.name === 'string' && entry.name !== '') info.label = entry.name;
     const maxOutput = entry.top_provider?.max_completion_tokens;
     if (typeof maxOutput === 'number' && maxOutput > 0) info.maxOutput = maxOutput;
-    info.supportsTools = true;
+    info.supportsTools = supported.includes('tools');
     if (entry.reasoning?.mandatory === true || entry.reasoning?.default_enabled === true) {
       info.reasoning = true;
     } else if (Array.isArray(supported) && supported.includes('reasoning')) {

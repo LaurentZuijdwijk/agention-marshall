@@ -10,6 +10,7 @@ interface Pushed { role: string; content: string; extra?: Record<string, unknown
 function harness(opts: { usage?: boolean; reasoning?: string; stream?: string } = {}) {
   const pushed: Pushed[] = [];
   const calls: string[] = [];
+  const usage: Array<{ inputTokens: number; outputTokens: number; durationMs: number }> = [];
   let pendingReasoning = opts.reasoning ?? '';
   // Stands in for the live buffer the real port keeps: tokens land in it and a
   // take empties it, which is what the ordering rules below are written against.
@@ -26,12 +27,13 @@ function harness(opts: { usage?: boolean; reasoning?: string; stream?: string } 
     takeReasoning: () => { const r = pendingReasoning; pendingReasoning = ''; calls.push('takeReasoning'); return r; },
     turnStarted: () => calls.push('turnStarted'),
     turnEnded: (o: TurnOutcome) => calls.push(`turnEnded:${o}`),
+    reportUsage: (inputTokens, outputTokens, durationMs) => usage.push({ inputTokens, outputTokens, durationMs }),
     requestApproval: async () => 'approve',
     showUsage: () => opts.usage ?? false,
   };
 
   const client = createEngineClient(port);
-  return { client, pushed, calls, send: (e: OutputEvent) => client.onOutput(e) };
+  return { client, pushed, calls, usage, send: (e: OutputEvent) => client.onOutput(e) };
 }
 
 describe('tool calls', () => {
@@ -237,10 +239,11 @@ describe('usage', () => {
     assert.deepEqual(h.calls, []);
   });
 
-  it('is formatted when enabled', () => {
+  it('reports usage to the status port when enabled', () => {
     const h = harness({ usage: true });
     h.send({ type: 'usage', inputTokens: 10, outputTokens: 20, durationMs: 1500 });
-    assert.match(h.pushed[0].content, /↑10.*↓20.*1\.5s/);
+    assert.deepEqual(h.pushed, []);
+    assert.deepEqual(h.usage, [{ inputTokens: 10, outputTokens: 20, durationMs: 1500 }]);
   });
 });
 

@@ -9,14 +9,13 @@ import { McpSetup } from './view/McpSetup.js';
 import type { McpScope } from './view/McpSetup.js';
 import { Banner } from './view/Banner.js';
 import type { HeaderMeta } from './view/Banner.js';
-import { Spinner } from './view/Spinner.js';
 import { C, G } from './view/theme.js';
 import { shortenPath } from './format.js';
 import { MessageRow } from './view/MessageRow.js';
 import { ApprovalPanel, APPROVAL_LABELS } from './view/ApprovalPanel.js';
-import { PromptFrame } from './view/PromptFrame.js';
 import { InputPrompt } from './view/InputPrompt.js';
 import { LiveOutput } from './view/LiveOutput.js';
+import { ActivityStatus } from './view/ActivityStatus.js';
 import type { Message } from './view/message.js';
 import { useTranscript } from './hooks/useTranscript.js';
 import { useApprovals } from './hooks/useApprovals.js';
@@ -77,11 +76,7 @@ export interface AppProps {
    * resolved promise, and nothing reaches the npm registry.
    */
   updateCheck?: Promise<UpdateInfo | null>;
-  /**
-   * Hands the parent a way to force a full transcript replay. Used on resize:
-   * the terminal reflows what is already on screen, so Ink's line-count erase
-   * can never be correct — the screen has to be wiped and rebuilt instead.
-   */
+  /** Force a full transcript replay after terminal resize. */
   registerRedraw?: (redraw: () => void) => void;
 }
 
@@ -126,6 +121,9 @@ export function App({
   const { stdout } = useStdout();
 
   const [input, setInput] = useState('');
+  const [pendingPrompts, setPendingPrompts] = useState<string[]>([]);
+  const [activity, setActivity] = useState<'idle' | 'loading' | 'thinking' | 'generating' | 'complete' | 'error' | 'cancelled'>('idle');
+  const [metrics, setMetrics] = useState<{ inputTokens?: number; outputTokens?: number; durationMs?: number }>({});
   const [mode, setMode] = useState<Mode>(
     agentProfile.model ? { type: 'idle' } : { type: 'setup', tier: 'deep', chain: true },
   );
@@ -161,6 +159,7 @@ export function App({
   const client = useEngineClient(useMemo((): TranscriptPort => ({
     push: (role, content, extra) => live.current.transcript.push(role, content, extra),
     appendToken: (text) => {
+      setActivity('generating');
       if (live.current.prefs.read().stream) live.current.transcript.appendStream(text);
     },
     appendReasoning: (text) => {
@@ -172,9 +171,17 @@ export function App({
     // put the spinner up in place of the input prompt, but it must not shove the
     // setup wizard, a login prompt or a pending approval off the screen to do it
     // — those are waiting on the user, and the turn can render underneath them.
-    turnStarted: () => setMode(prev => (prev.type === 'idle' ? { type: 'running' } : prev)),
+    turnStarted: () => {
+      setActivity('thinking');
+      setMetrics({});
+      setMode(prev => (prev.type === 'idle' ? { type: 'running' } : prev));
+    },
+    reportUsage: (inputTokens, outputTokens, durationMs) => {
+      setMetrics({ inputTokens, outputTokens, durationMs });
+    },
     turnEnded: (outcome) => {
       live.current.setSteering(outcome === 'interrupted');
+      setActivity(outcome === 'done' ? 'complete' : outcome === 'interrupted' ? 'cancelled' : 'error');
       setMode({ type: 'idle' });
     },
     requestApproval: (request) => {
@@ -202,7 +209,7 @@ export function App({
 
   useEffect(() => {
     registerRedraw?.(() => transcript.replay());
-  }, [registerRedraw]);
+  }, [registerRedraw, transcript]);
 
   // Announced once at startup rather than only on /mcp: a project that enables a
   // server nothing defines otherwise looks exactly like a project with no MCP,
@@ -374,6 +381,17 @@ export function App({
 
   // ── submitting ─────────────────────────────────────────────────────────────
   const handleSubmit = (value: string) => {
+    // While a turn is active, capture the prompt explicitly instead of dropping it
+    // or starting a concurrent engine run with ambiguous ordering.
+    if (mode.type === 'running' || mode.type === 'approval') {
+      const queued = pasteBuffer.expand(value).trim();
+      if (!queued) return;
+      setPendingPrompts(previous => [...previous, queued]);
+      setInput('');
+      pasteBuffer.clear();
+      transcript.push('info', `queued prompt ${pendingPrompts.length + 1} — it will run after the active request`);
+      return;
+    }
     // Expand before anything reads the text — the placeholder is a display
     // device, and every branch below (login code, slash command, task) wants
     // what the user actually pasted.
@@ -409,6 +427,7 @@ export function App({
 
     transcript.push('user', text);
     setSteering(false);
+    setActivity('thinking');
     setMode({ type: 'running' });
     // Inline every `@path` that resolves, so the model sees the contents rather
     // than a path it would have to spend a read_file call on. Files that
@@ -428,6 +447,19 @@ export function App({
       setMode({ type: 'idle' });
     });
   };
+
+  // Start queued prompts one at a time after the active request reaches a terminal state.
+  // This is explicit FIFO handling: no prompt is silently discarded or run concurrently.
+  useEffect(() => {
+    if (activity !== 'complete' && activity !== 'error' && activity !== 'cancelled') return;
+    const [next, ...rest] = pendingPrompts;
+    if (!next) return;
+    setPendingPrompts(rest);
+    setActivity('idle');
+    handleSubmit(next);
+  // handleSubmit is intentionally event-local; this effect reacts only to lifecycle completion.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activity, pendingPrompts]);
 
   /** What to pre-fill the wizard with for the tier being chosen. */
   const seedProfile = (tier: Tier) => {
@@ -469,7 +501,7 @@ export function App({
       </Box>
     ) : null;
 
-  const accepting = mode.type === 'idle' || mode.type === 'login-pending';
+  const accepting = mode.type === 'idle' || mode.type === 'running' || mode.type === 'login-pending' || mode.type === 'approval';
 
   return (
     <Box flexDirection="column">
@@ -506,10 +538,8 @@ export function App({
         />
       )}
 
-      {!booting && mode.type === 'running' && (
-        <PromptFrame color={C.accent} hint={`esc interrupts ${G.bullet} esc esc quits`}>
-          <Spinner />
-        </PromptFrame>
+      {!booting && (
+        <ActivityStatus state={activity} metrics={metrics} pending={pendingPrompts.length} />
       )}
 
       {wizard}

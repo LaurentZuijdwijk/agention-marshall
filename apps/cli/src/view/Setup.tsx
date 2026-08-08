@@ -84,7 +84,7 @@ async function fetchLocalModels(host: string): Promise<ModelInfo[]> {
   return [];
 }
 
-/** OpenRouter's public catalogue — no key required, already curated. */
+/** OpenRouter's public catalogue — no key required; capability metadata is live. */
 async function fetchOpenRouterModels(pinned: string[]): Promise<ModelInfo[]> {
   const listed = await getJson('https://openrouter.ai/api/v1/models');
   return listed ? parseOpenRouterModels(listed, pinned) : [];
@@ -232,7 +232,7 @@ function ModelSelect({
       fetchOpenRouterModels(MODEL_PRESETS.openrouter).then(fetched => {
         if (fetched.length > 0) {
           setModels(fetched);
-          setFetchNote(`${fetched.length} coding-capable models from openrouter.ai`);
+          setFetchNote(`${fetched.length} text models from openrouter.ai`);
         } else {
           setModels(presets());
           setFetchNote('openrouter.ai unreachable — showing defaults');
@@ -290,8 +290,9 @@ export function filterModels(models: ModelInfo[], query: string): ModelInfo[] {
 }
 
 function statusGlyph(model: ModelInfo): { glyph: string; color: string } {
-  if (model.failed)   return { glyph: G.no,   color: C.error };
-  if (model.loaded)   return { glyph: G.tool, color: C.ok    };
+  if (model.failed)             return { glyph: G.no,   color: C.error };
+  if (model.supportsTools === false) return { glyph: G.warn, color: C.warn  };
+  if (model.loaded)             return { glyph: G.tool, color: C.ok    };
   return { glyph: '○', color: C.faint };
 }
 
@@ -321,6 +322,7 @@ function ModelDetail({ model }: { model: ModelInfo }) {
   }
   if (model.maxOutput) facts.push(`${formatContext(model.maxOutput)} max output`);
   if (model.reasoning) facts.push('reasoning');
+  if (model.supportsTools === false) facts.push('no tool support');
 
   if (model.failed) facts.push('last start failed');
   else if (!model.loaded) facts.push('not loaded — first request will load it');

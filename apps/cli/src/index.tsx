@@ -61,12 +61,12 @@ inkInstance = render(
     enableWebSearch={flags.webSearch}
     maxTokens={profiles.maxTokens}
     light={profiles.light}
-    registerRedraw={fn => { replayTranscript = fn; }}
     savedHosts={savedHosts(savedConfig)}
     savedKeys={savedKeys(savedConfig)}
     mcpServers={loadMcpServers(workspaceRoot)}
     mcpWarnings={loadMcpWarnings(workspaceRoot)}
     updateCheck={updateCheck}
+    registerRedraw={fn => { replayTranscript = fn; }}
   />,
   // The App owns Ctrl-C so it can interrupt a running task before quitting;
   // ink's built-in handler would unmount without cancelling anything.

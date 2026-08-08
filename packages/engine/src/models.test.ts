@@ -305,14 +305,16 @@ const OR_ROLEPLAY = {
 describe('parseOpenRouterModels', () => {
   const payload = { data: [OR_CODING, OR_OLDER, OR_IMAGE_GEN, OR_ROUTER, OR_NO_TOOLS, OR_ROLEPLAY] };
 
-  it('keeps text-out tool-calling models from headline families', () => {
-    const ids = parseOpenRouterModels(payload).map(m => m.id);
-    assert.deepEqual(ids, [OR_CODING.id, OR_OLDER.id, OR_ROLEPLAY.id]);
+  it('keeps text-output models and records tool support', () => {
+    const models = parseOpenRouterModels(payload);
+    assert.deepEqual(models.map(m => m.id), [OR_CODING.id, OR_OLDER.id, OR_ROLEPLAY.id, OR_NO_TOOLS.id]);
+    assert.equal(models.find(m => m.id === OR_CODING.id)?.supportsTools, true);
+    assert.equal(models.find(m => m.id === OR_NO_TOOLS.id)?.supportsTools, false);
   });
 
-  it('drops image generation, meta-routers and non-tool models', () => {
+  it('drops image generation and meta-routers', () => {
     const ids = parseOpenRouterModels(payload).map(m => m.id);
-    for (const dropped of [OR_IMAGE_GEN.id, OR_ROUTER.id, OR_NO_TOOLS.id]) {
+    for (const dropped of [OR_IMAGE_GEN.id, OR_ROUTER.id]) {
       assert.ok(!ids.includes(dropped), `${dropped} should be filtered out`);
     }
     assert.ok(ids.includes(OR_ROLEPLAY.id), 'supported text models are not family-filtered');
@@ -320,12 +322,13 @@ describe('parseOpenRouterModels', () => {
 
   it('sorts pinned presets first, then newest first', () => {
     const ids = parseOpenRouterModels(payload, [OR_OLDER.id]).map(m => m.id);
-    assert.deepEqual(ids, [OR_OLDER.id, OR_CODING.id, OR_ROLEPLAY.id]);
+    assert.deepEqual(ids, [OR_OLDER.id, OR_CODING.id, OR_ROLEPLAY.id, OR_NO_TOOLS.id]);
   });
 
-  it('keeps free content-safety models without tool support', () => {
+  it('keeps content-safety models and marks them without tool support', () => {
     const [model] = parseOpenRouterModels({ data: [OR_SAFETY] });
     assert.equal(model.id, OR_SAFETY.id);
+    assert.equal(model.supportsTools, false);
     assert.deepEqual(model.pricing, { prompt: 0, completion: 0 });
   });
 

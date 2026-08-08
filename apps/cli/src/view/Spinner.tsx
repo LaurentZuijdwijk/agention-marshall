@@ -12,7 +12,7 @@ const VERB_FRAMES = Math.round(4_000 / FRAME_MS);
  * The "agent is busy" indicator: a braille spinner whose colour rides the brand
  * gradient, the elapsed time, and a rotating status verb.
  */
-export function Spinner({ label }: { label?: string }) {
+export function Spinner({ label, inline = false }: { label?: string; inline?: boolean }) {
   const [frame, setFrame] = useState(0);
   const [startedAt] = useState(() => Date.now());
 
@@ -32,7 +32,8 @@ export function Spinner({ label }: { label?: string }) {
     <Box>
       <Text color={color}>{SPINNER_FRAMES[frame % SPINNER_FRAMES.length]} </Text>
       <Text color={C.accent}>{verb}</Text>
-      <Text color={C.faint}>  {elapsed.toFixed(1)}s  {G.bullet}  esc to interrupt</Text>
+      <Text color={C.faint}>  {elapsed.toFixed(1)}s</Text>
+      {!inline && <Text color={C.faint}>  {G.bullet}  esc to interrupt</Text>}
     </Box>
   );
 }

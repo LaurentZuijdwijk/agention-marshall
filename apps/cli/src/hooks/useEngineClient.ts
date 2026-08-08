@@ -34,6 +34,7 @@ export interface TranscriptPort {
    */
   turnStarted(): void;
   turnEnded(outcome: TurnOutcome): void;
+  reportUsage?(inputTokens: number, outputTokens: number, durationMs: number): void;
   requestApproval(request: ApprovalRequest): Promise<ApprovalDecision>;
   showUsage(): boolean;
 }
@@ -176,10 +177,7 @@ export function createEngineClient(port: TranscriptPort): ClientInterface {
 
         case 'usage':
           if (port.showUsage()) {
-            port.push(
-              'usage',
-              `↑${event.inputTokens}  ↓${event.outputTokens}  ${G.bullet}  ${(event.durationMs / 1000).toFixed(1)}s`,
-            );
+            port.reportUsage?.(event.inputTokens, event.outputTokens, event.durationMs);
           }
           break;
 
