@@ -1,5 +1,82 @@
 # @agentionai/marshall-engine
 
+## 0.10.0
+
+### Minor Changes
+
+- 78df418: Add safety level 3: a model reviews each tool call before you do.
+
+  `EngineConfig.safetyLevel` is now `1 | 2 | 3` — no gate, human-in-the-loop (the
+  default, unchanged), or agent-reviewed. At level 3 a dedicated judge model sees
+  each state-changing call first. A confident "safe" verdict approves it outright
+  and you are never interrupted; an "unsafe" verdict does _not_ block, it annotates
+  the approval with the judge's reasoning and still asks you, so a false positive
+  costs a keystroke rather than the task. A judge that fails, times out or answers
+  unparseably also defers to you. The judge can only ever skip asking about things
+  it is confident are fine.
+
+  In the CLI: `/safety [none|default|agentic]`, session-only like `/light` rather
+  than persisted, with `agentic` opening the model picker to choose the judge. The
+  banner shows a `safety` row whenever the level is not the default, and each
+  verdict appears in the transcript under the call it judged — approvals included,
+  since a call you were never asked about is exactly the one whose review would
+  otherwise be invisible. Every judge call is logged in full to
+  `.marshall/logs/session.log`.
+
+  Two judge prompt shapes are supported: `chat-judge` for ordinary
+  instruction-following models, and `nvidia-content-safety` for guard-style
+  classifiers. Testing against real local models says to prefer the former, even a
+  small fast one, and to judge a judge by its false-approve rate rather than raw
+  accuracy — a denial still reaches you, an approval does not. See
+  `docs/agent-based-safety.md`.
+
+- 78df418: Fix two ways concurrent tool calls lost work or consent.
+
+  Models routinely batch several file calls into one message, and the agent SDK
+  runs that batch concurrently. Both of these were live, not theoretical.
+
+  **Edits to one file raced.** `edit_file` reads, computes and writes across an
+  `await`, so parallel edits all read the same original and only the last write
+  survived — while every call still reported `Edited`. Writes to a path are now
+  serialised, keyed per path so edits to _different_ files still run in parallel.
+  Whole-file writes cannot be fixed by serialising, since each carries complete
+  content built from the same read, so `write_file` now refuses a write whose
+  expectation of the file no longer matches disk and points at `edit_file`, which
+  composes. A write composed before someone hand-edits the file in their editor is
+  refused for the same reason, instead of silently discarding their change.
+
+  **One approval answered for calls you never saw.** The gate coalesced in-flight
+  requests by tool name, so a batch of writes to three different files cost one
+  prompt: you were shown one file, and approving it wrote the other two unseen.
+  Denying one denied all three. Requests now key on the tool, the arguments and
+  the calling agent, so only genuinely identical calls share a decision.
+
+  **You will see more prompts than before.** A batch of three writes to three
+  files now asks three times, because it always should have. `ToolCaller` also
+  gains an optional `id` naming the agent instance rather than its role, so two
+  agents on one role are not treated as one actor by the gate, the approval panel
+  or the safety judge.
+
+  Read tracking (`read_file` before writing an existing file) moves to session
+  scope via `ToolConfig.readFiles`, fixing a case where reading a file in one turn
+  and editing it in the next failed with "has not been read this session".
+
+### Patch Changes
+
+- 78df418: Stop publishing compiled test files.
+
+  `files: ["dist"]` ships dist wholesale and the build compiled everything under
+  `src`, so every release carried its own test suite — 11 compiled test files in
+  the engine tarball alone, plus their fixtures. Builds now run against a config
+  that excludes tests, while `typecheck` still covers them.
+  `@agentionai/marshall-engine/testing` is unaffected: the fake provider is a real
+  export, not a test.
+
+- Updated dependencies [78df418]
+- Updated dependencies [78df418]
+- Updated dependencies [78df418]
+  - @agentionai/marshall-tools@0.6.0
+
 ## 0.9.0
 
 ### Minor Changes

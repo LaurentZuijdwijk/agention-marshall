@@ -1,5 +1,67 @@
 # @agentionai/marshall-cli
 
+## 0.12.0
+
+### Minor Changes
+
+- 78df418: Add safety level 3: a model reviews each tool call before you do.
+
+  `EngineConfig.safetyLevel` is now `1 | 2 | 3` — no gate, human-in-the-loop (the
+  default, unchanged), or agent-reviewed. At level 3 a dedicated judge model sees
+  each state-changing call first. A confident "safe" verdict approves it outright
+  and you are never interrupted; an "unsafe" verdict does _not_ block, it annotates
+  the approval with the judge's reasoning and still asks you, so a false positive
+  costs a keystroke rather than the task. A judge that fails, times out or answers
+  unparseably also defers to you. The judge can only ever skip asking about things
+  it is confident are fine.
+
+  In the CLI: `/safety [none|default|agentic]`, session-only like `/light` rather
+  than persisted, with `agentic` opening the model picker to choose the judge. The
+  banner shows a `safety` row whenever the level is not the default, and each
+  verdict appears in the transcript under the call it judged — approvals included,
+  since a call you were never asked about is exactly the one whose review would
+  otherwise be invisible. Every judge call is logged in full to
+  `.marshall/logs/session.log`.
+
+  Two judge prompt shapes are supported: `chat-judge` for ordinary
+  instruction-following models, and `nvidia-content-safety` for guard-style
+  classifiers. Testing against real local models says to prefer the former, even a
+  small fast one, and to judge a judge by its false-approve rate rather than raw
+  accuracy — a denial still reaches you, an approval does not. See
+  `docs/agent-based-safety.md`.
+
+- 78df418: Complete slash command arguments, not just command names.
+
+  Tab stopped working the moment you typed a space, so the argument words for
+  `/model`, `/safety`, `/jobs` and `/mcp` were invisible unless you already knew
+  them. `/model ` now offers `deep`, `/safety ag` finishes `agentic`, and verbs
+  that still need a value (`/mcp remove`, `/jobs kill`) complete with a trailing
+  space so the cursor lands where the name goes. The word list lives beside the
+  parser and is tested against it, so completion cannot offer something the parser
+  would reject.
+
+  Also: a tagline under the wordmark, and safety verdict rows now stay on one line
+  instead of wrapping and losing the gutter that marks them as commentary on the
+  call above.
+
+### Patch Changes
+
+- 78df418: Stop publishing compiled test files.
+
+  `files: ["dist"]` ships dist wholesale and the build compiled everything under
+  `src`, so every release carried its own test suite — 11 compiled test files in
+  the engine tarball alone, plus their fixtures. Builds now run against a config
+  that excludes tests, while `typecheck` still covers them.
+  `@agentionai/marshall-engine/testing` is unaffected: the fake provider is a real
+  export, not a test.
+
+- Updated dependencies [78df418]
+- Updated dependencies [78df418]
+- Updated dependencies [78df418]
+- Updated dependencies [78df418]
+  - @agentionai/marshall-engine@0.10.0
+  - @agentionai/marshall-tools@0.6.0
+
 ## 0.11.0
 
 ### Minor Changes

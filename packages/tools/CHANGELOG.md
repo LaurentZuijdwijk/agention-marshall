@@ -1,5 +1,70 @@
 # @agentionai/marshall-tools
 
+## 0.6.0
+
+### Minor Changes
+
+- 78df418: Fix two ways concurrent tool calls lost work or consent.
+
+  Models routinely batch several file calls into one message, and the agent SDK
+  runs that batch concurrently. Both of these were live, not theoretical.
+
+  **Edits to one file raced.** `edit_file` reads, computes and writes across an
+  `await`, so parallel edits all read the same original and only the last write
+  survived — while every call still reported `Edited`. Writes to a path are now
+  serialised, keyed per path so edits to _different_ files still run in parallel.
+  Whole-file writes cannot be fixed by serialising, since each carries complete
+  content built from the same read, so `write_file` now refuses a write whose
+  expectation of the file no longer matches disk and points at `edit_file`, which
+  composes. A write composed before someone hand-edits the file in their editor is
+  refused for the same reason, instead of silently discarding their change.
+
+  **One approval answered for calls you never saw.** The gate coalesced in-flight
+  requests by tool name, so a batch of writes to three different files cost one
+  prompt: you were shown one file, and approving it wrote the other two unseen.
+  Denying one denied all three. Requests now key on the tool, the arguments and
+  the calling agent, so only genuinely identical calls share a decision.
+
+  **You will see more prompts than before.** A batch of three writes to three
+  files now asks three times, because it always should have. `ToolCaller` also
+  gains an optional `id` naming the agent instance rather than its role, so two
+  agents on one role are not treated as one actor by the gate, the approval panel
+  or the safety judge.
+
+  Read tracking (`read_file` before writing an existing file) moves to session
+  scope via `ToolConfig.readFiles`, fixing a case where reading a file in one turn
+  and editing it in the next failed with "has not been read this session".
+
+- 78df418: Show `write_file` approvals as a diff instead of a preview of the new content.
+
+  `edit_file` already rendered a diff; `write_file` showed the first 800
+  characters of what it was about to write and never compared against the file on
+  disk. That was a way around the gate rather than a cosmetic gap: to change line
+  200 of a long file without it appearing in the approval, an agent could avoid
+  `edit_file` and rewrite the whole file instead, and the panel would show an
+  unchanged, benign-looking prefix with the actual change sitting past the cutoff.
+
+  What you are shown now scales with the size of the change rather than the size
+  of the file, so there is nowhere past a cutoff to hide: a two-line change renders
+  as two lines whether the file is 50 lines or 5,000, and an approval that looks
+  empty means nothing changed. Where a diff is itself truncated you are told how
+  many further changed lines exist. The summary line states the shape up front
+  (`write_file: config.ts (+2 −1, 480 unchanged)`), since a whole-file write that
+  changes two lines is the signature of exactly that manoeuvre.
+
+  Creating a new file has nothing to diff against and still shows its content.
+
+### Patch Changes
+
+- 78df418: Stop publishing compiled test files.
+
+  `files: ["dist"]` ships dist wholesale and the build compiled everything under
+  `src`, so every release carried its own test suite — 11 compiled test files in
+  the engine tarball alone, plus their fixtures. Builds now run against a config
+  that excludes tests, while `typecheck` still covers them.
+  `@agentionai/marshall-engine/testing` is unaffected: the fake provider is a real
+  export, not a test.
+
 ## 0.5.0
 
 ### Minor Changes
