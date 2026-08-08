@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type {
   ApprovalDecision, ApprovalRequest, ApprovalDecider, ApprovalFn,
 } from '@agentionai/marshall-tools';
@@ -49,13 +50,33 @@ export interface ApprovalGateDeps {
   log: (line: string) => void;
 }
 
+/**
+ * What makes two in-flight requests the same question.
+ *
+ * The tool name alone is not enough, and getting this wrong is a consent bug
+ * rather than a papercut. A model emitting three `write_file` calls in one
+ * message is ordinary; keyed on the name they shared a single decision, so
+ * approving the diff for one file silently wrote the other two, and denying one
+ * denied all three. The arguments decide what is actually being asked, and the
+ * caller decides who is asking — under delegation those are different consents
+ * even for an identical action.
+ *
+ * Hashed because `input` carries whole-file content for `write_file`, and the
+ * key would otherwise hold a copy of it for the life of the request.
+ */
+function requestKey(req: ApprovalRequest): string {
+  const identity = JSON.stringify([req.caller?.role ?? '', req.input ?? {}]);
+  return `${req.toolName}:${createHash('sha256').update(identity).digest('hex').slice(0, 32)}`;
+}
+
 export function createApprovalGate({ getConfig, client, log }: ApprovalGateDeps): ApprovalGate {
   const alwaysApproved = new Set<string>();
   /**
-   * In-flight approval promises keyed by tool name. Parallel tool calls for the
-   * same tool all run their approval gate at once, so without this, choosing
-   * "always" only applies to whichever one reaches the check first — the rest
-   * still prompt. Coalescing them means one user decision answers the whole batch.
+   * In-flight approval promises, keyed by `requestKey`.
+   *
+   * Only genuinely identical questions coalesce: a model that repeats the exact
+   * same call should not cost two prompts. Anything that differs in target or
+   * caller is a separate decision and is asked separately.
    */
   const pendingApprovals = new Map<string, Promise<ApprovalDecision>>();
 
@@ -115,12 +136,13 @@ export function createApprovalGate({ getConfig, client, log }: ApprovalGateDeps)
   return {
     alwaysApproved,
     approve: async (req) => {
-      const inFlight = pendingApprovals.get(req.toolName);
+      const key = requestKey(req);
+      const inFlight = pendingApprovals.get(key);
       if (inFlight) return inFlight;
 
       const decision = runChain(buildChain(), req);
-      pendingApprovals.set(req.toolName, decision);
-      void decision.finally(() => pendingApprovals.delete(req.toolName));
+      pendingApprovals.set(key, decision);
+      void decision.finally(() => pendingApprovals.delete(key));
       return decision;
     },
     reset: () => {

@@ -249,6 +249,59 @@ test('two whole-file writes to one path in a batch: the second is refused', asyn
   assert.match(refusal, /edit_file/, 'and pointed at the tool that composes');
 });
 
+// The gate coalesced in-flight requests by tool name, so a batch of writes to
+// different files cost exactly one prompt and the rest inherited its answer.
+// Every distinct write has to be consented to on its own.
+test('a batch of writes to different files asks about each one', async (t) => {
+  const root = tempRoot();
+  const fake = await startFakeProvider(
+    {
+      toolCalls: [
+        { name: 'write_file', arguments: { path: 'a.txt', content: 'aaa' } },
+        { name: 'write_file', arguments: { path: 'b.txt', content: 'bbb' } },
+        { name: 'write_file', arguments: { path: 'c.txt', content: 'ccc' } },
+      ],
+    },
+    { text: 'All three written.' },
+  );
+  t.after(() => fake.close());
+
+  const rec = recorder();
+  const session = makeSession(root, fake, rec.client);
+  t.after(() => session.dispose());
+
+  await session.run('create three files');
+
+  assert.equal(rec.approvals.length, 3, 'one decision per file, not one for the batch');
+  assert.deepEqual(
+    rec.approvals.map(r => (r.input as { path: string }).path).sort(),
+    ['a.txt', 'b.txt', 'c.txt'],
+  );
+});
+
+test('denying one write in a batch leaves the others to be decided on their own', async (t) => {
+  const root = tempRoot();
+  const fake = await startFakeProvider(
+    {
+      toolCalls: [
+        { name: 'write_file', arguments: { path: 'keep.txt', content: 'keep' } },
+        { name: 'write_file', arguments: { path: 'drop.txt', content: 'drop' } },
+      ],
+    },
+    { text: 'One written, one refused.' },
+  );
+  t.after(() => fake.close());
+
+  const rec = recorder((req) => ((req.input as { path: string }).path === 'drop.txt' ? 'deny' : 'approve'));
+  const session = makeSession(root, fake, rec.client);
+  t.after(() => session.dispose());
+
+  await session.run('create two files');
+
+  assert.equal(readFileSync(join(root, 'keep.txt'), 'utf8'), 'keep');
+  assert.equal(existsSync(join(root, 'drop.txt')), false, 'the denied write must not land');
+});
+
 test('the model is sent its tools and the task', async (t) => {
   const root = tempRoot();
   const fake = await startFakeProvider({ text: 'ok' });
