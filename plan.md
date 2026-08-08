@@ -73,6 +73,27 @@ one made the next visible.
 - No token accounting for sub-agents today. `subagent-done` reports duration and
   characters only, which will not be enough to see what a swarm costs.
 
+## Polish
+
+Small, both spotted while exercising safety level 3 in a real session. Neither
+is urgent.
+
+- [ ] **A `waiting` activity state.** The status row keeps counting `thinking
+  10.1s` while an approval or an `ask_user` question is on screen, so the timer
+  is measuring how long the *human* took. `ActivityState` has no waiting member
+  and nothing flips `activity` when a panel opens, so it affects both panels. It
+  reads worse the more panels there are, which means level 3 makes it more
+  visible. A `waiting` state that stops the clock covers both.
+- [ ] **The approval panel shows the judge's raw JSON.**
+  `createSafetyAgentDecider` prepends `verdict.raw.trim()` to `detail`, so an
+  unsafe verdict renders with braces and quotes intact. The transcript row above
+  it already carries the summarised reason, and the panel is where the decision
+  is actually made, so the sentence alone would read better. Worth weighing
+  against the argument for keeping it: raw means you see exactly what the judge
+  said rather than our parse of it, which is precisely what matters when you are
+  about to override it. Possibly summary in the panel, raw still in the session
+  log.
+
 ## Pending
 
 - [ ] Add reasoning effort support — expose the `reasoning` provider field (e.g. OpenRouter `effort` param) in the model config, pass it through the engine client, and include it in the `useEngineClient` message payload. Wire into the model selection UI so the user can set reasoning effort per-model.
