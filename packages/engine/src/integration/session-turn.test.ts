@@ -8,7 +8,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Session } from '../session.js';
@@ -127,6 +127,126 @@ test('denying an approval leaves the file alone and tells the model why', async 
   assert.ok(toolResult, 'the second request carries the tool result');
   assert.match(String(toolResult.content), /denied/i,
     `the model should be told it was denied, got: ${JSON.stringify(toolResult.content)}`);
+});
+
+// The tool belt is rebuilt per turn, so anything the belt itself owns resets
+// between turns. Read tracking must not: reading a file and editing it in the
+// *next* turn is the ordinary flow, and when the set was factory-owned this
+// failed with "has not been read this session" for a file that had been.
+test('a file read in one turn can be edited in the next', async (t) => {
+  const root = tempRoot();
+  writeFileSync(join(root, 'plan.md'), '# Plan\n\n- [ ] ship it\n');
+
+  const fake = await startFakeProvider(
+    { toolCalls: [{ name: 'read_file', arguments: { path: 'plan.md' } }] },
+    { text: 'Read it.' },
+  );
+  t.after(() => fake.close());
+
+  const rec = recorder();
+  const session = makeSession(root, fake, rec.client);
+  t.after(() => session.dispose());
+
+  await session.run('read plan.md');
+
+  // A second, separate turn — a fresh belt, and the only thing carrying the
+  // earlier read forward is the session.
+  fake.script(
+    { toolCalls: [{ name: 'edit_file', arguments: { path: 'plan.md', oldString: 'ship it', newString: 'shipped' } }] },
+    { text: 'Updated.' },
+  );
+  await session.run('mark it shipped');
+
+  const editResult = fake.requests
+    .flatMap(r => r.messages)
+    .filter(m => m.role === 'tool')
+    .map(m => String(m.content))
+    .pop();
+  assert.doesNotMatch(String(editResult), /has not been read/,
+    `the edit should not demand a re-read, got: ${editResult}`);
+  assert.equal(readFileSync(join(root, 'plan.md'), 'utf8'), '# Plan\n\n- [ ] shipped\n');
+});
+
+// A model batching several edit_file calls into one assistant message is
+// ordinary behaviour, and the SDK runs that batch concurrently. Each edit is a
+// read-modify-write, so unserialised they all read the same original and only
+// the last write survives — with every call still reporting "Edited".
+test('several edits to one file in a single batch all land', async (t) => {
+  const root = tempRoot();
+  writeFileSync(join(root, 'notes.md'), 'AAA\nBBB\nCCC\n');
+
+  const fake = await startFakeProvider(
+    {
+      toolCalls: [
+        { name: 'read_file', arguments: { path: 'notes.md' } },
+      ],
+    },
+    {
+      toolCalls: [
+        { name: 'edit_file', arguments: { path: 'notes.md', oldString: 'AAA', newString: 'XXX' } },
+        { name: 'edit_file', arguments: { path: 'notes.md', oldString: 'BBB', newString: 'YYY' } },
+        { name: 'edit_file', arguments: { path: 'notes.md', oldString: 'CCC', newString: 'ZZZ' } },
+      ],
+    },
+    { text: 'All three applied.' },
+  );
+  t.after(() => fake.close());
+
+  const rec = recorder();
+  const session = makeSession(root, fake, rec.client);
+  t.after(() => session.dispose());
+
+  await session.run('replace each marker in notes.md');
+
+  assert.equal(readFileSync(join(root, 'notes.md'), 'utf8'), 'XXX\nYYY\nZZZ\n',
+    'every edit in the batch must survive, not just the last writer');
+
+  const toolResults = fake.requests
+    .flatMap(r => r.messages)
+    .filter(m => m.role === 'tool')
+    .map(m => String(m.content));
+  assert.equal(toolResults.filter(r => /Edited/.test(r)).length, 3,
+    `all three edits should report success, got: ${toolResults.join(' | ')}`);
+});
+
+// The write_file counterpart to the batch above, and the one seen in the wild:
+// two whole-file writes to plan.md in one batch, both reporting success, the
+// second silently discarding the first. Serialising cannot fix this — each
+// write carries complete content built from the same read — so the second is
+// refused and steered at edit_file instead.
+test('two whole-file writes to one path in a batch: the second is refused', async (t) => {
+  const root = tempRoot();
+  writeFileSync(join(root, 'plan.md'), '# Plan\n');
+
+  const fake = await startFakeProvider(
+    { toolCalls: [{ name: 'read_file', arguments: { path: 'plan.md' } }] },
+    {
+      toolCalls: [
+        { name: 'write_file', arguments: { path: 'plan.md', content: '# Plan\n\n- first\n' } },
+        { name: 'write_file', arguments: { path: 'plan.md', content: '# Plan\n\n- second\n' } },
+      ],
+    },
+    { text: 'One landed, one was refused.' },
+  );
+  t.after(() => fake.close());
+
+  const rec = recorder();
+  const session = makeSession(root, fake, rec.client);
+  t.after(() => session.dispose());
+
+  await session.run('write out the plan');
+
+  assert.equal(readFileSync(join(root, 'plan.md'), 'utf8'), '# Plan\n\n- first\n',
+    'the first write must survive rather than being overwritten by the second');
+
+  const results = fake.requests
+    .flatMap(r => r.messages)
+    .filter(m => m.role === 'tool')
+    .map(m => String(m.content));
+  assert.equal(results.filter(r => /Wrote/.test(r)).length, 1, `exactly one write succeeds: ${results.join(' | ')}`);
+  const refusal = results.find(r => /changed after you read it/.test(r));
+  assert.ok(refusal, `the model must be told why, got: ${results.join(' | ')}`);
+  assert.match(refusal, /edit_file/, 'and pointed at the tool that composes');
 });
 
 test('the model is sent its tools and the task', async (t) => {

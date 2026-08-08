@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { Session, assistantText } from './session.js';
+import { Session } from './session.js';
+import { assistantText } from './session-events.js';
 import type { ClientInterface, OutputEvent, ApprovalRequest, ApprovalDecision } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -467,10 +468,11 @@ test('parallel approvals for the same tool coalesce into one user decision', asy
     client,
   );
 
-  // Reach the private approval function directly — the public surface can't
+  // Reach the session's approval gate directly — the public surface can't
   // drive it without a live LLM turn.
-  const approve = (session as unknown as { makeApproval(): (r: ApprovalRequest) => Promise<ApprovalDecision> })
-    .makeApproval();
+  const { approve } = (session as unknown as {
+    approvals: { approve(r: ApprovalRequest): Promise<ApprovalDecision> };
+  }).approvals;
 
   const req = { toolName: 'edit_file', description: 'edit', detail: 'diff' } as ApprovalRequest;
   const first = approve(req);
@@ -539,7 +541,7 @@ function internals(session: Session) {
   return session as unknown as {
     config: { agent: { provider: string; model?: string } };
     history: { addText(role: string, text: string): void; totalEstimatedTokens: number };
-    alwaysApproved: Set<string>;
+    approvals: { alwaysApproved: Set<string> };
   };
 }
 
@@ -580,9 +582,9 @@ test('a running background job survives a model switch', async () => {
 
 test('the always-approved list survives a model switch', () => {
   const session = jobSession(tempRoot(), makeClient());
-  internals(session).alwaysApproved.add('run_shell');
+  internals(session).approvals.alwaysApproved.add('run_shell');
   session.setProfiles(LOCAL);
-  assert.ok(internals(session).alwaysApproved.has('run_shell'),
+  assert.ok(internals(session).approvals.alwaysApproved.has('run_shell'),
     'consent was given for the session, not for the model');
   session.dispose();
 });
@@ -640,7 +642,7 @@ function withReduceToTarget(session: Session) {
       addText(role: string, text: string): void;
       totalEstimatedTokens: number;
     };
-    reduceToTarget(target: number): Promise<void>;
+    compression: { reduceToTarget(target: number): Promise<void> };
   };
 }
 
@@ -688,7 +690,7 @@ test('reduceToTarget shrinks history in steps no larger than COMPRESSION_STEP_TO
   const before = inner.history.totalEstimatedTokens;
   assert.ok(before > 20_000, 'precondition: history is large enough to need multiple steps');
 
-  await inner.reduceToTarget(2_000);
+  await inner.compression.reduceToTarget(2_000);
 
   assert.ok(inner.history.totalEstimatedTokens <= 2_010, 'history should converge to roughly the target');
   assert.ok(requestedPerCallReduction.length > 1, 'a large overshoot must be closed across more than one call');
@@ -714,7 +716,7 @@ test('reduceToTarget shrinks history in steps no larger than COMPRESSION_STEP_TO
 // ---------------------------------------------------------------------------
 
 function withContextErrorTarget(session: Session) {
-  return session as unknown as { contextErrorTarget(message: string, current: number): number };
+  return session as unknown as { compression: { contextErrorTarget(message: string, current: number): number } };
 }
 
 test('contextErrorTarget sizes the cut to the measured overage, not a fixed fraction of the window', () => {
@@ -729,7 +731,7 @@ test('contextErrorTarget sizes the cut to the measured overage, not a fixed frac
   // would target 5324, which sits *above* this, so reduceToTarget would do
   // nothing.
   const current = 4_000;
-  const target = inner.contextErrorTarget(message, current);
+  const target = inner.compression.contextErrorTarget(message, current);
 
   assert.ok(target < current, 'the target must sit below current or reduceToTarget never runs');
   assert.equal(target, current - (14_231 - 13_312) - 1_024, 'target = current - overage - margin');
@@ -742,7 +744,7 @@ test('contextErrorTarget clamps to zero rather than going negative when the over
   const inner = withContextErrorTarget(session);
 
   const message = 'llama.cpp API error: 400 request (40000 tokens) exceeds the available context size (13312 tokens), try increasing it';
-  const target = inner.contextErrorTarget(message, 500);
+  const target = inner.compression.contextErrorTarget(message, 500);
 
   assert.equal(target, 0);
   session.dispose();
@@ -752,7 +754,7 @@ test('contextErrorTarget falls back to the percentage heuristic for unrecognised
   const session = jobSession(tempRoot(), makeClient());
   const inner = withContextErrorTarget(session);
 
-  const target = inner.contextErrorTarget('some other provider: context length exceeded', 10_000);
+  const target = inner.compression.contextErrorTarget('some other provider: context length exceeded', 10_000);
   assert.equal(target, Math.max(1_024, Math.floor(10_000 * 0.4)));
 
   session.dispose();
@@ -773,7 +775,7 @@ test('reduceToTarget stops instead of looping forever when a step makes no progr
   });
 
   for (let i = 0; i < 10; i++) inner.history.addText('user', 'x'.repeat(4_000));
-  await inner.reduceToTarget(100);
+  await inner.compression.reduceToTarget(100);
 
   assert.equal(calls, 1, 'a no-progress step must abort the loop rather than retrying indefinitely');
   session.dispose();
