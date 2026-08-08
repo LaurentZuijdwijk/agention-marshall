@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveSlashCommand, HELP, SLASH_COMMANDS } from './slashCommands.js';
+import { resolveSlashCommand, completeSlash, HELP, SLASH_COMMANDS, SUBCOMMANDS } from './slashCommands.js';
 
 describe('slashCommands', () => {
   describe('resolveSlashCommand', () => {
@@ -226,6 +226,87 @@ describe('slashCommands', () => {
       const expected = ['/clear', '/cwd', '/exit', '/help', '/login', '/memory', '/model'];
       for (const cmd of expected) {
         assert.ok(SLASH_COMMANDS.includes(cmd as any), `SLASH_COMMANDS should include ${cmd}`);
+      }
+    });
+  });
+
+  describe('completeSlash', () => {
+    it('completes a half-typed command name', () => {
+      assert.equal(completeSlash('/mod'), 'el');
+    });
+
+    it('offers nothing for a name already complete', () => {
+      assert.equal(completeSlash('/model'), '');
+    });
+
+    it('offers the first argument once a space is typed', () => {
+      assert.equal(completeSlash('/model '), 'deep');
+      assert.equal(completeSlash('/safety '), 'none');
+    });
+
+    it('completes a half-typed argument', () => {
+      assert.equal(completeSlash('/model f'), 'ast');
+      assert.equal(completeSlash('/safety ag'), 'entic');
+      assert.equal(completeSlash('/mcp a'), 'dd');
+    });
+
+    it('leaves a trailing space after a verb that still needs a value', () => {
+      assert.equal(completeSlash('/jobs k'), 'ill ');
+      assert.equal(completeSlash('/mcp rem'), 'ove ');
+    });
+
+    it('offers nothing for an argument that matches none', () => {
+      assert.equal(completeSlash('/model zzz'), '');
+    });
+
+    it('offers nothing for an argument already complete', () => {
+      assert.equal(completeSlash('/model deep'), '');
+    });
+
+    it('stops after the first argument, where the value is a runtime name', () => {
+      assert.equal(completeSlash('/jobs kill '), '');
+      assert.equal(completeSlash('/mcp remove '), '');
+    });
+
+    it('offers nothing for a command that takes no fixed arguments', () => {
+      assert.equal(completeSlash('/clear '), '');
+    });
+
+    it('ignores input that is not a slash command', () => {
+      assert.equal(completeSlash('model de'), '');
+      assert.equal(completeSlash('/'), '');
+    });
+  });
+
+  // A completion that offers a word the parser rejects is worse than none, so
+  // every advertised argument has to actually resolve.
+  describe('SUBCOMMANDS agrees with the parser', () => {
+    it('every offered argument is accepted by resolveSlashCommand', () => {
+      for (const [cmd, words] of Object.entries(SUBCOMMANDS)) {
+        for (const { word, operand } of words) {
+          // A verb declaring an operand is only valid with one, so supply a
+          // stand-in — what is being pinned is that the *word* is recognised.
+          const line = operand ? `${cmd} ${word} sample` : `${cmd} ${word}`;
+          const result = resolveSlashCommand(line);
+          assert.notEqual(result.type, 'usage', `"${line}" should parse`);
+          assert.notEqual(result.type, 'unknown', `"${line}" should parse`);
+        }
+      }
+    });
+
+    it('every word declaring no operand is runnable on its own', () => {
+      for (const [cmd, words] of Object.entries(SUBCOMMANDS)) {
+        for (const { word, operand } of words) {
+          if (operand) continue;
+          const result = resolveSlashCommand(`${cmd} ${word}`);
+          assert.notEqual(result.type, 'usage', `"${cmd} ${word}" should need no further input`);
+        }
+      }
+    });
+
+    it('only names commands that exist', () => {
+      for (const cmd of Object.keys(SUBCOMMANDS)) {
+        assert.ok(SLASH_COMMANDS.includes(cmd as any), `${cmd} should be a real command`);
       }
     });
   });

@@ -33,7 +33,7 @@ import { runSlashCommand } from './commands.js';
 import { describeUpdate } from './update-check.js';
 import type { UpdateInfo } from './update-check.js';
 import { saveMcpServers, saveProjectMcpSelection } from './services/config-store.js';
-import { SLASH_COMMANDS, SAFETY_LEVEL_LABELS } from './slashCommands.js';
+import { completeSlash, SAFETY_LEVEL_LABELS } from './slashCommands.js';
 import { completeAtPath, expandFileMentions } from './fileCompletion.js';
 import type { Mode } from './mode.js';
 import { traceRender } from './renderTrace.js';
@@ -261,10 +261,7 @@ export function App({
   // under the cursor one directory segment at a time.
   const ghost = useMemo(() => {
     if (mode.type !== 'idle') return '';
-    if (input.startsWith('/') && input.length >= 2) {
-      const match = SLASH_COMMANDS.find(cmd => cmd.startsWith(input) && cmd !== input);
-      return match ? match.slice(input.length) : '';
-    }
+    if (input.startsWith('/')) return completeSlash(input);
     return completeAtPath(input, process.cwd());
   }, [input, mode.type]);
 

@@ -63,6 +63,63 @@ const MODEL_TARGETS: Record<string, ModelTarget> = {
   '': 'both', deep: 'deep', fast: 'fast', off: 'off',
 };
 
+export interface SubcommandWord {
+  word: string;
+  /**
+   * Present when the word is a verb that still needs a value — a job id, a
+   * server name. Completing one of these leaves a trailing space, because the
+   * command is not runnable yet; the rest is only known at runtime, so there is
+   * nothing further to offer.
+   */
+  operand?: string;
+}
+
+/**
+ * The argument words each command takes, in the order they are offered.
+ *
+ * Kept beside the parser deliberately. These are the same words
+ * `resolveSlashCommand` accepts, and a completion list that drifts from what
+ * the parser takes is worse than no completion at all — it offers something
+ * that then fails. There is a test pinning the two together.
+ */
+export const SUBCOMMANDS: Record<string, readonly SubcommandWord[]> = {
+  '/model': [{ word: 'deep' }, { word: 'fast' }, { word: 'off' }],
+  '/safety': [{ word: 'none' }, { word: 'default' }, { word: 'agentic' }],
+  '/jobs': [{ word: 'kill', operand: '<id>' }],
+  '/mcp': [{ word: 'add' }, { word: 'remove', operand: '<name>' }, { word: 'reconnect', operand: '<name>' }],
+};
+
+/**
+ * The suffix tab would append to `input`, or '' when there is nothing to add.
+ *
+ * Completes the command name before a space, and the first argument word after
+ * one — so `/model` fills in from `/mod`, and `/model ` offers `deep`. First
+ * match wins rather than the longest common prefix, which is what the command
+ * names already did.
+ */
+export function completeSlash(input: string): string {
+  if (!input.startsWith('/')) return '';
+
+  const spaceAt = input.indexOf(' ');
+  if (spaceAt === -1) {
+    if (input.length < 2) return '';
+    const match = SLASH_COMMANDS.find(cmd => cmd.startsWith(input) && cmd !== input);
+    return match ? match.slice(input.length) : '';
+  }
+
+  const rest = input.slice(spaceAt + 1);
+  // Past the first argument there is nothing static left to offer — the second
+  // word is always a job id or a server name.
+  if (rest.includes(' ')) return '';
+
+  const options = SUBCOMMANDS[input.slice(0, spaceAt)];
+  const match = options?.find(({ word }) => word.startsWith(rest) && word !== rest);
+  if (!match) return '';
+  // A verb that still needs a value gets the space too, so accepting the
+  // completion leaves the cursor where the id or name goes.
+  return match.word.slice(rest.length) + (match.operand ? ' ' : '');
+}
+
 export function resolveSlashCommand(input: string): SlashCommandResult {
   const text = input.trim();
   if (!text.startsWith('/')) return { type: 'unknown', command: text };
