@@ -67,6 +67,16 @@ function Wordmark({ rows, reveal, sweep }: { rows: string[]; reveal: number; swe
   );
 }
 
+/** Sits under the rule in both the animated banner and the static header —
+ *  see the note on `Banner` about the two keeping identical geometry. `dim`
+ *  during the reveal, so it settles in with `Meta` rather than arriving whole
+ *  while the wordmark is still being written. */
+function Tagline({ dim }: { dim?: boolean }) {
+  return (
+    <Text color={dim ? C.faint : C.muted} italic>Build me software, make no mistakes</Text>
+  );
+}
+
 /** Gradient rule under the wordmark; grows with `reveal`. */
 function Rule({ width, reveal }: { width: number; reveal: number }) {
   const drawn = Math.round(reveal * width);
@@ -184,6 +194,7 @@ export function Header({ meta, columns = process.stdout.columns ?? 80, compact =
     <Box flexDirection="column" marginBottom={1}>
       <Wordmark rows={rows} reveal={1} sweep={-9999} />
       <Rule width={rows[0].length} reveal={1} />
+      <Tagline />
       <Box marginTop={1}><Meta meta={meta} /></Box>
     </Box>
   );
@@ -241,6 +252,7 @@ export function Banner({ meta, onDone, columns = process.stdout.columns ?? 80 }:
     <Box flexDirection="column" marginBottom={1}>
       <Wordmark rows={rows} reveal={reveal} sweep={sweep} />
       <Rule width={width} reveal={reveal} />
+      <Tagline dim={revealing} />
       <Box marginTop={1}>
         {revealing
           // Keep the block reserved so the header doesn't pop the layout down.
