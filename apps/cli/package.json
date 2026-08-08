@@ -16,7 +16,7 @@
   },
   "scripts": {
     "dev": "tsx src/index.tsx",
-    "prepare": "npm run build -w @agentionai/marshall-engine -w @agentionai/marshall-tools 2>/dev/null; tsc && node scripts/postbuild.mjs",
+    "prepare": "npm run build -w @agentionai/marshall-engine -w @agentionai/marshall-tools 2>/dev/null; tsc -p tsconfig.build.json && node scripts/postbuild.mjs",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx/esm --test 'src/**/*.test.ts'"
   },

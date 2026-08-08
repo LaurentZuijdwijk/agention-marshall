@@ -19,8 +19,8 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsc",
-    "prepare": "npm run build -w @agentionai/marshall-tools 2>/dev/null; tsc",
+    "build": "tsc -p tsconfig.build.json",
+    "prepare": "npm run build -w @agentionai/marshall-tools 2>/dev/null; tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx/esm --test 'src/**/*.test.ts'"
   },
