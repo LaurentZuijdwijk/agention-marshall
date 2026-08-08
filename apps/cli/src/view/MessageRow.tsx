@@ -4,11 +4,51 @@ import { Header } from './Banner.js';
 import { Markdown } from './Markdown.js';
 import { C, G } from './theme.js';
 import { AssistantText } from './AssistantText.js';
+import { truncate } from '../format.js';
 import type { Message } from './message.js';
 
 // ── message row ────────────────────────────────────────────────────────────────
 
 const TOOL_RESULT_LINES = 10;
+
+// Fixed-width parts of a safety row, so the reason can be sized to what is
+// left: the two-space indent plus gutter plus its space, the "<icon> safety "
+// label, and the "  •  " that precedes the judge.
+const GUTTER_COLS = 4;
+const SAFETY_LABEL_COLS = 9;
+const SAFETY_JUDGE_COLS = 5;
+
+/**
+ * The judge, named by its model alone.
+ *
+ * The event carries a full `provider/vendor/model` label, which is mostly path
+ * and crowds out the reasoning that is the point of the row.
+ */
+export function judgeLabel(model: string | undefined): string {
+  return model ? model.split('/').pop() ?? '' : '';
+}
+
+/**
+ * The judge's reason, cut to whatever the rest of the row leaves.
+ *
+ * Exported for tests: the column arithmetic is the only part here that can go
+ * wrong silently, and it goes wrong invisibly — the row simply wraps, and the
+ * continuation lands at column 0 having lost the gutter that marks it as
+ * commentary on the call above.
+ */
+export function fitSafetyReason(
+  reason: string,
+  { judge, caller, columns }: { judge: string; caller?: string; columns: number },
+): string {
+  const fixed = GUTTER_COLS
+    + (caller ? caller.length + 1 : 0)
+    + SAFETY_LABEL_COLS
+    + (judge ? judge.length + SAFETY_JUDGE_COLS : 0);
+  const room = columns - fixed;
+  // No room at all drops the reason rather than leaving a bare ellipsis, which
+  // is what `truncate` would give back and which costs a column to say nothing.
+  return room <= 0 ? '' : truncate(reason, room);
+}
 
 /**
  * Who made this call, in front of the tool it called.
@@ -23,7 +63,11 @@ function CallerTag({ caller }: { caller?: string }) {
   return <Text color={C.faint}>{caller} </Text>;
 }
 
-export function MessageRow({ msg }: { msg: Message }) {
+export function MessageRow({ msg, columns = process.stdout.columns ?? 80 }: {
+  msg: Message;
+  /** Terminal width, for rows that size themselves to fit rather than wrap. */
+  columns?: number;
+}) {
   switch (msg.role) {
     case 'header':
       return msg.meta ? <Header meta={msg.meta} compact={msg.compact} /> : null;
@@ -79,14 +123,17 @@ export function MessageRow({ msg }: { msg: Message }) {
     case 'safety': {
       const icon = msg.safetyOutcome === 'approve' ? G.ok : msg.safetyOutcome === 'deny' ? G.warn : G.pending;
       const color = msg.safetyOutcome === 'approve' ? C.ok : msg.safetyOutcome === 'deny' ? C.warn : C.muted;
+      // The tool name is deliberately not repeated: this row sits directly
+      // under the call it judged, which already names it.
+      const judge = judgeLabel(msg.note);
+      const reason = fitSafetyReason(msg.content, { judge, caller: msg.caller, columns });
       return (
         <Box>
           <Text color={C.faint}>  {G.gutter} </Text>
           <CallerTag caller={msg.caller} />
           <Text color={color}>{icon} safety </Text>
-          <Text color={C.faint}>{msg.title}</Text>
-          {msg.content !== '' && <Text color={C.muted}>  {msg.content}</Text>}
-          {msg.note && <Text color={C.faint}>  {G.bullet}  {msg.note}</Text>}
+          {reason !== '' && <Text color={C.muted}>{reason}</Text>}
+          {judge !== '' && <Text color={C.faint}>  {G.bullet}  {judge}</Text>}
         </Box>
       );
     }

@@ -241,7 +241,7 @@ describe('slashCommands', () => {
 
     it('offers the first argument once a space is typed', () => {
       assert.equal(completeSlash('/model '), 'deep');
-      assert.equal(completeSlash('/safety '), 'none');
+      assert.equal(completeSlash('/safety '), 'default');
     });
 
     it('completes a half-typed argument', () => {
