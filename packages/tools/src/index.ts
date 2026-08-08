@@ -16,6 +16,8 @@ export { createDedupeCache } from './types.js';
 
 export { resolveInWorkspace, PathEscapeError } from './primitives/resolve.js';
 export { atomicWrite } from './primitives/atomic-write.js';
+export { createKeyedLock } from './primitives/keyed-lock.js';
+export type { KeyedLock } from './primitives/keyed-lock.js';
 export { cappedRead, DEFAULT_MAX_FILE_BYTES } from './primitives/capped-read.js';
 export {
   spawnSandboxed,

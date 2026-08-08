@@ -133,6 +133,22 @@ export interface ToolConfig {
    *  fresh each time, the same way `caller` is already per-belt, not per-tool. */
   taskContext?: string;
   /**
+   * Files `read_file` has seen, which `write_file` and `edit_file` require
+   * before they will touch an existing file.
+   *
+   * Injected for the same reason as `jobs` below: its lifetime is the
+   * *session*, not the task. The belt is rebuilt every turn, so a set owned by
+   * the factory silently resets between turns — the model reads a file, the
+   * turn ends, and editing it in the next turn fails with "has not been read
+   * this session" even though it was. Absent means per-belt tracking, which is
+   * what the sub-agent belts and the tests want.
+   *
+   * Maps path to a hash of the content as the caller last saw it, so
+   * `write_file` can refuse an overwrite built from a stale view rather than
+   * silently discarding whatever landed in between.
+   */
+  readFiles?: Map<string, string>;
+  /**
    * Registry for backgrounded shell commands. Absent means `run_shell` has no
    * `background` option and the job tools don't exist.
    *

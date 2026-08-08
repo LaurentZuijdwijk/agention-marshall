@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 import { resolveInWorkspace } from '../primitives/resolve.js';
 import { cappedRead, DEFAULT_MAX_FILE_BYTES } from '../primitives/capped-read.js';
 import { atomicWrite } from '../primitives/atomic-write.js';
+import { createKeyedLock } from '../primitives/keyed-lock.js';
 import { withApproval } from './approval.js';
 import type { ToolConfig, ToolSpec, DedupeCache } from '../types.js';
 
@@ -67,7 +68,7 @@ function hashContent(content: string): string {
 function buildReadFile(
   workspaceRoot: string,
   maxFileBytes: number,
-  readFiles: Set<string>,
+  readFiles: Map<string, string>,
   dedupeCache?: DedupeCache,
 ): Tool<string> {
   return new Tool<string>({
@@ -88,7 +89,9 @@ function buildReadFile(
       try {
         const resolved = resolveInWorkspace(workspaceRoot, String(path));
         const content = await cappedRead(resolved, maxFileBytes);
-        readFiles.add(resolved);
+        // The hash, not just the fact of the read: write_file compares against
+        // it to catch an overwrite built from content that is no longer current.
+        readFiles.set(resolved, hashContent(content));
 
         const totalLines = content.split('\n').length;
         const isFullRead = !startLine && !endLine;
@@ -222,7 +225,7 @@ export function createReadOnlyFileTools(
   const maxFileBytes = limits?.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
   const maxSearchResults = limits?.maxSearchResults ?? MAX_SEARCH_RESULTS;
   return [
-    buildReadFile(workspaceRoot, maxFileBytes, new Set(), dedupeCache),
+    buildReadFile(workspaceRoot, maxFileBytes, new Map(), dedupeCache),
     buildListDir(workspaceRoot),
     buildSearch(workspaceRoot, maxSearchResults),
   ];
@@ -233,8 +236,19 @@ export function createFileTools(config: ToolConfig, dedupeCache?: DedupeCache): 
   const maxFileBytes = limits.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
   const maxSearchResults = limits.maxSearchResults ?? MAX_SEARCH_RESULTS;
 
-  // Shared set: read_file populates it; write_file/edit_file check it.
-  const readFiles = new Set<string>();
+  // Shared set: read_file populates it; write_file/edit_file check it. Supplied
+  // by the session when it should outlive this belt — see ToolConfig.readFiles.
+  const readFiles = config.readFiles ?? new Map<string, string>();
+
+  /** The file as read_file would see it, hashed — same read path, so a large
+   *  file's truncation does not make the two incomparable. */
+  const fileHash = async (resolved: string): Promise<string> =>
+    hashContent(await cappedRead(resolved, maxFileBytes));
+
+  // Serialises the mutating tools per path. The model batches tool calls, and
+  // both write_file and edit_file read the file before writing it back, so
+  // without this two calls on one path race and the loser's edit vanishes.
+  const withFileLock = createKeyedLock();
 
   const read_file = buildReadFile(workspaceRoot, maxFileBytes, readFiles, dedupeCache);
   const list_dir = buildListDir(workspaceRoot);
@@ -243,8 +257,11 @@ export function createFileTools(config: ToolConfig, dedupeCache?: DedupeCache): 
   const write_file_spec: ToolSpec = {
     name: 'write_file',
     description:
-      'Write content to a file in the workspace (atomic). ' +
-      'If the file already exists you must read_file it first this session.',
+      'Write content to a file in the workspace (atomic). Use this to create a new file, or to ' +
+      'replace one wholesale. To change part of an existing file, prefer edit_file: targeted ' +
+      'edits combine with each other, whole-file writes do not. ' +
+      'If the file already exists you must read_file it first this session, and it must not have ' +
+      'changed since — never issue two write_file calls for the same path at once.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -256,15 +273,35 @@ export function createFileTools(config: ToolConfig, dedupeCache?: DedupeCache): 
     execute: async ({ path, content }) => {
       try {
         const resolved = resolveInWorkspace(workspaceRoot, String(path));
-        if (existsSync(resolved) && !readFiles.has(resolved)) {
-          return (
-            `Error: ${relative(workspaceRoot, resolved)} exists but has not been read this session. ` +
-            `Call read_file first so you have the current content before overwriting it.`
-          );
-        }
-        await atomicWrite(resolved, String(content));
-        readFiles.add(resolved);
-        return `Wrote ${String(content).length} bytes to ${relative(workspaceRoot, resolved)}`;
+        // Captured before the lock: what this call believes the file holds,
+        // which is the state as of the caller's last read. Two writes issued
+        // together both capture the read-time hash, so whichever runs second
+        // finds its expectation broken instead of silently discarding the
+        // first — serialising them alone cannot prevent that, because each
+        // carries whole-file content composed from the same stale view.
+        const expected = readFiles.get(resolved);
+        return await withFileLock(resolved, async () => {
+          if (existsSync(resolved)) {
+            if (expected === undefined) {
+              return (
+                `Error: ${relative(workspaceRoot, resolved)} exists but has not been read this session. ` +
+                `Call read_file first so you have the current content before overwriting it.`
+              );
+            }
+            const actual = await fileHash(resolved);
+            if (actual !== expected) {
+              return (
+                `Error: ${relative(workspaceRoot, resolved)} changed after you read it, so writing now ` +
+                `would discard that change. Call read_file again and rebuild your content from the ` +
+                `current version. If you meant to make several separate changes, use edit_file — ` +
+                `targeted edits combine, whole-file writes do not.`
+              );
+            }
+          }
+          await atomicWrite(resolved, String(content));
+          readFiles.set(resolved, await fileHash(resolved));
+          return `Wrote ${String(content).length} bytes to ${relative(workspaceRoot, resolved)}`;
+        });
       } catch (err) {
         return `Error: ${safe(err)}`;
       }
@@ -294,14 +331,21 @@ export function createFileTools(config: ToolConfig, dedupeCache?: DedupeCache): 
             `Call read_file first.`
           );
         }
-        const original = await readFile(resolved, 'utf8');
-        const old = String(oldString);
-        const count = original.split(old).length - 1;
-        if (count === 0) return `Error: oldString not found in ${path}.`;
-        if (count > 1) return `Error: oldString appears ${count} times in ${path}. Be more specific.`;
+        return await withFileLock(resolved, async () => {
+          const original = await readFile(resolved, 'utf8');
+          const old = String(oldString);
+          const count = original.split(old).length - 1;
+          if (count === 0) return `Error: oldString not found in ${path}.`;
+          if (count > 1) return `Error: oldString appears ${count} times in ${path}. Be more specific.`;
 
-        await atomicWrite(resolved, original.replace(old, String(newString)));
-        return `Edited ${relative(workspaceRoot, resolved)}`;
+          await atomicWrite(resolved, original.replace(old, String(newString)));
+          // Deliberately no hash precondition here: edit_file re-reads and
+          // matches a unique string, so two edits to different parts of one
+          // file both apply and both are correct. Recording the new hash keeps
+          // a later write_file honest about what it would be overwriting.
+          readFiles.set(resolved, await fileHash(resolved));
+          return `Edited ${relative(workspaceRoot, resolved)}`;
+        });
       } catch (err) {
         return `Error: ${safe(err)}`;
       }
