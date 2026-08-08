@@ -84,7 +84,7 @@ export interface SubcommandWord {
  */
 export const SUBCOMMANDS: Record<string, readonly SubcommandWord[]> = {
   '/model': [{ word: 'deep' }, { word: 'fast' }, { word: 'off' }],
-  '/safety': [{ word: 'none' }, { word: 'default' }, { word: 'agentic' }],
+  '/safety': [{ word: 'default' }, { word: 'none' }, { word: 'agentic' }],
   '/jobs': [{ word: 'kill', operand: '<id>' }],
   '/mcp': [{ word: 'add' }, { word: 'remove', operand: '<name>' }, { word: 'reconnect', operand: '<name>' }],
 };
