@@ -13,12 +13,15 @@ import { C, G } from './view/theme.js';
 import { shortenPath } from './format.js';
 import { MessageRow } from './view/MessageRow.js';
 import { ApprovalPanel, APPROVAL_LABELS } from './view/ApprovalPanel.js';
+import { QuestionPanel } from './view/QuestionPanel.js';
+import { PromptFrame } from './view/PromptFrame.js';
 import { InputPrompt } from './view/InputPrompt.js';
 import { LiveOutput } from './view/LiveOutput.js';
 import { ActivityStatus } from './view/ActivityStatus.js';
 import type { Message } from './view/message.js';
 import { useTranscript } from './hooks/useTranscript.js';
 import { useApprovals } from './hooks/useApprovals.js';
+import { useQuestions, NO_ANSWER } from './hooks/useQuestions.js';
 import { useEngineClient } from './hooks/useEngineClient.js';
 import type { TranscriptPort } from './hooks/useEngineClient.js';
 import { usePreferences } from './hooks/usePreferences.js';
@@ -137,6 +140,7 @@ export function App({
   const prefs = usePreferences();
   const transcript = useTranscript();
   const approvals = useApprovals();
+  const questions = useQuestions();
   const pasteBuffer = usePasteBuffer();
   const attachments = useAttachments();
 
@@ -156,8 +160,8 @@ export function App({
   //
   // The client is memoised once and fires at event time, so everything it reads
   // has to come through a ref rather than a closed-over render value.
-  const live = useRef({ transcript, approvals, setSteering, prefs });
-  live.current = { transcript, approvals, setSteering, prefs };
+  const live = useRef({ transcript, approvals, questions, setSteering, prefs });
+  live.current = { transcript, approvals, questions, setSteering, prefs };
 
   // Preference gating lives here, not in the translator, so the translator stays
   // a pure event → transcript mapping.
@@ -192,6 +196,11 @@ export function App({
     requestApproval: (request) => {
       const { promise, show } = live.current.approvals.enqueue(request);
       if (show) setMode({ type: 'approval', request: show });
+      return promise;
+    },
+    askUser: (request) => {
+      const { promise, show } = live.current.questions.enqueue(request);
+      if (show) setMode({ type: 'question', request: show });
       return promise;
     },
     showUsage: () => live.current.prefs.read().showUsage,
@@ -565,10 +574,14 @@ export function App({
       />
 
       {mode.type === 'approval' && (
-        <ApprovalPanel
+        <ApprovalPanel request={mode.request} pending={approvals.pending} onSelect={resolveApproval} />
+      )}
+      {mode.type === 'question' && (
+        <QuestionPanel
           request={mode.request}
-          pending={approvals.pending}
-          onSelect={resolveApproval}
+          pending={questions.pending}
+          onAnswer={(answer) => { const next = questions.resolve(answer); transcript.push('user', answer); setMode(next?.show ? { type: 'question', request: next.show } : { type: 'running' }); }}
+          onCancel={() => { const next = questions.resolve(NO_ANSWER); setMode(next?.show ? { type: 'question', request: next.show } : { type: 'running' }); }}
         />
       )}
 

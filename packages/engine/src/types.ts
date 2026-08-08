@@ -1,7 +1,7 @@
-import type { ApprovalRequest, ApprovalDecision } from '@agentionai/marshall-tools';
+import type { ApprovalRequest, ApprovalDecision, AskRequest } from '@agentionai/marshall-tools';
 import type { McpServerState } from './mcp.js';
 
-export type { ApprovalRequest, ApprovalDecision };
+export type { ApprovalRequest, ApprovalDecision, AskRequest };
 
 export type OutputEvent =
   | { type: 'thinking' }
@@ -104,6 +104,7 @@ export type OutputEvent =
 export interface ClientInterface {
   onOutput(event: OutputEvent): void;
   requestApproval(request: ApprovalRequest): Promise<ApprovalDecision>;
+  askUser?(request: AskRequest): Promise<string>;
   getEditorContext?(): EditorContext | null;
 }
 

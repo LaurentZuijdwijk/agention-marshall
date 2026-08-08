@@ -8,6 +8,7 @@ import {
   createScratchTools,
   createGitHubTools,
   createJobTools,
+  createAskTool,
 } from '@agentionai/marshall-tools';
 import type { ToolConfig, DedupeCache, BackgroundJobs, ApprovalFn } from '@agentionai/marshall-tools';
 import {
@@ -207,6 +208,11 @@ export class ToolBelt {
       ...(search ? [search] : []),
       ...(planner ? [planner] : []),
       ...(reviewer ? [reviewer] : []),
+      // Only when the client can actually surface a question — without one the
+      // model would be offered a tool with nowhere to ask.
+      ...(this.deps.client.askUser
+        ? [createAskTool((request) => this.deps.client.askUser!(request))]
+        : []),
       // Rebuilt per turn: the wrapping binds this turn's approval fn, abort
       // signal and caller identity, none of which outlive the turn.
       ...this.deps.mcp.tools(toolConfig),
@@ -217,6 +223,7 @@ export class ToolBelt {
       context ? CONTEXT_TOOL_GUIDANCE : '',
       planner ? PLANNER_TOOL_GUIDANCE : '',
       reviewer ? REVIEWER_TOOL_GUIDANCE : '',
+      this.deps.client.askUser ? '\n\nUse ask_user for genuine ambiguity that blocks progress, not for confirmation.\n' : '',
     ].join('');
 
     return { tools, extraInstructions };

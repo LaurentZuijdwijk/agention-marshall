@@ -1,5 +1,43 @@
 # @agentionai/marshall-cli
 
+## 0.11.0
+
+### Minor Changes
+
+- Add an `ask_user` tool so an agent can ask a genuine question mid-task.
+
+  The tool surfaces a question to the user — with optional numbered options,
+  multi-select and a free-text "Other" — and returns their answer to the model.
+  It is wired up end-to-end: `packages/tools` provides `createAskTool`, the engine
+  exposes it on the belt whenever the client implements `askUser` (beyond approval,
+  which only happens over a state-changing action), and the CLI renders it with a
+  dedicated `QuestionPanel` that queues parallel questions and chains through them
+  one at a time.
+
+  Prompt guidance was added so the model treats it as a tool for genuine ambiguity
+  that blocks progress, not a confirmation dialog — the same rule the accompanying
+  system prompt carries.
+
+  Usage: `npm run cli`, then ask the agent something open-ended it cannot infer
+  (which target, which stack, which direction) and it can stop and ask.
+
+### Patch Changes
+
+- Updated dependencies
+  - @agentionai/marshall-tools@0.5.0
+  - @agentionai/marshall-engine@0.9.0
+
+## 0.10.0
+
+### Minor Changes
+
+- 958e40f: Add typeahead search to the model picker and include OpenRouter content-safety models, including free NVIDIA Nemotron guardrails, in the catalogue.
+
+### Patch Changes
+
+- Updated dependencies [958e40f]
+  - @agentionai/marshall-engine@0.8.0
+
 ## 0.9.0
 
 ### Minor Changes

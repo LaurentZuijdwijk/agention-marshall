@@ -323,6 +323,30 @@ test('the model is sent its tools and the task', async (t) => {
   assert.match(JSON.stringify(user?.content), /what can you do\?/);
 });
 
+// ask_user is offered only when the client can actually surface a question.
+// The wiring moved into ToolBelt.forTurn during the session refactor, so this
+// pins that the belt still keys off the client rather than always offering a
+// tool with nowhere to ask.
+test('ask_user is offered only to a client that can ask', async (t) => {
+  const root = tempRoot();
+  const fake = await startFakeProvider({ text: 'ok' }, { text: 'ok' });
+  t.after(() => fake.close());
+
+  const withoutAsk = recorder();
+  const plain = makeSession(root, fake, withoutAsk.client);
+  await plain.run('hello');
+  plain.dispose();
+  assert.ok(!fake.requests[0].tools.includes('ask_user'),
+    `a client with no askUser must not be offered it, got ${fake.requests[0].tools.join(', ')}`);
+
+  const withAsk = recorder();
+  const asking = makeSession(root, fake, { ...withAsk.client, askUser: async () => 'an answer' });
+  await asking.run('hello again');
+  asking.dispose();
+  const offered = fake.requests[fake.requests.length - 1].tools;
+  assert.ok(offered.includes('ask_user'), `expected ask_user in the belt, got ${offered.join(', ')}`);
+});
+
 test('streamed tokens reach the client as they arrive', async (t) => {
   const root = tempRoot();
   // Long enough that the fake splits it across several SSE chunks — the point

@@ -1,5 +1,7 @@
 export type {
   ToolConfig,
+  AskFn,
+  AskRequest,
   ApprovalFn,
   ApprovalDecider,
   ApprovalDecision,
@@ -39,6 +41,7 @@ export type {
 } from './primitives/background.js';
 
 export { withApproval } from './factories/approval.js';
+export { createAskTool } from './factories/ask-tool.js';
 export { createFileTools, createReadOnlyFileTools } from './factories/file-tools.js';
 export { createShellTool, DEFAULT_COMMAND_POLICY } from './factories/shell-tool.js';
 export { createJobTools, summarise as summariseJob, formatOutput as formatJobOutput } from './factories/job-tools.js';

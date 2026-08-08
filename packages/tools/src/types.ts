@@ -67,6 +67,15 @@ export type ToolSource =
       remoteName: string;
     };
 
+export interface AskRequest {
+  question: string;
+  options?: string[];
+  multiSelect?: boolean;
+  allowFreeText?: boolean;
+}
+
+export type AskFn = (request: AskRequest) => Promise<string>;
+
 export interface ApprovalRequest {
   toolName: string;
   /** One-line summary shown in the approval prompt */

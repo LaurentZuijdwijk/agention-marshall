@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import type { OutputEvent, ClientInterface } from '@agentionai/marshall-engine';
-import type { ApprovalRequest, ApprovalDecision } from '@agentionai/marshall-tools';
+import type { ApprovalRequest, ApprovalDecision, AskRequest } from '@agentionai/marshall-tools';
 import { formatToolInput, formatToolName } from '../format.js';
 import { G } from '../view/theme.js';
 import type { Message, MessageRole } from '../view/message.js';
@@ -36,6 +36,7 @@ export interface TranscriptPort {
   turnEnded(outcome: TurnOutcome): void;
   reportUsage?(inputTokens: number, outputTokens: number, durationMs: number): void;
   requestApproval(request: ApprovalRequest): Promise<ApprovalDecision>;
+  askUser(request: AskRequest): Promise<string>;
   showUsage(): boolean;
 }
 
@@ -245,6 +246,10 @@ export function createEngineClient(port: TranscriptPort): ClientInterface {
 
     requestApproval(request: ApprovalRequest): Promise<ApprovalDecision> {
       return port.requestApproval(request);
+    },
+
+    askUser(request: AskRequest): Promise<string> {
+      return port.askUser(request);
     },
   };
 }

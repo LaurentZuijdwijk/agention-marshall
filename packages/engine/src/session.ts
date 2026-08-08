@@ -6,6 +6,7 @@ import { toolResultMaskingPlugin } from '@agentionai/agents/history/plugins';
 import type { ToolResultMaskingPlugin } from '@agentionai/agents/history/plugins';
 import {
   createReadOnlyFileTools,
+  createAskTool,
   createDedupeCache,
   createBackgroundJobs,
   summariseJob,
@@ -702,6 +703,9 @@ export class Session {
       const tools = [
         ...createReadOnlyFileTools(this.config.workspaceRoot, this.config.limits),
         ...(contextTool ? [contextTool] : []),
+        ...((eventType === 'plan' || eventType === 'goal') && this.client.askUser
+          ? [createAskTool((request) => this.client.askUser!(request))]
+          : []),
       ];
       const agent = await createAgent(profile, tools, new History(), {
         // No cap unless one is configured — a whole-codebase review legitimately

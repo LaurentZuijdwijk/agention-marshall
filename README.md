@@ -51,6 +51,7 @@ All tools live in `packages/tools` and are safe-by-default:
 | `shell_output` | No |
 | `shell_kill` | No |
 | `shell_list` | No |
+| `ask_user` | No |
 
 Before any state-changing tool runs, the proposed action (diff, command, path) is shown and you choose: **approve / deny / always-allow-this-session**.
 
