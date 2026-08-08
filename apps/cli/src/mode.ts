@@ -5,7 +5,7 @@
 // (the pending approval, the login in flight) carry it with them.
 
 import type { Tier } from '@agentionai/marshall-engine';
-import type { ApprovalRequest } from '@agentionai/marshall-tools';
+import type { ApprovalRequest, AskRequest } from '@agentionai/marshall-tools';
 import type { LoginSession } from './login.js';
 
 export type Mode =
@@ -16,6 +16,7 @@ export type Mode =
   | { type: 'running' }
   | { type: 'login-pending'; session: LoginSession }
   | { type: 'approval'; request: ApprovalRequest }
+  | { type: 'question'; request: AskRequest }
   /** The `/mcp add` wizard, asking for url, name and token. */
   | { type: 'mcp-setup' };
 
