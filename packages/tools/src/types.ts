@@ -35,6 +35,17 @@ export interface ToolCaller {
   role: string;
   /** `provider/model` actually running that role. */
   model: string;
+  /**
+   * Which *instance* of that role, when a role can have several live at once.
+   *
+   * Absent for roles that are singular by construction, like the coder. Present
+   * once work is fanned out, where the role name alone stops identifying anyone:
+   * two agents on the same role and model are the same string, and a consent
+   * gate that cannot tell them apart will let one agent's approval answer for
+   * another's action. Sub-agent spawns already name themselves this way for the
+   * transcript (`context#0`); this carries the same identity to the gate.
+   */
+  id?: string;
 }
 
 /**

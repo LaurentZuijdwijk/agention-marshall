@@ -51,7 +51,9 @@ function renderAction(context: SafetyContext): string {
   return [
     `Tool: ${context.toolName}`,
     `Source: ${sourceLabel(context.source)}`,
-    context.caller ? `Requested by: ${context.caller.role} agent (${context.caller.model})` : null,
+    context.caller
+      ? `Requested by: ${context.caller.id ?? context.caller.role} agent (${context.caller.model})`
+      : null,
     `Summary: ${context.description}`,
     `Detail:\n${context.detail}`,
     `Arguments: ${JSON.stringify(context.input, null, 2)}`,

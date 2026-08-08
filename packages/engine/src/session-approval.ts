@@ -59,13 +59,22 @@ export interface ApprovalGateDeps {
  * approving the diff for one file silently wrote the other two, and denying one
  * denied all three. The arguments decide what is actually being asked, and the
  * caller decides who is asking — under delegation those are different consents
- * even for an identical action.
+ * even for an identical action, and "who" means the specific agent instance,
+ * not its role: fanned-out work puts several agents on one role at once.
  *
  * Hashed because `input` carries whole-file content for `write_file`, and the
  * key would otherwise hold a copy of it for the life of the request.
  */
 function requestKey(req: ApprovalRequest): string {
-  const identity = JSON.stringify([req.caller?.role ?? '', req.input ?? {}]);
+  // Built field by field rather than serialising `caller` whole, so the key
+  // never depends on property order. `id` is what separates two live agents on
+  // the same role and model — without it they are one actor to this map.
+  const identity = JSON.stringify([
+    req.caller?.role ?? '',
+    req.caller?.id ?? '',
+    req.caller?.model ?? '',
+    req.input ?? {},
+  ]);
   return `${req.toolName}:${createHash('sha256').update(identity).digest('hex').slice(0, 32)}`;
 }
 

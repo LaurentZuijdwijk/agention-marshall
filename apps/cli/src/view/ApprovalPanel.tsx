@@ -106,7 +106,7 @@ export function ApprovalPanel({ request, pending, onSelect }: {
       {request.caller && (
         <Box>
           <Text color={C.faint}>
-            requested by {request.caller.role} {G.bullet} {request.caller.model}
+            requested by {request.caller.id ?? request.caller.role} {G.bullet} {request.caller.model}
           </Text>
         </Box>
       )}

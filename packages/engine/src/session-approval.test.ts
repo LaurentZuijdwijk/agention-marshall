@@ -88,6 +88,33 @@ test('different callers asking about the same file are asked separately', async 
   assert.equal(asked.length, 2, 'who is asking is part of what is being consented to');
 });
 
+// Role is not identity once work is fanned out. Two agents on the same role
+// and model are the same string, and keying on that alone would put them back
+// on one shared consent — the very bug this key exists to prevent, one level
+// further down.
+test('two live agents on the same role are asked separately', async () => {
+  const { gate: g, asked } = gate();
+  const base = write('shared.ts');
+  const model = 'openrouter/x';
+
+  await Promise.all([
+    g.approve({ ...base, caller: { role: 'swarm:fast', model, id: 'swarm:fast#0' } }),
+    g.approve({ ...base, caller: { role: 'swarm:fast', model, id: 'swarm:fast#1' } }),
+  ]);
+
+  assert.equal(asked.length, 2, 'same role, same model, different agent — two consents');
+});
+
+test('a role with no instance id still coalesces with itself', async () => {
+  const { gate: g, asked } = gate();
+  const caller = { role: 'coder', model: 'a/b' };
+  const req = { ...write('same.ts'), caller };
+
+  await Promise.all([g.approve(req), g.approve(req)]);
+
+  assert.equal(asked.length, 1, 'the coder is singular, so nothing to disambiguate');
+});
+
 test('"always" covers later calls to the same tool', async () => {
   const { gate: g, asked } = gate(() => 'always');
 
