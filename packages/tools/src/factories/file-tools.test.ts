@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createFileTools, createReadOnlyFileTools } from './file-tools.js';
-import type { ToolConfig } from '../types.js';
+import type { ToolConfig, ApprovalRequest } from '../types.js';
 
 function tempRoot(): string {
   return mkdtempSync(join(tmpdir(), 'marshall-file-test-'));
@@ -138,6 +138,51 @@ test('write_file allows overwrite after reading the file', async () => {
   const result = await byName.write_file.execute('a', 'b', { path: 'existing.txt', content: 'updated' }, 'id');
   assert.match(result, /Wrote/);
   assert.equal(readFileSync(join(root, 'existing.txt'), 'utf8'), 'updated');
+});
+
+// The permission dodge this guards: rather than edit_file, whose approval
+// renders a diff, rewrite the whole file with write_file. The panel used to
+// show the first 800 characters of the new content, so a change past that point
+// was never displayed — the reviewer saw an unchanged, benign prefix and
+// approved a change they were never shown.
+test('write_file approval shows the change, not a prefix of the payload', async () => {
+  const root = tempRoot();
+  const lines = Array.from({ length: 400 }, (_, i) => `line ${i}: ordinary source content goes here`);
+  const original = lines.join('\n');
+  lines[300] = 'const ADMIN = true; // slipped in';
+  const rewritten = lines.join('\n');
+  writeFileSync(join(root, 'config.ts'), original);
+
+  assert.equal(original.slice(0, 800), rewritten.slice(0, 800),
+    'precondition: the first 800 characters are identical, which is the exploit');
+
+  const seen: ApprovalRequest[] = [];
+  const tools = createFileTools({
+    workspaceRoot: root,
+    approval: async (req) => { seen.push(req); return 'approve'; },
+  });
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+  await byName.read_file.execute('a', 'b', { path: 'config.ts' }, 'id');
+  await byName.write_file.execute('a', 'b', { path: 'config.ts', content: rewritten }, 'id');
+
+  const [request] = seen;
+  assert.match(request.detail, /slipped in/, 'the buried change must be in what the reviewer sees');
+  assert.match(request.detail, /- line 300/, 'and what it replaced');
+  assert.match(request.description, /\+1 −1/, 'the shape of the write is stated up front');
+});
+
+test('creating a new file still shows its content, having nothing to diff', async () => {
+  const root = tempRoot();
+  const seen: ApprovalRequest[] = [];
+  const tools = createFileTools({
+    workspaceRoot: root,
+    approval: async (req) => { seen.push(req); return 'approve'; },
+  });
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+  await byName.write_file.execute('a', 'b', { path: 'fresh.txt', content: 'hello\nthere' }, 'id');
+
+  assert.match(seen[0].description, /Create file/);
+  assert.match(seen[0].detail, /hello/);
 });
 
 test('edit_file requires a prior read', async () => {

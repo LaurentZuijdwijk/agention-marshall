@@ -1,13 +1,14 @@
 import { Tool } from '@agentionai/agents/core';
 import type { ToolInputSchema } from '@agentionai/agents/core';
 import { readFile, readdir, stat } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { basename, join, relative } from 'node:path';
 import { createHash } from 'node:crypto';
 import { resolveInWorkspace } from '../primitives/resolve.js';
 import { cappedRead, DEFAULT_MAX_FILE_BYTES } from '../primitives/capped-read.js';
 import { atomicWrite } from '../primitives/atomic-write.js';
 import { createKeyedLock } from '../primitives/keyed-lock.js';
+import { formatFileDiff, describeDiff } from '../primitives/diff.js';
 import { withApproval } from './approval.js';
 import type { ToolConfig, ToolSpec, DedupeCache } from '../types.js';
 
@@ -352,14 +353,56 @@ export function createFileTools(config: ToolConfig, dedupeCache?: DedupeCache): 
     },
   };
 
+  /**
+   * What a reviewer is shown for a whole-file write.
+   *
+   * A diff against what is on disk, not a preview of the payload. The preview
+   * showed the first 800 characters of the new content, so a change past that
+   * point was never rendered at all — rewriting a whole file was a way to make
+   * an edit that `edit_file` would have shown as a diff, and have the panel
+   * display an unchanged, benign-looking prefix instead. With a diff, an
+   * approval that looks empty means nothing changed.
+   *
+   * Read synchronously because `buildRequest` is sync and runs before the tool
+   * body. The file has just been hashed by the read gate anyway, so it is warm.
+   */
+  const describeWrite = ({ path, content }: Record<string, unknown>) => {
+    const next = String(content);
+    let resolved: string;
+    try {
+      resolved = resolveInWorkspace(workspaceRoot, String(path));
+    } catch {
+      // Let the tool body report the path error; the panel just shows the ask.
+      return { toolName: 'write_file', description: `Write file: ${path}`, detail: `Path: ${path}` };
+    }
+
+    if (!existsSync(resolved)) {
+      return {
+        toolName: 'write_file',
+        description: `Create file: ${path} (${next.split('\n').length} lines)`,
+        detail: `New file: ${path}\n\n${next.slice(0, 800)}${next.length > 800 ? '\n[...]' : ''}`,
+      };
+    }
+
+    let current = '';
+    try { current = readFileSync(resolved, 'utf8'); } catch { /* unreadable — diff against empty */ }
+    const { text, stats } = formatFileDiff(String(path), current, next);
+    return {
+      toolName: 'write_file',
+      description: `Write file: ${path}  (${describeDiff(stats)})`,
+      detail: text,
+      // `input` is deliberately left as the raw arguments (see ApprovalRequest):
+      // `detail` is the change rendered for a human, and an automated reviewer
+      // cannot work backwards from that to what is actually being written.
+      // Summarising it here would shrink the judge's prompt by narrowing what
+      // the judge is allowed to see, which is the wrong trade on a safety gate.
+    };
+  };
+
   const write_file = withApproval(
     write_file_spec,
     approval,
-    ({ path, content }) => ({
-      toolName: 'write_file',
-      description: `Write file: ${path}`,
-      detail: `Path: ${path}\n\n${String(content).slice(0, 800)}${String(content).length > 800 ? '\n[...]' : ''}`,
-    }),
+    describeWrite,
     config.signal,
     config.caller,
     config.taskContext,
