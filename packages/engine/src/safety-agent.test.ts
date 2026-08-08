@@ -4,6 +4,7 @@ import { MaxTokensExceededError } from '@agentionai/agents/core';
 import type { ApprovalRequest } from '@agentionai/marshall-tools';
 import {
   buildSafetyContext, parseSafetyVerdict, runSafetyJudge, createSafetyAgentDecider, describeJudgeFailure,
+  DEFAULT_SAFETY_MAX_TOKENS,
 } from './safety-agent.js';
 import { startFakeProvider } from './testing/fake-provider.js';
 import type { FakeProvider } from './testing/fake-provider.js';
@@ -169,14 +170,18 @@ test('createSafetyAgentDecider: consecutive calls are isolated — no history le
   assert.ok(secondUser.includes('rm -rf /'));
 });
 
-test('createSafetyAgentDecider: uses the default 600-token cap when unconfigured', async (t) => {
+// Bound to the exported constant rather than a literal: what matters is that an
+// unconfigured judge gets the default, not what this year's default happens to
+// be. `maxOutputTokens overrides the default cap` below is what pins the
+// override path, so a bare number here only ever went stale.
+test('createSafetyAgentDecider: uses the default cap when unconfigured', async (t) => {
   const fake = await startFakeProvider({ text: '{"decision": "approve", "reason": "ok"}' });
   t.after(() => fake.close());
 
   const decider = createSafetyAgentDecider({ profile: profileFor(fake), kind: 'chat-judge' });
   await decider(baseRequest());
 
-  assert.equal(fake.requests[0].body.max_tokens, 600);
+  assert.equal(fake.requests[0].body.max_tokens, DEFAULT_SAFETY_MAX_TOKENS);
 });
 
 test('createSafetyAgentDecider: maxOutputTokens overrides the default cap', async (t) => {

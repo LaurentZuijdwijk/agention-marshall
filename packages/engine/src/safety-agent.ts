@@ -341,7 +341,7 @@ export interface SafetyVerdict {
  * `MaxTokensExceededError`, not a parse failure `parseSafetyVerdict` could
  * shrug off. `SafetyAgentConfig.maxOutputTokens` overrides this per judge.
  */
-export const DEFAULT_SAFETY_MAX_TOKENS = 600;
+export const DEFAULT_SAFETY_MAX_TOKENS = 1200;
 
 /** Run the configured model over one tool call and return its verdict. */
 export async function runSafetyJudge(
