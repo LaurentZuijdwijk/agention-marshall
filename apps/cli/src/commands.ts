@@ -7,7 +7,7 @@
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import type { AgentProfile, McpServerState } from '@agentionai/marshall-engine';
+import type { AgentProfile, McpServerState, SafetyLevel, SafetyAgentConfig } from '@agentionai/marshall-engine';
 import type { BackgroundJob } from '@agentionai/marshall-tools';
 import type { Approvals } from './hooks/useApprovals.js';
 import type { PreferencesController } from './hooks/usePreferences.js';
@@ -15,7 +15,8 @@ import type { Transcript } from './hooks/useTranscript.js';
 import type { Message } from './view/message.js';
 import type { LoginSession } from './login.js';
 import type { SetMode } from './mode.js';
-import { resolveSlashCommand, HELP } from './slashCommands.js';
+import { resolveSlashCommand, HELP, SAFETY_LEVEL_WORDS, SAFETY_LEVEL_LABELS } from './slashCommands.js';
+import type { SafetyLevelWord } from './slashCommands.js';
 import { currentVersion, checkForUpdate, describeUpdate, manualInstallCommand } from './update-check.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -38,6 +39,9 @@ export interface CommandSession {
   reconnectMcpServer(name: string): Promise<McpServerState | null>;
   readonly light: boolean;
   setLight(light: boolean): void;
+  readonly safetyLevel: SafetyLevel;
+  setSafetyLevel(level: SafetyLevel): void;
+  setSafetyAgent(agent: SafetyAgentConfig | undefined): void;
 }
 
 export interface CommandDeps {
@@ -60,6 +64,10 @@ export interface CommandDeps {
   /** Config problems that produce no server, e.g. a project enabling a name
    *  nothing defines. Shown by `/mcp`, which is where someone goes looking. */
   mcpWarnings?: string[];
+  /** Mirrors the session's safety level into the header/banner — `/safety` is
+   *  session-only (see Session.setSafetyLevel), so this is what lets a header
+   *  reprinted later (mid-session model switch, `/clear`) still show it. */
+  onSafetyLevelChange?(level: SafetyLevel): void;
 }
 
 function describeJob(job: BackgroundJob): string {
@@ -258,6 +266,40 @@ export function runSlashCommand(input: string, deps: CommandDeps): void {
         ? 'light mode on — no scratchpad, background jobs or sub-agents; ~1100 fewer tokens per request.\n'
           + 'Takes effect on your next message. /light again to restore them.'
         : 'light mode off — the full tool belt is back from your next message');
+      return;
+    }
+
+    case 'safety': {
+      if (!session) {
+        transcript.push('error', 'no model chosen yet — finish setup first');
+        return;
+      }
+
+      if (!command.level) {
+        const current = SAFETY_LEVEL_LABELS[session.safetyLevel];
+        const rows = (Object.keys(SAFETY_LEVEL_WORDS) as SafetyLevelWord[])
+          .map(word => `  ${word.padEnd(8)} — ${SAFETY_LEVEL_WORDS[word].blurb}`);
+        transcript.push('info', [
+          'usage: /safety [none|default|agentic]',
+          ...rows,
+          `current: ${current}`,
+        ].join('\n'));
+        return;
+      }
+
+      if (command.level === 'agentic') {
+        // Level 3 needs a judge model before it means anything — the wizard
+        // sets `safetyLevel` itself once one is actually chosen.
+        setMode({ type: 'safety-setup' });
+        return;
+      }
+
+      const { level, blurb } = SAFETY_LEVEL_WORDS[command.level];
+      session.setSafetyLevel(level);
+      deps.onSafetyLevelChange?.(level);
+      transcript.push('info', command.level === 'none'
+        ? `⚠ safety: none — ${blurb}`
+        : `safety: ${command.level} — ${blurb}`);
       return;
     }
 

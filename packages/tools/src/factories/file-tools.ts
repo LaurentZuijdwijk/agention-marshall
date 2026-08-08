@@ -318,6 +318,7 @@ export function createFileTools(config: ToolConfig, dedupeCache?: DedupeCache): 
     }),
     config.signal,
     config.caller,
+    config.taskContext,
   );
 
   const edit_file = withApproval(
@@ -330,6 +331,7 @@ export function createFileTools(config: ToolConfig, dedupeCache?: DedupeCache): 
     }),
     config.signal,
     config.caller,
+    config.taskContext,
   );
 
   return [read_file, list_dir, search, write_file, edit_file];

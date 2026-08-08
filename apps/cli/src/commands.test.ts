@@ -5,7 +5,7 @@ import type { CommandDeps, CommandSession } from './commands.js';
 import type { Transcript } from './hooks/useTranscript.js';
 import type { Mode } from './mode.js';
 import type { Message } from './view/message.js';
-import type { AgentProfile, McpServerState } from '@agentionai/marshall-engine';
+import type { AgentProfile, McpServerState, SafetyLevel, SafetyAgentConfig } from '@agentionai/marshall-engine';
 import type { BackgroundJob } from '@agentionai/marshall-tools';
 
 // ── fakes ─────────────────────────────────────────────────────────────────────
@@ -48,11 +48,15 @@ function setup(overrides: Partial<CommandDeps> & { jobs?: BackgroundJob[]; serve
     mcpReconnected: [] as string[],
     mcpChanged: 0,
     light: [] as boolean[],
+    safetyLevel: [] as SafetyLevel[],
+    safetyAgent: [] as Array<SafetyAgentConfig | undefined>,
+    safetyLevelReported: [] as SafetyLevel[],
   };
 
   const jobs = overrides.jobs ?? [];
   const servers = overrides.servers ?? [];
   let light = false;
+  let safetyLevel: SafetyLevel = 2;
 
   const session: CommandSession = {
     plan: async (task) => { calls.plan.push(task); },
@@ -75,6 +79,9 @@ function setup(overrides: Partial<CommandDeps> & { jobs?: BackgroundJob[]; serve
     },
     get light() { return light; },
     setLight: (next) => { light = next; calls.light.push(next); },
+    get safetyLevel() { return safetyLevel; },
+    setSafetyLevel: (next) => { safetyLevel = next; calls.safetyLevel.push(next); },
+    setSafetyAgent: (agent) => { calls.safetyAgent.push(agent); },
   };
 
   const prefs = {
@@ -106,6 +113,7 @@ function setup(overrides: Partial<CommandDeps> & { jobs?: BackgroundJob[]; serve
     quit: () => { calls.quit++; },
     startLogin: () => ({ authUrl: 'https://auth.example' } as never),
     onMcpChanged: () => { calls.mcpChanged++; },
+    onSafetyLevelChange: (level) => { calls.safetyLevelReported.push(level); },
     ...overrides,
   };
 
@@ -433,6 +441,58 @@ describe('/light', () => {
   it('refuses before a model is chosen', () => {
     const { deps, pushed } = setup({ session: null });
     runSlashCommand('/light', deps);
+    assert.equal(pushed[0].role, 'error');
+  });
+});
+
+describe('/safety', () => {
+  it('shows the current level and what each level does on a bare /safety', () => {
+    const { deps, pushed, calls } = setup();
+    runSlashCommand('/safety', deps);
+    assert.equal(pushed[0].role, 'info');
+    assert.match(pushed[0].content, /usage: \/safety/);
+    assert.match(pushed[0].content, /none/);
+    assert.match(pushed[0].content, /agentic/);
+    assert.match(pushed[0].content, /current: default/);
+    assert.deepEqual(calls.safetyLevel, [], 'a bare /safety only informs, it never changes anything');
+  });
+
+  it('applies "default" directly and confirms it', () => {
+    const { deps, pushed, calls } = setup();
+    runSlashCommand('/safety default', deps);
+    assert.deepEqual(calls.safetyLevel, [2]);
+    assert.deepEqual(calls.safetyLevelReported, [2], 'mirrored to the header');
+    assert.equal(pushed[0].role, 'info');
+    assert.match(pushed[0].content, /safety: default/);
+  });
+
+  it('applies "none" directly with a visible warning', () => {
+    const { deps, pushed, calls } = setup();
+    runSlashCommand('/safety none', deps);
+    assert.deepEqual(calls.safetyLevel, [1]);
+    assert.equal(pushed[0].role, 'info');
+    assert.match(pushed[0].content, /⚠/);
+    assert.match(pushed[0].content, /dangerous/);
+  });
+
+  it('opens the judge-model wizard for "agentic" instead of applying anything itself', () => {
+    const { deps, modes, calls } = setup();
+    runSlashCommand('/safety agentic', deps);
+    assert.deepEqual(modes, [{ type: 'safety-setup' }]);
+    assert.deepEqual(calls.safetyLevel, [], 'level 3 only takes effect once a judge model is actually chosen');
+  });
+
+  it('rejects an unknown level with usage', () => {
+    const { deps, pushed, calls } = setup();
+    runSlashCommand('/safety yolo', deps);
+    assert.equal(pushed[0].role, 'error');
+    assert.match(pushed[0].content, /usage: \/safety/);
+    assert.deepEqual(calls.safetyLevel, []);
+  });
+
+  it('refuses before a model is chosen', () => {
+    const { deps, pushed } = setup({ session: null });
+    runSlashCommand('/safety', deps);
     assert.equal(pushed[0].role, 'error');
   });
 });

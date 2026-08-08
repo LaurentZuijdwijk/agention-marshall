@@ -342,6 +342,13 @@ function ModelList({
   const [query, setQuery] = useState('');
   const filtered = filterModels(models, query);
   const items = [...filtered, { id: CUSTOM } as ModelInfo];
+  // `cursor` can point past the end of `items` for one render after a search
+  // narrows the list — the effect below that resets it to 0 only runs *after*
+  // that render commits, not before — so every direct index read below clamps
+  // to the current `items`, rather than trusting the effect alone to keep it
+  // in range. Without this, `items[cursor]` was `undefined` for that one frame
+  // and crashed whatever read `.id` off it.
+  const activeIndex = Math.min(cursor, items.length - 1);
 
   useEffect(() => {
     setCursor(0);
@@ -350,7 +357,7 @@ function ModelList({
   useInput((input, key) => {
     if (key.upArrow)   { setCursor(c => (c - 1 + items.length) % items.length); return; }
     if (key.downArrow) { setCursor(c => (c + 1) % items.length); return; }
-    if (key.return)    { onSelect(items[cursor].id); return; }
+    if (key.return)    { onSelect(items[activeIndex].id); return; }
     if (key.leftArrow || key.escape) {
       if (query) { setQuery(''); setCursor(0); } else onBack?.();
       return;
@@ -366,7 +373,7 @@ function ModelList({
   const available = Math.max(24, (process.stdout.columns ?? 80) - (showPrice ? 34 : 18));
   const nameWidth = Math.min(available, Math.max(...items.map(m => m.id.length)));
 
-  const { start, end } = windowRange(items.length, cursor, VISIBLE_MODELS);
+  const { start, end } = windowRange(items.length, activeIndex, VISIBLE_MODELS);
   const above = start;
   const below = items.length - end;
 
@@ -382,7 +389,7 @@ function ModelList({
 
       {items.slice(start, end).map((model, i) => {
         const index = start + i;
-        const active = index === cursor;
+        const active = index === activeIndex;
         const { glyph, color } = statusGlyph(model);
         const isCustom = model.id === CUSTOM;
         const name = model.id.length > nameWidth
@@ -425,7 +432,7 @@ function ModelList({
       {below > 0 && <Text color={C.faint}>  ↓ {below} more</Text>}
 
       <Box marginTop={1} paddingLeft={2}>
-        <ModelDetail model={items[cursor]} />
+        <ModelDetail model={items[activeIndex]} />
       </Box>
     </Box>
   );
@@ -458,6 +465,14 @@ export interface SetupProps {
   tier?: Tier;
   /** Model the deep tier is on, shown while picking `fast` for contrast. */
   deepLabel?: string;
+  /**
+   * Overrides the tier-based title and blurb — for a picker that isn't a model
+   * tier at all, e.g. `/safety agentic`'s judge-model choice. Leaves `tier`'s
+   * other behaviour (the API-key step, `onComplete`'s shape) untouched; only
+   * the two lines of framing text change.
+   */
+  title?: string;
+  blurb?: string;
   /** `model === null` means "same as deep" — clear any fast override. */
   onComplete: (provider: Provider | null, model: string | null, host?: string, apiKey?: string) => void;
   /**
@@ -535,7 +550,7 @@ const TIER_BLURB: Record<Tier, string> = {
   fast: 'reads files, searches and summarises for the deep model',
 };
 
-export function Setup({ initial, tier = 'deep', deepLabel, savedHosts, savedKeys, onComplete, onExit }: SetupProps) {
+export function Setup({ initial, tier = 'deep', title, blurb, deepLabel, savedHosts, savedKeys, onComplete, onExit }: SetupProps) {
   const [step, setStep] = useState<Step>({ name: 'provider' });
   traceRender('Setup', `step=${step.name}`);
   const [hostInput, setHostInput] = useState('');
@@ -556,14 +571,14 @@ export function Setup({ initial, tier = 'deep', deepLabel, savedHosts, savedKeys
     else onComplete(provider, model, host);
   };
 
-  const label = (rest: string) => `${tier} model  ${G.bullet}  ${rest}`;
+  const label = (rest: string) => `${title ?? `${tier} model`}  ${G.bullet}  ${rest}`;
 
   if (step.name === 'provider') {
     return (
       <Box flexDirection="column" gap={1}>
         <Title step={label('choose a provider')} />
         <Box flexDirection="column">
-          <Hint>{TIER_BLURB[tier]}</Hint>
+          <Hint>{blurb ?? TIER_BLURB[tier]}</Hint>
           {tier === 'fast' && deepLabel ? <Hint>{`deep model is ${deepLabel}`}</Hint> : null}
         </Box>
         <ProviderSelect

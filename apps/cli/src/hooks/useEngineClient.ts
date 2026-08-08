@@ -133,6 +133,21 @@ export function createEngineClient(port: TranscriptPort): ClientInterface {
           port.push('tool-result', event.result);
           break;
 
+        // The judge's verdict on the call just above it — pushed as its own row
+        // rather than folded into the tool-call row, because it arrives after
+        // that row already rendered (the decider runs inside the tool's
+        // `execute`, well after `tool-call` fires) and 'approve' included: a
+        // call the human was never asked about is exactly the one whose review
+        // would otherwise be invisible.
+        case 'safety-verdict':
+          port.push('safety', event.reason, {
+            title: formatToolName(event.toolName),
+            note: event.model,
+            safetyOutcome: event.outcome,
+            ...(event.caller ? { caller: event.caller } : {}),
+          });
+          break;
+
         case 'subagent-done':
           port.push(
             'subagent',

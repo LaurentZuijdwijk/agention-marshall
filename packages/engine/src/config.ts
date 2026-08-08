@@ -58,6 +58,52 @@ export const DEFAULT_ROLE_TIERS: Record<Role, Tier> = {
   summarizer: 'fast',
 };
 
+// ── tool-call safety levels ─────────────────────────────────────────────────
+//
+//   1 — no gate: every tool call runs immediately. Dangerous; for a fully
+//       sandboxed/CI setting only.
+//   2 — human-in-the-loop: every state-changing tool call is confirmed by the
+//       user. The default, and the only level until now.
+//   3 — agent-based: a dedicated safety-review model judges each call first
+//       (see `safetyAgent`). A clear "safe" verdict skips the human prompt; a
+//       "unsafe" verdict still reaches the human, annotated with the model's
+//       reasoning, so they can override a false positive rather than being
+//       silently blocked.
+export type SafetyLevel = 1 | 2 | 3;
+
+/**
+ * Which prompt/response shape `safetyAgent` speaks.
+ *
+ * `chat-judge` is a plain instruction-following model asked for a JSON
+ * `{ decision, reason }` verdict — works with any general-purpose chat model.
+ * `nvidia-content-safety` targets NVIDIA's guard-style content-safety models
+ * (e.g. `nvidia/llama-3.1-nemoguard-8b-content-safety`), which are trained on a
+ * safe/unsafe + category taxonomy rather than free-form instructions.
+ */
+export type SafetyAgentKind = 'nvidia-content-safety' | 'chat-judge';
+
+/**
+ * The model that reviews tool calls at safety level 3.
+ *
+ * `profile` reuses the existing provider set — there is no dedicated "nvidia"
+ * provider. NVIDIA's content-safety models are served behind an OpenAI-
+ * compatible API, so point `provider: 'openrouter'` (or any OpenAI-compatible
+ * host) at it: `{ provider: 'openrouter', model: 'nvidia/llama-3.1-nemoguard-8b-content-safety',
+ * host: 'https://integrate.api.nvidia.com/v1', apiKey: process.env.NVIDIA_API_KEY }`.
+ */
+export interface SafetyAgentConfig {
+  profile: AgentProfile;
+  /** Defaults to 'chat-judge'. */
+  kind?: SafetyAgentKind;
+  /**
+   * Output token cap for the judge's response. Defaults to 600
+   * (`DEFAULT_SAFETY_MAX_TOKENS` in safety-agent.ts) — raise it for a
+   * reasoning-tuned model that emits a long chain-of-thought before its
+   * verdict, or its response gets cut off mid-generation instead of parsed.
+   */
+  maxOutputTokens?: number;
+}
+
 export interface EngineConfig {
   agent: AgentProfile;
   workspaceRoot: string;
@@ -138,6 +184,10 @@ export interface EngineConfig {
    * and the server writes its own name and description.
    */
   mcpServers?: McpServerConfig[];
+  /** Tool-call approval gate. Defaults to 2 (human-in-the-loop) when unset. */
+  safetyLevel?: SafetyLevel;
+  /** Required when `safetyLevel` is 3 — the model that reviews each call. */
+  safetyAgent?: SafetyAgentConfig;
 }
 
 // ── tier resolution ───────────────────────────────────────────────────────────

@@ -196,6 +196,7 @@ export function createGitHubTools(config: ToolConfig): Tool<string>[] {
     }),
     config.signal,
     config.caller,
+    config.taskContext,
   );
 
   const gh_comment = withApproval(
@@ -208,6 +209,7 @@ export function createGitHubTools(config: ToolConfig): Tool<string>[] {
     }),
     config.signal,
     config.caller,
+    config.taskContext,
   );
 
   return [gh_list_issues, gh_view_issue, gh_list_prs, gh_view_pr, gh_diff, gh_create_pr, gh_comment];

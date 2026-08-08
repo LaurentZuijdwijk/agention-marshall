@@ -60,7 +60,7 @@ export function adaptMcpTools(
   config: ToolConfig,
   options: McpToolOptions,
 ): Tool<string>[] {
-  const { approval, signal, caller } = config;
+  const { approval, signal, caller, taskContext } = config;
   const timeoutMs = options.timeoutMs ?? DEFAULT_MCP_TIMEOUT_MS;
 
   return tools.map((tool) => {
@@ -103,6 +103,7 @@ export function adaptMcpTools(
       }),
       signal,
       caller,
+      taskContext,
     );
   });
 }

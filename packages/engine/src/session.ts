@@ -34,13 +34,14 @@ import {
   PLANNER_TOOL_GUIDANCE,
   REVIEWER_TOOL_GUIDANCE,
 } from './agent-factory.js';
+import { createSafetyAgentDecider } from './safety-agent.js';
 import { agentTool } from './agent-tool.js';
 import { runAgent } from './streaming.js';
 import { checkAttachments, buildInput } from './images.js';
 import type { ImageAttachment } from './images.js';
 import { describeAgentError, providerErrorDiagnostics, isBadRequestError, isContextLengthError } from './errors.js';
 import { resolveRoleProfile, isDelegated, resolveModel, contextToolEnabled, routingSummary, resolveSearchProfile } from './config.js';
-import type { EngineConfig, AgentProfile, Role } from './config.js';
+import type { EngineConfig, AgentProfile, Role, SafetyLevel, SafetyAgentConfig } from './config.js';
 import type { ClientInterface } from './types.js';
 
 interface AgentWithUsage extends BaseAgent<string, string> {
@@ -414,6 +415,33 @@ export class Session {
     this.config = { ...this.config, light };
     this.buildRoleTools();
     this.log(`LIGHT ${light ? 'on' : 'off'}`);
+  }
+
+  get safetyLevel(): SafetyLevel {
+    return this.config.safetyLevel ?? 2;
+  }
+
+  get safetyAgentProfile(): AgentProfile | undefined {
+    return this.config.safetyAgent?.profile;
+  }
+
+  /**
+   * Switch the tool-call approval gate. Safe mid-turn for the same reason
+   * `setLight` is: `approvalChain()` reads `this.config` fresh on every
+   * request, there is no belt to rebuild.
+   */
+  setSafetyLevel(level: SafetyLevel): void {
+    if (this.safetyLevel === level) return;
+    this.config = { ...this.config, safetyLevel: level };
+    this.log(`SAFETY_LEVEL ${level}`);
+  }
+
+  /** The model that reviews tool calls at safety level 3. Setting it does not
+   *  itself change the level — callers that mean to turn level 3 on call
+   *  `setSafetyLevel(3)` too. */
+  setSafetyAgent(agent: SafetyAgentConfig | undefined): void {
+    this.config = { ...this.config, safetyAgent: agent };
+    this.log(`SAFETY_AGENT ${agent ? `${agent.profile.provider}/${resolveModel(agent.profile)} kind=${agent.kind ?? 'chat-judge'}` : 'cleared'}`);
   }
 
   get hasPendingPlan(): boolean {
@@ -923,6 +951,12 @@ export class Session {
    * between these two, and no tool has to know it exists. That is also why
    * ApprovalRequest carries structured `input` and `source`: a reviewer needs
    * the arguments and the provenance, not the prose meant for a human.
+   *
+   * Safety level 3 is that agent: `createSafetyAgentDecider` approves outright
+   * on a clear "safe" verdict, and otherwise defers to the human (annotating the
+   * request on "unsafe" so they see why and can override it) — see its own doc
+   * comment. Level 1 skips the human link entirely; level 2 (the default) is
+   * this chain with no automated link at all.
    */
   private approvalChain(): ApprovalDecider[] {
     return [
@@ -932,7 +966,15 @@ export class Session {
         this.log(`TOOL ${req.toolName} auto-approved (always)`);
         return 'approve';
       },
-      // ── an automated reviewer would go here ──
+      ...(this.config.safetyLevel === 1
+        ? [async () => 'approve' as const]
+        : []),
+      ...(this.config.safetyLevel === 3 && this.config.safetyAgent
+        ? [createSafetyAgentDecider(this.config.safetyAgent, {
+            log: (line) => this.log(line),
+            onVerdict: (verdict) => this.client.onOutput({ type: 'safety-verdict', ...verdict }),
+          })]
+        : []),
       (req) => this.decideApproval(req),
     ];
   }
@@ -1071,6 +1113,12 @@ export class Session {
         // write tools today, but "who is asking me to approve this" should be
         // answered on the panel rather than assumed.
         caller: { role: 'coder', model: `${coderProfile.provider}/${resolveModel(coderProfile)}` },
+        // What the user actually asked for this turn — the only thing that lets
+        // a reviewer (human or the safety agent) judge *scope*, not just the
+        // action in isolation. Without it, "the user asked me to delete this
+        // file" and "the agent decided to delete this file on its own" produce
+        // an identical tool call.
+        taskContext: task,
         // Withholding the registry is what removes `background` from run_shell's
         // schema — the factory keys the option off its presence, so light mode
         // does not need the shell tool to know it exists.

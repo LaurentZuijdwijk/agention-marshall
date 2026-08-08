@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { homedir } from 'node:os';
 import { Box, Static, useApp, useStdout } from 'ink';
 import { Session } from '@agentionai/marshall-engine';
-import type { AgentProfile, Provider, Tier, McpServerConfig } from '@agentionai/marshall-engine';
+import type { AgentProfile, Provider, Tier, McpServerConfig, SafetyLevel } from '@agentionai/marshall-engine';
 import type { ApprovalDecision } from '@agentionai/marshall-tools';
 import { Setup } from './view/Setup.js';
 import { McpSetup } from './view/McpSetup.js';
@@ -33,7 +33,7 @@ import { runSlashCommand } from './commands.js';
 import { describeUpdate } from './update-check.js';
 import type { UpdateInfo } from './update-check.js';
 import { saveMcpServers, saveProjectMcpSelection } from './services/config-store.js';
-import { SLASH_COMMANDS } from './slashCommands.js';
+import { SLASH_COMMANDS, SAFETY_LEVEL_LABELS } from './slashCommands.js';
 import { completeAtPath, expandFileMentions } from './fileCompletion.js';
 import type { Mode } from './mode.js';
 import { traceRender } from './renderTrace.js';
@@ -128,6 +128,10 @@ export function App({
     agentProfile.model ? { type: 'idle' } : { type: 'setup', tier: 'deep', chain: true },
   );
   const [steering, setSteering] = useState(false);
+  // Session-only by design (see /safety) — always starts at the default gate,
+  // and is mirrored here purely so the header can show it once it changes;
+  // the engine's own `session.safetyLevel` is the actual source of truth.
+  const [safetyLevel, setSafetyLevelState] = useState<SafetyLevel>(2);
   const [booting, setBooting] = useState(Boolean(agentProfile.model) && animate);
 
   const prefs = usePreferences();
@@ -143,6 +147,7 @@ export function App({
     dir: shortenPath(workspaceRoot, homedir()),
     fastModel: fast?.model,
     fastProvider: fast?.provider,
+    safety: SAFETY_LEVEL_LABELS[safetyLevel],
   });
   const headerMessage = (deep: AgentProfile, fast?: AgentProfile, compact = false): Message =>
     ({ key: transcript.nextKey(), role: 'header', content: '', meta: headerMeta(deep, fast), compact });
@@ -352,6 +357,26 @@ export function App({
       .catch((err: unknown) => transcript.push('error', err instanceof Error ? err.message : String(err)));
   };
 
+  // ── safety judge wizard (/safety agentic) ─────────────────────────────────
+  //
+  // Deliberately does not go through `applyProfiles`/`persist()` — the safety
+  // level and its judge model are session-only (see Session.setSafetyAgent),
+  // so nothing here touches config-store.
+  const handleSafetySetupComplete = (
+    provider: Provider | null,
+    model: string | null,
+    host?: string,
+    apiKey?: string,
+  ) => {
+    if (provider && model && session) {
+      session.setSafetyAgent({ profile: { provider, model, host, ...(apiKey ? { apiKey } : {}) } });
+      session.setSafetyLevel(3);
+      setSafetyLevelState(3);
+      transcript.push('info', `safety: agentic — reviewing tool calls with ${provider}/${model}`);
+    }
+    setMode({ type: 'idle' });
+  };
+
   // ── setup wizard ───────────────────────────────────────────────────────────
   const handleSetupComplete = (
     tier: Tier,
@@ -421,6 +446,7 @@ export function App({
         mcpWarnings,
         applyProfiles, activeProfile, quit,
         startLogin: startLoginCtor,
+        onSafetyLevelChange: setSafetyLevelState,
       });
       return;
     }
@@ -496,6 +522,17 @@ export function App({
           savedKeys={keys}
           onComplete={(p: Provider | null, m: string | null, h?: string, k?: string) =>
             handleSetupComplete(mode.tier, mode.chain, p, m, h, k)}
+          onExit={() => setMode({ type: 'idle' })}
+        />
+      </Box>
+    ) : mode.type === 'safety-setup' ? (
+      <Box padding={1}>
+        <SetupCtor
+          title="safety judge model"
+          blurb='reviews each tool call before it runs — a "safe" verdict skips your approval, "unsafe" still asks you, with its reasoning attached'
+          savedHosts={hosts}
+          savedKeys={keys}
+          onComplete={handleSafetySetupComplete}
           onExit={() => setMode({ type: 'idle' })}
         />
       </Box>

@@ -127,5 +127,6 @@ export function createShellTool(config: ToolConfig) {
     }),
     signal,
     config.caller,
+    config.taskContext,
   );
 }

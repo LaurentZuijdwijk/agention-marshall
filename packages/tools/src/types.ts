@@ -74,6 +74,17 @@ export interface ApprovalRequest {
   input?: Record<string, unknown>;
   /** Defaults to builtin when absent. */
   source?: ToolSource;
+  /**
+   * The user's current instruction, verbatim — what the caller is actually
+   * trying to accomplish this turn.
+   *
+   * Without this, an automated reviewer (or a human glancing at a bare
+   * command) has no way to tell "the user asked me to delete this file" apart
+   * from "the agent decided to delete this file on its own" — the two produce
+   * an identical tool call. It is what lets a reviewer judge *scope*, not just
+   * the action in isolation.
+   */
+  taskContext?: string;
 }
 
 export type ApprovalFn = (request: ApprovalRequest) => Promise<ApprovalDecision>;
@@ -117,6 +128,10 @@ export interface ToolConfig {
   limits?: Limits;
   /** Stamped onto every approval this belt raises. */
   caller?: ToolCaller;
+  /** Stamped onto every approval this belt raises, as `ApprovalRequest.taskContext`.
+   *  The session's job to keep current — a belt built once per turn gets it
+   *  fresh each time, the same way `caller` is already per-belt, not per-tool. */
+  taskContext?: string;
   /**
    * Registry for backgrounded shell commands. Absent means `run_shell` has no
    * `background` option and the job tools don't exist.

@@ -23,6 +23,9 @@ export function withApproval(
   buildRequest: (input: Record<string, unknown>) => ApprovalRequest,
   signal?: AbortSignal,
   caller?: ToolCaller,
+  /** The user's current instruction — stamped on the same way `caller` is; see
+   *  `ApprovalRequest.taskContext`. */
+  taskContext?: string,
 ): Tool<string> {
   return new Tool<string>({
     name: spec.name,
@@ -34,7 +37,11 @@ export function withApproval(
       // `input` is stamped on here, not in each buildRequest: every gated tool
       // has it, and a decider that has to trust each caller to remember it is a
       // decider that will eventually judge a request with no arguments.
-      const request = { input, ...buildRequest(input), ...(caller ? { caller } : {}) };
+      const request = {
+        input, ...buildRequest(input),
+        ...(caller ? { caller } : {}),
+        ...(taskContext ? { taskContext } : {}),
+      };
       const decision = await approval(request);
 
       if (signal?.aborted) return INTERRUPTED;

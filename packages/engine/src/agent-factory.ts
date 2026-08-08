@@ -167,6 +167,10 @@ export interface CreateAgentOptions {
   systemPrompt?: string;
   /** Provider-defined server-side tools (e.g. web search). Claude only. */
   builtInTools?: BuiltInTool[];
+  /** Sampling temperature. Omitted by default, so the provider's/model's own
+   *  default applies — set it for callers that need reproducible output (e.g.
+   *  a classifier) rather than a conversational one. */
+  temperature?: number;
 }
 
 export async function createAgent(
@@ -182,6 +186,7 @@ export async function createAgent(
     extraInstructions,
     systemPrompt,
     builtInTools,
+    temperature,
   } = options;
   const { key: apiKey, authType } = resolveAuth(profile);
   const model = resolveModel(profile);
@@ -201,6 +206,7 @@ export async function createAgent(
     model,
     tools,
     ...(cap !== undefined ? { maxTokens: cap } : {}),
+    ...(temperature !== undefined ? { temperature } : {}),
     ...(profile.provider === 'openai' && profile.reasoningEffort !== undefined
       ? { reasoningEffort: profile.reasoningEffort }
       : {}),

@@ -1,8 +1,13 @@
-export type { Provider, AgentProfile, EngineConfig, ResolvedAuth, Tier, Role, ModelTiers } from './config.js';
+export type {
+  Provider, AgentProfile, EngineConfig, ResolvedAuth, Tier, Role, ModelTiers,
+  SafetyLevel, SafetyAgentKind, SafetyAgentConfig,
+} from './config.js';
 export {
   PROVIDER_DEFAULTS, resolveApiKey, resolveAuth, resolveModel,
   DEFAULT_ROLE_TIERS, resolveTierProfile, resolveRoleProfile, tierForRole, isDelegated,
 } from './config.js';
+export type { SafetyContext, SafetyVerdict, SafetyVerdictOutcome, SafetyVerdictEvent, SafetyAgentHooks } from './safety-agent.js';
+export { buildSafetyContext, parseSafetyVerdict, runSafetyJudge, createSafetyAgentDecider, DEFAULT_SAFETY_MAX_TOKENS } from './safety-agent.js';
 export type { OutputEvent, ClientInterface, EditorContext } from './types.js';
 export type { ImageAttachment } from './images.js';
 export { checkAttachments, decodedBytes, IMAGE_MIME_TYPES, MAX_IMAGE_BYTES } from './images.js';

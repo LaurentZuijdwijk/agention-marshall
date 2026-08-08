@@ -100,6 +100,42 @@ describe('tool results', () => {
   });
 });
 
+describe('safety verdicts', () => {
+  it('renders an approve verdict as a safety row with the tool name as title', () => {
+    const h = harness();
+    h.send({ type: 'safety-verdict', toolName: 'run_shell', outcome: 'approve', reason: 'routine test run', model: 'openrouter/nvidia/...' });
+    assert.equal(h.pushed[0].role, 'safety');
+    assert.equal(h.pushed[0].content, 'routine test run');
+    assert.equal(h.pushed[0].extra?.title, 'Run shell'); // formatToolName humanises it, same as a tool-call row
+    assert.equal(h.pushed[0].extra?.note, 'openrouter/nvidia/...');
+    assert.equal(h.pushed[0].extra?.safetyOutcome, 'approve');
+  });
+
+  it('renders a deny verdict — the tool call is still awaiting the human at this point', () => {
+    const h = harness();
+    h.send({ type: 'safety-verdict', toolName: 'run_shell', outcome: 'deny', reason: 'deletes outside the workspace', model: 'openai/gpt-4o-mini' });
+    assert.equal(h.pushed[0].extra?.safetyOutcome, 'deny');
+  });
+
+  it('renders an unclear verdict (judge unreachable or ambiguous)', () => {
+    const h = harness();
+    h.send({ type: 'safety-verdict', toolName: 'read_file', outcome: 'unclear', reason: 'judge unreachable — ECONNREFUSED', model: 'llamacpp/local' });
+    assert.equal(h.pushed[0].extra?.safetyOutcome, 'unclear');
+  });
+
+  it('carries the caller through, same as a tool-call row', () => {
+    const h = harness();
+    h.send({ type: 'safety-verdict', toolName: 'read_file', outcome: 'approve', reason: 'ok', model: 'x/y', caller: 'review' });
+    assert.equal(h.pushed[0].extra?.caller, 'review');
+  });
+
+  it('omits caller for the coder, same as a tool-call row', () => {
+    const h = harness();
+    h.send({ type: 'safety-verdict', toolName: 'read_file', outcome: 'approve', reason: 'ok', model: 'x/y' });
+    assert.ok(!('caller' in (h.pushed[0].extra ?? {})));
+  });
+});
+
 describe('sub-agent completion', () => {
   it('reports size and duration on success', () => {
     const h = harness();

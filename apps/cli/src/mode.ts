@@ -17,6 +17,8 @@ export type Mode =
   | { type: 'login-pending'; session: LoginSession }
   | { type: 'approval'; request: ApprovalRequest }
   /** The `/mcp add` wizard, asking for url, name and token. */
-  | { type: 'mcp-setup' };
+  | { type: 'mcp-setup' }
+  /** `/safety agentic` — picking the model that reviews tool calls. */
+  | { type: 'safety-setup' };
 
 export type SetMode = (mode: Mode) => void;

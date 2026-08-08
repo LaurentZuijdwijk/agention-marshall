@@ -43,6 +43,41 @@ test('hasSteering is false on a new session', () => {
 });
 
 // ---------------------------------------------------------------------------
+// safety level
+// ---------------------------------------------------------------------------
+
+test('safetyLevel defaults to 2 (human-in-the-loop) when unconfigured', () => {
+  const root = tempRoot();
+  const session = makeSession(root, makeClient());
+  assert.equal(session.safetyLevel, 2);
+  assert.equal(session.safetyAgentProfile, undefined);
+});
+
+test('setSafetyLevel changes what safetyLevel reports', () => {
+  const root = tempRoot();
+  const session = makeSession(root, makeClient());
+  session.setSafetyLevel(3);
+  assert.equal(session.safetyLevel, 3);
+  session.setSafetyLevel(1);
+  assert.equal(session.safetyLevel, 1);
+});
+
+test('setSafetyAgent stores the profile and kind for later reads', () => {
+  const root = tempRoot();
+  const session = makeSession(root, makeClient());
+  session.setSafetyAgent({ profile: { provider: 'openrouter', model: 'nvidia/llama-3.1-nemoguard-8b-content-safety' }, kind: 'nvidia-content-safety' });
+  assert.deepEqual(session.safetyAgentProfile, { provider: 'openrouter', model: 'nvidia/llama-3.1-nemoguard-8b-content-safety' });
+});
+
+test('setSafetyAgent(undefined) clears a previously configured judge', () => {
+  const root = tempRoot();
+  const session = makeSession(root, makeClient());
+  session.setSafetyAgent({ profile: { provider: 'openai', model: 'gpt-4o-mini' } });
+  session.setSafetyAgent(undefined);
+  assert.equal(session.safetyAgentProfile, undefined);
+});
+
+// ---------------------------------------------------------------------------
 // interrupt()
 // ---------------------------------------------------------------------------
 

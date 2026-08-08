@@ -29,6 +29,20 @@ export type OutputEvent =
       caller?: string;
     }
   | { type: 'tool-result'; toolName: string; result: string; parent?: string }
+  /**
+   * Safety level 3's judge model reached a verdict on the call it was just
+   * emitted alongside — `outcome: 'approve'` included, since a call the human
+   * never saw approved is exactly the one whose review a client would
+   * otherwise have no way to show. `reason` is a single summarised line, not
+   * the model's full raw response — see `summarizeReason` in safety-agent.ts. */
+  | {
+      type: 'safety-verdict';
+      toolName: string;
+      outcome: 'approve' | 'deny' | 'unclear';
+      reason: string;
+      model: string;
+      caller?: string;
+    }
   /** A sub-agent invocation finished. */
   | { type: 'subagent-done'; label: string; durationMs: number; chars: number; error?: string }
   /**

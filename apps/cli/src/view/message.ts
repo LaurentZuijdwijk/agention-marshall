@@ -7,7 +7,7 @@ import type { HeaderMeta } from './Banner.js';
 
 export type MessageRole =
   | 'header' | 'user' | 'assistant' | 'markdown' | 'tool' | 'tool-result'
-  | 'info' | 'usage' | 'error' | 'reasoning' | 'agent' | 'subagent' | 'job';
+  | 'info' | 'usage' | 'error' | 'reasoning' | 'agent' | 'subagent' | 'job' | 'safety';
 
 export interface Message {
   key: string;
@@ -31,4 +31,6 @@ export interface Message {
   delegated?: boolean;
   /** Sub-agent completion rows: the invocation ended in an error. */
   failed?: boolean;
+  /** Safety rows only: the judge model's verdict on the call above it. */
+  safetyOutcome?: 'approve' | 'deny' | 'unclear';
 }

@@ -71,6 +71,26 @@ export function MessageRow({ msg }: { msg: Message }) {
         </Box>
       );
 
+    // Safety level 3's judge, reporting on the call directly above it. Indented
+    // like a tool result — it is commentary on that row, not an event of its
+    // own — but with its own icon/colour per outcome so a denial (still headed
+    // to the human) reads differently at a glance from a call that was cleared
+    // outright.
+    case 'safety': {
+      const icon = msg.safetyOutcome === 'approve' ? G.ok : msg.safetyOutcome === 'deny' ? G.warn : G.pending;
+      const color = msg.safetyOutcome === 'approve' ? C.ok : msg.safetyOutcome === 'deny' ? C.warn : C.muted;
+      return (
+        <Box>
+          <Text color={C.faint}>  {G.gutter} </Text>
+          <CallerTag caller={msg.caller} />
+          <Text color={color}>{icon} safety </Text>
+          <Text color={C.faint}>{msg.title}</Text>
+          {msg.content !== '' && <Text color={C.muted}>  {msg.content}</Text>}
+          {msg.note && <Text color={C.faint}>  {G.bullet}  {msg.note}</Text>}
+        </Box>
+      );
+    }
+
     // The differentiator: a whole agent was handed this job. Rendered as a
     // titled delegation with its brief, so it never reads as another file op.
     case 'agent':

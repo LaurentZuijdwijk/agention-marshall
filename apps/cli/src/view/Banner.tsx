@@ -97,6 +97,13 @@ export interface HeaderMeta {
   /** Fast-tier model, when one is configured — absent means no tiering. */
   fastModel?: string;
   fastProvider?: string;
+  /**
+   * The tool-call safety level ('none' | 'default' | 'agentic'), shown only
+   * when it isn't 'default'. Session-only — see `/safety` — so this is the one
+   * place a user rejoining the terminal mid-session can tell it's not the
+   * usual human-in-the-loop gate without re-running `/safety`.
+   */
+  safety?: string;
 }
 
 /** The key/value block that sits under the wordmark. `keys` is boot-time
@@ -126,6 +133,12 @@ function Meta({ meta, dim, showKeys = true }: { meta: HeaderMeta; dim?: boolean;
         {label('dir')}
         <Text color={dim ? C.faint : C.text}>{meta.dir}</Text>
       </Box>
+      {meta.safety && meta.safety !== 'default' && (
+        <Box>
+          {label('safety')}
+          <Text color={dim ? C.faint : meta.safety === 'none' ? C.error : C.muted}>{meta.safety}</Text>
+        </Box>
+      )}
       {showKeys && (
         <Box>
           {label('keys')}

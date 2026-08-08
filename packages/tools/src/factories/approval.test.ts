@@ -101,3 +101,32 @@ test('omits the caller entirely when the belt has no owner', async () => {
   await tool.execute('a', 'b', {}, 'id');
   assert.ok(!('caller' in capturedRequest));
 });
+
+test('carries the current task onto the approval request', async () => {
+  let capturedRequest: unknown;
+  const approval: ApprovalFn = async (req) => { capturedRequest = req; return 'approve'; };
+
+  const tool = withApproval(
+    dummySpec(async () => 'ok'),
+    approval,
+    buildReq,
+    undefined,
+    undefined,
+    'delete story.md',
+  );
+
+  await tool.execute('a', 'b', {}, 'id');
+  assert.deepEqual(capturedRequest, {
+    toolName: 'test_tool', description: 'test', detail: '', input: {},
+    taskContext: 'delete story.md',
+  });
+});
+
+test('omits taskContext entirely when no task was given, same as caller', async () => {
+  let capturedRequest: Record<string, unknown> = {};
+  const approval: ApprovalFn = async (req) => { capturedRequest = req as unknown as Record<string, unknown>; return 'approve'; };
+
+  const tool = withApproval(dummySpec(async () => 'ok'), approval, buildReq);
+  await tool.execute('a', 'b', {}, 'id');
+  assert.ok(!('taskContext' in capturedRequest));
+});

@@ -57,6 +57,31 @@ describe('slashCommands', () => {
       assert.equal(result.type, 'usage');
     });
 
+    it('returns safety with no level for bare /safety', () => {
+      const result = resolveSlashCommand('/safety');
+      assert.equal(result.type, 'safety');
+      assert.equal((result as { level?: string }).level, undefined);
+    });
+
+    it('reads the level word from /safety none|default|agentic', () => {
+      for (const level of ['none', 'default', 'agentic']) {
+        const result = resolveSlashCommand(`/safety ${level}`);
+        assert.equal(result.type, 'safety');
+        assert.equal((result as { level?: string }).level, level);
+      }
+    });
+
+    it('is case-insensitive on the level word', () => {
+      const result = resolveSlashCommand('/safety AGENTIC');
+      assert.equal(result.type, 'safety');
+      assert.equal((result as { level?: string }).level, 'agentic');
+    });
+
+    it('rejects an unknown /safety level', () => {
+      const result = resolveSlashCommand('/safety yolo');
+      assert.equal(result.type, 'usage');
+    });
+
     it('returns stream for /stream', () => {
       const result = resolveSlashCommand('/stream');
       assert.equal(result.type, 'stream');

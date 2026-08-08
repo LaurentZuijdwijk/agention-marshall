@@ -142,6 +142,57 @@ No `vscode` import ever touches the engine.
 npm test          # run all workspace tests
 ```
 
+## Release process
+
+Releases use [Changesets](https://github.com/changesets/changesets). Keep release credentials out of the repository; authenticate with npm locally or through the release environment.
+
+### Contributors
+
+For a user-facing change, add a changeset before opening the PR:
+
+```bash
+npm exec changeset
+```
+
+Select the affected package(s), choose the appropriate semver bump, and write a concise release note. Commit the generated file under `.changeset/` with the change. Documentation-only or internal changes do not need a changeset.
+
+### Maintainers
+
+From a clean checkout of `main`:
+
+```bash
+npm ci
+npm test
+npm run typecheck -w @agentionai/marshall-cli  # optional focused check
+npm exec changeset status
+npm exec changeset version
+npm install                    # refresh package-lock.json
+npm test
+```
+
+Review the generated package versions, changelogs, and lockfile. Then commit the release changes and push them to `main`:
+
+```bash
+git add .changeset apps packages package-lock.json
+git commit -m "chore: release"
+git push origin main
+```
+
+After the release commit is pushed, authenticate to npm and publish all versioned workspaces:
+
+```bash
+npm whoami
+npm exec changeset publish
+```
+
+`changeset publish` builds packages through their `prepare` scripts, publishes the changed packages, and creates git tags. Push those tags if they were not pushed automatically:
+
+```bash
+git push --follow-tags origin main
+```
+
+Verify the published package versions on npm and smoke-test the CLI after publishing. If publishing is interrupted, inspect `npm exec changeset status` and rerun the publish command; do not create a second version commit unless the first publish completed and the repository state requires it.
+
 ## Out of scope
 
 True OS-level isolation, network egress control, multi-repo workspaces, editors beyond the reference VS Code extension, and exposing this assistant *as* an MCP server.
