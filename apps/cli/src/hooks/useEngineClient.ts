@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
-import type { OutputEvent, ClientInterface } from '@agentionai/marshall-engine';
+import { formatTokens } from '@agentionai/marshall-engine';
+import type { OutputEvent, ClientInterface, UsageTotals } from '@agentionai/marshall-engine';
 import type { ApprovalRequest, ApprovalDecision, AskRequest } from '@agentionai/marshall-tools';
 import { formatToolInput, formatToolName } from '../format.js';
 import { G } from '../view/theme.js';
@@ -34,10 +35,23 @@ export interface TranscriptPort {
    */
   turnStarted(): void;
   turnEnded(outcome: TurnOutcome): void;
-  reportUsage?(inputTokens: number, outputTokens: number, durationMs: number): void;
+  /**
+   * Token spend so far. Arrives repeatedly during a turn, each event carrying
+   * the whole picture rather than a delta, so a client can render the latest
+   * one and ignore the rest.
+   */
+  reportUsage?(usage: {
+    turn: UsageTotals;
+    session: UsageTotals;
+    durationMs: number;
+    final: boolean;
+    /** Output rate for the watched agent — see the `usage` event. */
+    rates?: { output?: number };
+    /** Time to the turn's first token. */
+    ttftMs?: number;
+  }): void;
   requestApproval(request: ApprovalRequest): Promise<ApprovalDecision>;
   askUser(request: AskRequest): Promise<string>;
-  showUsage(): boolean;
 }
 
 /**
@@ -155,7 +169,16 @@ export function createEngineClient(port: TranscriptPort): ClientInterface {
             event.error ?? `${(event.chars / 1000).toFixed(1)}k chars`,
             {
               title: event.label,
-              note: `${(event.durationMs / 1000).toFixed(1)}s`,
+              // What the delegation actually cost, next to what it returned.
+              // A `context` call that reads 40k tokens to hand back 800 chars
+              // is doing its job; one that reads 40k to hand back 40k is not,
+              // and the two are indistinguishable without this.
+              note: [
+                `${(event.durationMs / 1000).toFixed(1)}s`,
+                event.outputTokens === undefined
+                  ? undefined
+                  : `↑${formatTokens(event.inputTokens ?? 0)} ↓${formatTokens(event.outputTokens)}`,
+              ].filter(Boolean).join(` ${G.bullet} `),
               failed: event.error !== undefined,
             },
           );
@@ -191,10 +214,19 @@ export function createEngineClient(port: TranscriptPort): ClientInterface {
           break;
         }
 
+        // Ungated on purpose. This used to sit behind the `/tokens` toggle,
+        // back when it pushed a transcript row that not everyone wanted; it now
+        // feeds a status row that is always on screen, and a permanently
+        // opt-out one just spends its space saying "metrics unavailable".
         case 'usage':
-          if (port.showUsage()) {
-            port.reportUsage?.(event.inputTokens, event.outputTokens, event.durationMs);
-          }
+          port.reportUsage?.({
+            turn: event.turn,
+            session: event.session,
+            durationMs: event.durationMs,
+            final: event.final,
+            rates: event.rates,
+            ttftMs: event.ttftMs,
+          });
           break;
 
         case 'error':

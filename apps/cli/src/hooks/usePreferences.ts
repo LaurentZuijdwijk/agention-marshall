@@ -1,16 +1,14 @@
 import { useRef, useState } from 'react';
 
-/** Display toggles: `/tokens`, `/stream`, and Ctrl-R. */
+/** Display toggles: `/stream` and Ctrl-R. */
 export interface Preferences {
-  /** Token counts after each response. */
-  showUsage: boolean;
   /** Stream tokens live, or show only the finished response. */
   stream: boolean;
   /** Live chain-of-thought, for providers that send it. */
   showReasoning: boolean;
 }
 
-const DEFAULTS: Preferences = { showUsage: false, stream: true, showReasoning: false };
+const DEFAULTS: Preferences = { stream: true, showReasoning: false };
 
 export interface PreferencesController extends Preferences {
   /** Flip one toggle and return its new value, for the message that follows. */

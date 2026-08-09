@@ -1,5 +1,6 @@
 import type { ApprovalRequest, ApprovalDecision, AskRequest } from '@agentionai/marshall-tools';
 import type { McpServerState } from './mcp.js';
+import type { UsageTotals } from './usage.js';
 
 export type { ApprovalRequest, ApprovalDecision, AskRequest };
 
@@ -44,7 +45,16 @@ export type OutputEvent =
       caller?: string;
     }
   /** A sub-agent invocation finished. */
-  | { type: 'subagent-done'; label: string; durationMs: number; chars: number; error?: string }
+  | {
+      type: 'subagent-done';
+      label: string;
+      durationMs: number;
+      chars: number;
+      error?: string;
+      /** What this one call spent, when its provider reports usage. */
+      inputTokens?: number;
+      outputTokens?: number;
+    }
   /**
    * A backgrounded shell command ended on its own. Unlike every other event
    * here, this one can arrive while no turn is running — it is the one thing the
@@ -75,7 +85,37 @@ export type OutputEvent =
   | { type: 'assistant'; text: string }
   /** The turn's final answer. */
   | { type: 'response'; text: string }
-  | { type: 'usage'; inputTokens: number; outputTokens: number; durationMs: number }
+  /**
+   * Token spend, sampled while the turn runs and once more when it ends.
+   *
+   * `turn` and `session` already include every sub-agent the turn fanned out to.
+   * That rollup is the point: the coder's own counter is the only figure a
+   * provider returns, and it makes a turn that spent most of its tokens inside
+   * three parallel `context` calls look nearly free.
+   *
+   * `final` marks the reading taken once the turn is over. The samples before it
+   * are real provider numbers too, just incomplete — the last one lands after
+   * the answer, so a client that only trusts `final` still gets an exact total.
+   */
+  | {
+      type: 'usage';
+      durationMs: number;
+      turn: UsageTotals;
+      session: UsageTotals;
+      final: boolean;
+      /**
+       * Output tokens per second of model time — see TurnPhases for what counts
+       * as model time and why input has no matching figure.
+       *
+       * Describes only the agent whose stream is being watched, and its own
+       * token counts, unlike `turn`. Sub-agents run in parallel on other models
+       * and other clocks, so there is no wall-clock they and the coder share
+       * that a rate could honestly be taken over.
+       */
+      rates?: { output?: number };
+      /** Time to the turn's first token. Absent until one arrives. */
+      ttftMs?: number;
+    }
   | { type: 'error'; message: string }
   | { type: 'interrupted' }
   /**

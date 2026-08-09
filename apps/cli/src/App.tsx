@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { homedir } from 'node:os';
 import { Box, Static, useApp, useStdout } from 'ink';
-import { Session } from '@agentionai/marshall-engine';
+import { Session, formatCost } from '@agentionai/marshall-engine';
 import type { AgentProfile, Provider, Tier, McpServerConfig, SafetyLevel } from '@agentionai/marshall-engine';
 import type { ApprovalDecision } from '@agentionai/marshall-tools';
 import { Setup } from './view/Setup.js';
@@ -18,6 +18,7 @@ import { PromptFrame } from './view/PromptFrame.js';
 import { InputPrompt } from './view/InputPrompt.js';
 import { LiveOutput } from './view/LiveOutput.js';
 import { ActivityStatus } from './view/ActivityStatus.js';
+import type { ActivityMetrics } from './view/ActivityStatus.js';
 import { panelLayout, safeWidth } from './view/layout.js';
 import type { Message } from './view/message.js';
 import { useTranscript } from './hooks/useTranscript.js';
@@ -29,6 +30,7 @@ import { usePreferences } from './hooks/usePreferences.js';
 import { usePasteBuffer } from './hooks/usePasteBuffer.js';
 import { useAttachments, describeImage } from './hooks/useAttachments.js';
 import { readClipboardImage } from './services/clipboard.js';
+import { fetchOpenRouterPricing } from './services/pricing.js';
 import { useSession } from './hooks/useSession.js';
 import { useKeyBindings } from './hooks/useKeyBindings.js';
 import { startLogin, completeLogin } from './login.js';
@@ -127,7 +129,7 @@ export function App({
   const [input, setInput] = useState('');
   const [pendingPrompts, setPendingPrompts] = useState<string[]>([]);
   const [activity, setActivity] = useState<'idle' | 'loading' | 'thinking' | 'generating' | 'complete' | 'error' | 'cancelled'>('idle');
-  const [metrics, setMetrics] = useState<{ inputTokens?: number; outputTokens?: number; durationMs?: number }>({});
+  const [metrics, setMetrics] = useState<ActivityMetrics>({});
   const [mode, setMode] = useState<Mode>(
     agentProfile.model ? { type: 'idle' } : { type: 'setup', tier: 'deep', chain: true },
   );
@@ -186,8 +188,17 @@ export function App({
       setMetrics({});
       setMode(prev => (prev.type === 'idle' ? { type: 'running' } : prev));
     },
-    reportUsage: (inputTokens, outputTokens, durationMs) => {
-      setMetrics({ inputTokens, outputTokens, durationMs });
+    // The turn's rollup, not the session's: the row sits under the turn you are
+    // watching. `/tokens` is where the session total lives.
+    reportUsage: ({ turn, durationMs, rates, ttftMs }) => {
+      setMetrics({
+        inputTokens: turn.inputTokens,
+        outputTokens: turn.outputTokens,
+        durationMs,
+        cost: formatCost(turn),
+        rates,
+        ttftMs,
+      });
     },
     turnEnded: (outcome) => {
       live.current.setSteering(outcome === 'interrupted');
@@ -204,7 +215,6 @@ export function App({
       if (show) setMode({ type: 'question', request: show });
       return promise;
     },
-    showUsage: () => live.current.prefs.read().showUsage,
   }), []));
 
   const { session, activeProfile, fastProfile, savedHosts: hosts, savedKeys: keys, applyProfiles, stageProfile } =
@@ -225,6 +235,21 @@ export function App({
   useEffect(() => {
     registerRedraw?.(() => transcript.replay());
   }, [registerRedraw, transcript]);
+
+  // Prices, once, in the background — a turn that finishes before the catalogue
+  // lands reports tokens without a cost and picks the cost up on the next one,
+  // which is a better trade than holding up boot for a network round trip.
+  // Skipped entirely when nothing routes through OpenRouter, so the common
+  // single-provider session makes no request at all.
+  useEffect(() => {
+    if (!session) return;
+    if (![activeProfile, fastProfile].some(profile => profile?.provider === 'openrouter')) return;
+    const abort = new AbortController();
+    void fetchOpenRouterPricing(abort.signal).then((prices) => {
+      if (!abort.signal.aborted && prices.size > 0) session.setPricing(prices);
+    });
+    return () => abort.abort();
+  }, [session, activeProfile?.provider, fastProfile?.provider]);
 
   // Announced once at startup rather than only on /mcp: a project that enables a
   // server nothing defines otherwise looks exactly like a project with no MCP,

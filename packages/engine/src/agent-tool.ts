@@ -3,6 +3,13 @@ import { Tool } from '@agentionai/agents/core';
 /** The slice of an agent this module needs — keeps the seam testable. */
 export interface Executable {
   execute(instructions: string): Promise<string>;
+  /**
+   * What this instance has spent, as the provider counted it. Optional because
+   * not every provider reports usage, and read *after* execute rather than
+   * returned by it: the SDK accumulates onto the agent across its own tool-call
+   * steps, so the agent is the only thing that knows the whole call's total.
+   */
+  lastTokenUsage?: { input_tokens: number; output_tokens: number };
 }
 
 export interface AgentToolOptions {
@@ -18,7 +25,15 @@ export interface AgentToolOptions {
    * visible, which is otherwise impossible to confirm from the outside.
    */
   onStart?: (call: { id: number; instructions: string }) => void;
-  onEnd?: (call: { id: number; instructions: string; ms: number; error?: string; result?: string }) => void;
+  onEnd?: (call: {
+    id: number;
+    instructions: string;
+    ms: number;
+    error?: string;
+    result?: string;
+    /** Reported even when the call failed — a turn that died still cost tokens. */
+    usage?: { input_tokens: number; output_tokens: number };
+  }) => void;
 }
 
 /**
@@ -51,16 +66,20 @@ export function agentTool(opts: AgentToolOptions): Tool<string> {
       const startedAt = Date.now();
       opts.onStart?.({ id, instructions });
 
+      // Held outside the try so the failure path can still report what the call
+      // spent before it died — an agent that burned its context and threw is
+      // exactly the one worth seeing on the bill.
+      let agent: Executable | undefined;
       try {
-        const agent = await opts.spawn({ id });
+        agent = await opts.spawn({ id });
         const result = await agent.execute(instructions);
-        opts.onEnd?.({ id, instructions, ms: Date.now() - startedAt, result });
+        opts.onEnd?.({ id, instructions, ms: Date.now() - startedAt, result, usage: agent.lastTokenUsage });
         return result;
       } catch (error) {
         // Sub-agent failure is reported to the caller as a result, not thrown —
         // the deep model should see it and adapt, not have its turn aborted.
         const message = error instanceof Error ? error.message : String(error);
-        opts.onEnd?.({ id, instructions, ms: Date.now() - startedAt, error: message });
+        opts.onEnd?.({ id, instructions, ms: Date.now() - startedAt, error: message, usage: agent?.lastTokenUsage });
         return JSON.stringify({ error: `Failed to execute instructions: ${message}` });
       }
     },

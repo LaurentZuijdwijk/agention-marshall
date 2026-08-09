@@ -5,7 +5,7 @@ import type { CommandDeps, CommandSession } from './commands.js';
 import type { Transcript } from './hooks/useTranscript.js';
 import type { Mode } from './mode.js';
 import type { Message } from './view/message.js';
-import type { AgentProfile, McpServerState, SafetyLevel, SafetyAgentConfig } from '@agentionai/marshall-engine';
+import type { AgentProfile, McpServerState, SafetyLevel, SafetyAgentConfig, UsageReport } from '@agentionai/marshall-engine';
 import type { BackgroundJob } from '@agentionai/marshall-tools';
 
 // ── fakes ─────────────────────────────────────────────────────────────────────
@@ -55,6 +55,14 @@ function setup(overrides: Partial<CommandDeps> & { jobs?: BackgroundJob[]; serve
 
   const jobs = overrides.jobs ?? [];
   const servers = overrides.servers ?? [];
+  const usage: UsageReport = {
+    turn: { inputTokens: 10, outputTokens: 20 },
+    session: { inputTokens: 100, outputTokens: 200, costUsd: 0.0421 },
+    byRole: [
+      { role: 'coder', model: 'openrouter/openai/gpt-5.6-luna', inputTokens: 90, outputTokens: 190, costUsd: 0.0411 },
+      { role: 'context', model: 'llamacpp/qwen3-8b', inputTokens: 10, outputTokens: 10, costUsd: 0 },
+    ],
+  };
   let light = false;
   let safetyLevel: SafetyLevel = 2;
 
@@ -68,6 +76,7 @@ function setup(overrides: Partial<CommandDeps> & { jobs?: BackgroundJob[]; serve
       kill: (id) => { calls.killed.push(id); return jobs.some(j => j.id === id && j.status === 'running'); },
       killAll: () => { calls.killedAll++; },
     },
+    usageReport: () => usage,
     mcpState: () => servers,
     removeMcpServer: async (name) => {
       calls.mcpRemoved.push(name);
@@ -85,13 +94,13 @@ function setup(overrides: Partial<CommandDeps> & { jobs?: BackgroundJob[]; serve
   };
 
   const prefs = {
-    showUsage: false, stream: true, showReasoning: false,
-    toggle: (key: 'showUsage' | 'stream' | 'showReasoning') => {
+    stream: true, showReasoning: false,
+    toggle: (key: 'stream' | 'showReasoning') => {
       const next = !prefs[key];
       (prefs as Record<string, unknown>)[key] = next;
       return next;
     },
-    read: () => ({ showUsage: prefs.showUsage, stream: prefs.stream, showReasoning: prefs.showReasoning }),
+    read: () => ({ stream: prefs.stream, showReasoning: prefs.showReasoning }),
   };
 
   const deps: CommandDeps = {
@@ -207,13 +216,15 @@ describe('runSlashCommand', () => {
 
   it('toggles preferences and says which way they went', () => {
     const { deps, pushed } = setup();
-    runSlashCommand('/tokens', deps);
-    assert.match(pushed[0].content, /shown/);
-    runSlashCommand('/tokens', deps);
-    assert.match(pushed[1].content, /hidden/);
-
     runSlashCommand('/stream', deps);
-    assert.match(pushed[2].content, /only when complete/);
+    assert.match(pushed[0].content, /only when complete/);
+  });
+
+  it('reports what the session has spent on /tokens', () => {
+    const { deps, pushed } = setup();
+    runSlashCommand('/tokens', deps);
+    assert.match(pushed[0].content, /session/);
+    assert.match(pushed[0].content, /coder/, 'the per-agent breakdown is the point of the command');
   });
 
   it('prints the workspace for /cwd and the help text for /help', () => {

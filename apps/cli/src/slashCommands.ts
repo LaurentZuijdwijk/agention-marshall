@@ -215,7 +215,7 @@ export const HELP = `commands:
   /mcp remove <name> — disconnect and forget a server
   /mcp reconnect <n> — retry a server that failed
   /clear             — clear history, dedupe cache, and scratch notes
-  /tokens            — toggle token usage (↑ in / ↓ out / time) after each response
+  /tokens            — what this session has spent, per agent and model
   /stream            — toggle streaming tokens live vs showing the final response only
   /light             — toggle the lean tool belt for small models (no scratchpad,
                        background jobs or sub-agents; ~1100 fewer tokens per request)

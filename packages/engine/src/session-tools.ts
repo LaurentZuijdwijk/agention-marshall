@@ -24,7 +24,8 @@ import {
 import { agentTool } from './agent-tool.js';
 import { McpRegistry } from './mcp.js';
 import { resolveRoleProfile, resolveModel, contextToolEnabled, resolveSearchProfile } from './config.js';
-import type { EngineConfig, AgentProfile } from './config.js';
+import type { EngineConfig, AgentProfile, Role } from './config.js';
+import type { UsageTally } from './usage.js';
 import type { SessionEvents } from './session-events.js';
 import type { ClientInterface } from './types.js';
 
@@ -63,6 +64,8 @@ export interface ToolBeltDeps {
   events: SessionEvents;
   approval: ApprovalFn;
   jobs: BackgroundJobs;
+  /** Where each delegated call's token spend is recorded. */
+  usage: UsageTally;
   /** Session-scoped read tracking — see ToolConfig.readFiles. */
   readFiles: Map<string, string>;
   dedupeCache: DedupeCache;
@@ -78,6 +81,8 @@ export class ToolBelt {
   private searchReady!: Promise<Tool<string> | null>;
   private plannerReady!: Promise<Tool<string> | null>;
   private reviewerReady!: Promise<Tool<string> | null>;
+  /** Distinguishes every delegated call the session ever makes — see `onEnd`. */
+  private subagentSeq = 0;
 
   constructor(private readonly deps: ToolBeltDeps) {
     this.rebuildRoleTools();
@@ -126,6 +131,7 @@ export class ToolBelt {
     this.plannerReady = config.plannerAgent
       ? this.buildReadOnlyAgentTool(resolveRoleProfile(config, 'planner'), {
           name: 'planner',
+          role: 'planner',
           systemPrompt: PLANNER_AGENT_PROMPT,
           description: 'Get a step-by-step plan for a coding task before starting. Provide the task description; returns an ordered list of concrete steps and files to touch.',
         })
@@ -134,6 +140,7 @@ export class ToolBelt {
     this.reviewerReady = config.reviewerAgent
       ? this.buildReadOnlyAgentTool(resolveRoleProfile(config, 'reviewer'), {
           name: 'reviewer',
+          role: 'reviewer',
           systemPrompt: REVIEWER_AGENT_PROMPT,
           description: 'Get a second opinion on changes before finishing. Describe the task and what you changed; the reviewer reads the actual files and flags bugs or missed requirements.',
         })
@@ -237,6 +244,8 @@ export class ToolBelt {
   private async buildAgentTool(opts: {
     name: string;
     description: string;
+    /** Whose budget this tool's calls come out of, for the usage tally. */
+    role: Role;
     profile: AgentProfile;
     systemPrompt: string;
     maxTokens?: number;
@@ -275,9 +284,20 @@ export class ToolBelt {
       spawn: ({ id }) => create(`${opts.name}#${id}`),
       onStart: ({ id, instructions }) =>
         log(`SUBAGENT ${opts.name}#${id} START ${label} ${JSON.stringify(instructions.slice(0, 200))}`),
-      onEnd: ({ id, ms, error, result }) => {
+      onEnd: ({ id, ms, error, result, usage }) => {
+        // Keyed by a session-wide counter, not by the call id: `agentTool`
+        // numbers its calls from zero and is rebuilt on every model switch, so
+        // `context#0` recurs — and a tally keyed on it would have each turn's
+        // first survey overwrite the last one's.
+        if (usage) {
+          this.deps.usage.record(`${opts.name}@${this.subagentSeq++}`, { role: opts.role, profile: opts.profile }, {
+            inputTokens: usage.input_tokens,
+            outputTokens: usage.output_tokens,
+          });
+        }
         log(
           `SUBAGENT ${opts.name}#${id} ${error ? 'ERROR' : 'DONE'} ${(ms / 1000).toFixed(1)}s ` +
+          (usage ? `↑${usage.input_tokens} ↓${usage.output_tokens} ` : '') +
           (error ?? `${String(result ?? '').length} chars`),
         );
         client.onOutput({
@@ -286,6 +306,7 @@ export class ToolBelt {
           durationMs: ms,
           chars: String(result ?? '').length,
           ...(error ? { error } : {}),
+          ...(usage ? { inputTokens: usage.input_tokens, outputTokens: usage.output_tokens } : {}),
         });
       },
     });
@@ -300,6 +321,7 @@ export class ToolBelt {
   private buildContextTool(profile: AgentProfile): Promise<Tool<string> | null> {
     return this.buildAgentTool({
       name: 'context',
+      role: 'context',
       description: 'Gather information from files and code in the workspace. Provide detailed instructions about what to look for. Safe to call several times in one turn — each call runs independently and in parallel.',
       profile,
       systemPrompt: CONTEXT_AGENT_PROMPT,
@@ -311,10 +333,11 @@ export class ToolBelt {
    *  access and their own isolated history, and differ only in prompt/tool name. */
   private buildReadOnlyAgentTool(
     profile: AgentProfile,
-    opts: { name: string; systemPrompt: string; description: string },
+    opts: { name: string; role: Role; systemPrompt: string; description: string },
   ): Promise<Tool<string> | null> {
     return this.buildAgentTool({
       name: opts.name,
+      role: opts.role,
       description: opts.description,
       profile,
       systemPrompt: opts.systemPrompt,
@@ -327,6 +350,7 @@ export class ToolBelt {
   private buildSearchTool(profile: AgentProfile): Promise<Tool<string> | null> {
     return this.buildAgentTool({
       name: 'search',
+      role: 'search',
       description: 'Search the web for current information. Provide a specific query and what you want to know.',
       profile,
       systemPrompt: SEARCH_AGENT_PROMPT,

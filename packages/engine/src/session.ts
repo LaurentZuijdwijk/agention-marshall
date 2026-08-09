@@ -1,7 +1,7 @@
 import { join, dirname } from 'node:path';
 import { readFile, readdir, rm, appendFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { History, AgentEvent, BaseAgent } from '@agentionai/agents/core';
+import { History, AgentEvent, BaseAgent, ToolResultEvent } from '@agentionai/agents/core';
 import { toolResultMaskingPlugin } from '@agentionai/agents/history/plugins';
 import type { ToolResultMaskingPlugin } from '@agentionai/agents/history/plugins';
 import {
@@ -35,7 +35,9 @@ import { checkAttachments, buildInput } from './images.js';
 import type { ImageAttachment } from './images.js';
 import { describeAgentError, providerErrorDiagnostics, isBadRequestError, isContextLengthError } from './errors.js';
 import { resolveRoleProfile, resolveModel, routingSummary, resolveSearchProfile } from './config.js';
-import type { EngineConfig, AgentProfile, SafetyLevel, SafetyAgentConfig } from './config.js';
+import type { EngineConfig, AgentProfile, Role, SafetyLevel, SafetyAgentConfig } from './config.js';
+import { createUsageTally, createPhaseClock, rate } from './usage.js';
+import type { PriceBook, UsageReport, PhaseClock } from './usage.js';
 import type { ClientInterface } from './types.js';
 
 interface AgentWithUsage extends BaseAgent<string, string> {
@@ -50,6 +52,15 @@ const NEVER_MASK_TOOLS = [
 ];
 
 const DEFAULT_AUTO_RESUME_BUDGET = 4;
+
+/**
+ * How often a running turn re-reads its agents' token counters.
+ *
+ * Fast enough that the figure moves while you watch it, slow enough that it is
+ * not a render per frame — the counter only changes when a provider response
+ * lands, which on a tool-calling turn is every few seconds at best.
+ */
+const USAGE_SAMPLE_MS = 500;
 
 /**
  * The task given to a turn that a finished job started.
@@ -78,6 +89,10 @@ export class Session {
    * Path to the content hash the model last saw — see ToolConfig.readFiles.
    */
   private readonly readFiles = new Map<string, string>();
+  /** Every agent's token spend, coder and sub-agents alike. */
+  private readonly usage = createUsageTally(() => this.prices);
+  /** Model prices, once a client that knows any has handed them over. */
+  private prices: PriceBook | undefined;
   /** Owns the always-approve list and the safety chain — see session-approval.ts. */
   private readonly approvals: ApprovalGate;
   /** Owns the summariser and history's one compression plugin — see session-compression.ts. */
@@ -173,6 +188,7 @@ export class Session {
       events: this.events,
       approval: this.approvals.approve,
       jobs: this.jobs,
+      usage: this.usage,
       readFiles: this.readFiles,
       dedupeCache: this.dedupeCache,
       maskingPlugin: this.maskingPlugin,
@@ -261,6 +277,87 @@ export class Session {
 
   get hasPendingPlan(): boolean {
     return this.pendingPlan !== null;
+  }
+
+  /**
+   * Hand over model prices, so spend can be reported in money as well as tokens.
+   *
+   * The engine deliberately does not fetch these. Which catalogue to trust, and
+   * whether it is worth a network call at all, is the client's business — the
+   * engine's job is only to know what each agent burned.
+   */
+  setPricing(prices: PriceBook): void {
+    this.prices = prices;
+    this.log(`PRICING ${prices.size} models`);
+  }
+
+  /** What every agent has spent, for `/tokens`. */
+  usageReport(): UsageReport {
+    return this.usage.report();
+  }
+
+  /**
+   * Report token spend while the turn is still running, and once more when it
+   * ends.
+   *
+   * A poll, because the SDK has no per-step usage event: `lastTokenUsage`
+   * accumulates onto the agent across its own tool-call steps, so reading it is
+   * the only way to watch the tally move before the turn is over. Sampling the
+   * provider's own count rather than estimating from streamed text keeps the
+   * number true — an approximation that drifts from the bill is worse than a
+   * number that arrives a second late.
+   *
+   * Returns the stop function, which takes the final reading. Call it from a
+   * `finally`: an interrupted or failed turn spent its tokens too.
+   */
+  private sampleUsage(
+    key: string,
+    role: Role,
+    profile: AgentProfile,
+    agent: AgentWithUsage,
+    startMs: number,
+    /** Absent for the side agents, which do not stream — see TurnPhases. */
+    clock?: PhaseClock,
+  ): () => UsageReport {
+    const emit = (final: boolean): UsageReport => {
+      const usage = agent.lastTokenUsage;
+      if (usage) {
+        this.usage.record(key, { role, profile }, {
+          inputTokens: usage.input_tokens,
+          outputTokens: usage.output_tokens,
+        });
+      }
+      // This agent's own counts over this agent's own clock. The rollup below
+      // includes sub-agents, which have neither.
+      const phases = clock?.read();
+      const output = usage && phases ? rate(usage.output_tokens, phases.workMs) : undefined;
+      const report = this.usage.report();
+      // Silence rather than zeroes, the final reading included. Before the first
+      // response lands there is nothing to report yet, and on a provider that
+      // never reports usage there is nothing to report at all — "↑0 ↓0" would
+      // claim that turn was free instead of admitting it is unknown.
+      if (report.turn.inputTokens > 0 || report.turn.outputTokens > 0) {
+        this.client.onOutput({
+          type: 'usage',
+          durationMs: Date.now() - startMs,
+          turn: report.turn,
+          session: report.session,
+          final,
+          ...(output !== undefined ? { rates: { output } } : {}),
+          ...(phases && phases.ttftMs > 0 ? { ttftMs: phases.ttftMs } : {}),
+        });
+      }
+      return report;
+    };
+
+    const timer = setInterval(() => emit(false), USAGE_SAMPLE_MS);
+    // The interval must never be the thing keeping the process alive.
+    timer.unref?.();
+
+    return () => {
+      clearInterval(timer);
+      return emit(true);
+    };
   }
 
   /** One line per session recording where each role actually landed — the first
@@ -539,7 +636,13 @@ export class Session {
     this.currentTask = task;
     let errorReported = false;
     let detachToolResult: (() => void) | null = null;
+    let stopSampling: (() => UsageReport) | null = null;
+    let detachPhases: (() => void) | null = null;
     const startMs = Date.now();
+    const clock = createPhaseClock();
+    // Opened before the agent exists, so anything this turn delegates lands in
+    // the right turn's column even if the coder itself never reports.
+    const usageKey = `coder@${this.usage.startTurn()}`;
 
     const attached = images.length > 0
       ? ` +${images.length} image${images.length > 1 ? 's' : ''}`
@@ -587,6 +690,20 @@ export class Session {
       // plugin's retrieve tool are built once and shared by every run — without
       // the detach in `finally` each turn stacks another listener on those five.
       detachToolResult = this.events.attachToolListeners(agent, tools, signal);
+      stopSampling = this.sampleUsage(usageKey, 'coder', coderProfile, agent, startMs, clock);
+
+      // The phase boundaries, kept out of session-events because that module
+      // only translates events into client output and owns no state. A tool
+      // result is where the next request begins; the calls themselves are where
+      // generation stops and time stops counting toward either rate.
+      const onToolUse = () => clock.paused();
+      const onToolResult = () => clock.requestSent();
+      agent.on(AgentEvent.TOOL_USE, onToolUse);
+      for (const tool of tools) tool.on(ToolResultEvent.RESULT, onToolResult);
+      detachPhases = () => {
+        agent.off(AgentEvent.TOOL_USE, onToolUse);
+        for (const tool of tools) tool.off(ToolResultEvent.RESULT, onToolResult);
+      };
 
       agent.on(AgentEvent.ERROR, (err: unknown) => {
         if (signal.aborted) return;
@@ -618,8 +735,12 @@ export class Session {
       // attempts afterward) finished on its own, which can take minutes on local models.
       const stream = (input: string | ReturnType<typeof buildInput>): Promise<string> =>
         new Promise<string>((resolve, reject) => {
+          clock.requestSent();
           runAgent(agent, input, chunk => {
             if (signal.aborted) return;
+            // Reasoning counts: the provider bills it as output and the model
+            // spent the same seconds writing it.
+            clock.outputChunk();
             this.client.onOutput(chunk.type === 'reasoning'
               ? { type: 'reasoning', text: chunk.content }
               : { type: 'token', text: chunk.content });
@@ -657,22 +778,11 @@ export class Session {
         return;
       }
 
-      const durationMs = Date.now() - startMs;
-      const usage = agent.lastTokenUsage;
-
       // Answer first, then the tally: the usage line accounts for the turn, so
       // it reads as a footer under the answer rather than a header above it.
+      // The final reading itself is taken in `finally`, which is the only place
+      // that also covers the turns that ended by error or interrupt.
       this.client.onOutput({ type: 'response', text: response });
-
-      if (usage) {
-        this.client.onOutput({
-          type: 'usage',
-          inputTokens: usage.input_tokens,
-          outputTokens: usage.output_tokens,
-          durationMs,
-        });
-        this.log(`DONE ↑${usage.input_tokens} ↓${usage.output_tokens} tokens ${(durationMs / 1000).toFixed(1)}s`);
-      }
     } catch (err) {
       if (this.controller?.signal.aborted) {
         try { this.history.addText('user', `[Task was interrupted by the user: "${task}"]`); } catch {}
@@ -685,6 +795,17 @@ export class Session {
       }
     } finally {
       detachToolResult?.();
+      detachPhases?.();
+      // Stops the clock before the reading is taken, so the last generation
+      // window closes at the answer rather than running on into the report.
+      clock.paused();
+      // Before `maybeResume`, which can start the next turn synchronously: the
+      // final reading has to be attributed to the turn that spent it, and the
+      // sampler for the next one must not be running alongside this one's.
+      if (stopSampling) {
+        const { turn } = stopSampling();
+        this.log(`DONE ↑${turn.inputTokens} ↓${turn.outputTokens} tokens ${((Date.now() - startMs) / 1000).toFixed(1)}s`);
+      }
       this.currentTask = null;
       this.controller = null;
       // Paired with the `before` dump above, so the turn's own contribution —
@@ -717,6 +838,10 @@ export class Session {
     const signal = this.controller.signal;
     const startMs = Date.now();
     let detach: (() => void) | null = null;
+    let stopSampling: (() => UsageReport) | null = null;
+    // A side agent's work is a turn of its own as far as spend goes: it has its
+    // own model, its own sub-agent fan-out, and its own line on the bill.
+    const usageKey = `${eventType}@${this.usage.startTurn()}`;
     this.log(`${eventType.toUpperCase()} ${JSON.stringify(prompt)}`);
 
     try {
@@ -750,12 +875,13 @@ export class Session {
       // results — so a long review looked like a hang. Tagged with the agent
       // that made them, since these rows sit at the same level as the coder's.
       detach = this.events.attachToolListeners(agent, tools, signal, eventType);
+      // The planner's own role, not the coder's: `/review` on the deep tier and
+      // a `context` fan-out on the fast one are two different lines in the
+      // breakdown, and rolling them together hides which one costs.
+      stopSampling = this.sampleUsage(usageKey, eventType === 'review' ? 'reviewer' : 'planner', profile, agent, startMs);
 
       this.client.onOutput({ type: 'thinking' });
       const text = await agent.execute(prompt);
-
-      const durationMs = Date.now() - startMs;
-      const usage = agent.lastTokenUsage;
 
       // /goal shares the plan slot rather than getting its own: both exist to
       // prime the next run() call with context the user approved beforehand,
@@ -767,23 +893,15 @@ export class Session {
         this.pendingPlanLabel = eventType === 'goal' ? 'Goal' : 'Plan';
       }
       this.client.onOutput({ type: eventType, text });
-
-      // After the result, for the same reason as in run().
-      if (usage) {
-        this.client.onOutput({
-          type: 'usage',
-          inputTokens: usage.input_tokens,
-          outputTokens: usage.output_tokens,
-          durationMs,
-        });
-      }
-      this.log(`${eventType.toUpperCase()}_DONE ${(durationMs / 1000).toFixed(1)}s`);
     } catch (err) {
       const message = describeAgentError(eventType, profile, err);
       this.log(`ERROR ${message}`);
       this.client.onOutput({ type: 'error', message });
     } finally {
       detach?.();
+      // After the result, for the same reason as in run().
+      stopSampling?.();
+      this.log(`${eventType.toUpperCase()}_DONE ${((Date.now() - startMs) / 1000).toFixed(1)}s`);
       this.controller = null;
       this.maybeResume();
     }

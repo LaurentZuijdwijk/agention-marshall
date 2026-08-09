@@ -7,7 +7,8 @@
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import type { AgentProfile, McpServerState, SafetyLevel, SafetyAgentConfig } from '@agentionai/marshall-engine';
+import type { AgentProfile, McpServerState, SafetyLevel, SafetyAgentConfig, UsageReport } from '@agentionai/marshall-engine';
+import { formatUsageReport } from './format.js';
 import type { BackgroundJob } from '@agentionai/marshall-tools';
 import type { Approvals } from './hooks/useApprovals.js';
 import type { PreferencesController } from './hooks/usePreferences.js';
@@ -34,6 +35,7 @@ export interface CommandSession {
     kill(id: string): boolean;
     killAll(): void;
   };
+  usageReport(): UsageReport;
   mcpState(): McpServerState[];
   removeMcpServer(name: string): Promise<boolean>;
   reconnectMcpServer(name: string): Promise<McpServerState | null>;
@@ -247,8 +249,11 @@ export function runSlashCommand(input: string, deps: CommandDeps): void {
       return;
 
     case 'tokens': {
-      const on = deps.prefs.toggle('showUsage');
-      transcript.push('info', `token usage ${on ? 'shown' : 'hidden'} after each response`);
+      if (!session) {
+        transcript.push('error', 'no model chosen yet — finish setup first');
+        return;
+      }
+      transcript.push('info', formatUsageReport(session.usageReport()));
       return;
     }
 

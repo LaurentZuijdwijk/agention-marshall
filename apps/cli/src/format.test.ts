@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { formatToolInput, formatToolName, shortenPath, truncate, clampToRows, windowRange } from './format.js';
+import { formatToolInput, formatToolName, shortenPath, truncate, clampToRows, windowRange, formatUsageReport } from './format.js';
+import type { UsageReport } from '@agentionai/marshall-engine';
 import { mix, brand } from './view/theme.js';
 
 describe('formatToolName', () => {
@@ -150,5 +151,52 @@ describe('windowRange', () => {
   it('never scrolls past either end', () => {
     assert.deepEqual(windowRange(17, 0, 9), { start: 0, end: 9 });
     assert.deepEqual(windowRange(17, 16, 9), { start: 8, end: 17 });
+  });
+});
+
+describe('formatUsageReport', () => {
+  const report = (over: Partial<UsageReport> = {}): UsageReport => ({
+    turn: { inputTokens: 10, outputTokens: 20 },
+    session: { inputTokens: 101_000, outputTokens: 9_050, costUsd: 0.0421 },
+    byRole: [
+      { role: 'coder', model: 'openrouter/openai/gpt-5.6-luna', inputTokens: 100_000, outputTokens: 9_000, costUsd: 0.0421 },
+      { role: 'context', model: 'llamacpp/qwen3-8b', inputTokens: 1_000, outputTokens: 50, costUsd: 0 },
+    ],
+    ...over,
+  });
+
+  it('leads with the session total and breaks it down per agent', () => {
+    const lines = formatUsageReport(report()).split('\n');
+    assert.match(lines[0], /^session {2}↑101,000 {2}↓9,050 {2}\$0\.0421$/);
+    assert.match(lines[1], /coder/);
+    assert.match(lines[1], /openrouter\/openai\/gpt-5\.6-luna/);
+    assert.match(lines[2], /context/);
+  });
+
+  it('aligns the columns off the longest entry, not a fixed width', () => {
+    const lines = formatUsageReport(report()).split('\n').slice(1);
+    const arrows = lines.map(line => line.indexOf('↑'));
+    assert.equal(arrows[0], arrows[1], 'the token columns line up');
+  });
+
+  it('says nothing about cost for a role that has no price', () => {
+    const text = formatUsageReport(report({
+      session: { inputTokens: 100, outputTokens: 50 },
+      byRole: [{ role: 'coder', model: 'claude/claude-opus-5', inputTokens: 100, outputTokens: 50 }],
+    }));
+    assert.doesNotMatch(text, /\$/);
+    assert.match(text, /↑100/);
+  });
+
+  it('explains the + rather than leaving it to be guessed', () => {
+    const text = formatUsageReport(report({
+      session: { inputTokens: 100, outputTokens: 50, costUsd: 0.01, costPartial: true },
+    }));
+    assert.match(text, /\$0\.0100\+/);
+    assert.match(text, /no published price/);
+  });
+
+  it('says so plainly when nothing has run yet', () => {
+    assert.equal(formatUsageReport(report({ byRole: [] })), 'no tokens spent yet');
   });
 });

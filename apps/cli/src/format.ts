@@ -1,5 +1,8 @@
 // ── display formatting helpers (pure logic, testable) ─────────────────────────
 
+import { formatCost, formatTokens } from '@agentionai/marshall-engine';
+import type { UsageReport } from '@agentionai/marshall-engine';
+
 /**
  * Keys that carry the "what is this call actually doing" information. When a
  * tool input has one of these we show it verbatim instead of dumping JSON —
@@ -95,4 +98,43 @@ export function windowRange(count: number, cursor: number, size: number): { star
   const half = Math.floor(size / 2);
   const start = Math.max(0, Math.min(cursor - half, count - size));
   return { start, end: start + size };
+}
+
+/**
+ * The `/tokens` report: what the session spent, and which agent spent it.
+ *
+ * Per role *and* model rather than per role alone, because the interesting
+ * question in a tiered setup is which tier the money went to — a `context` line
+ * naming a local model and a `coder` line naming a hosted one answer it at a
+ * glance, and rolling them together does not.
+ */
+export function formatUsageReport(report: UsageReport): string {
+  const { session, byRole } = report;
+  if (byRole.length === 0) return 'no tokens spent yet';
+
+  const cost = formatCost(session);
+  const lines = [
+    `session  ↑${formatTokens(session.inputTokens)}  ↓${formatTokens(session.outputTokens)}${cost ? `  ${cost}` : ''}`,
+  ];
+
+  // Padded off the longest entry rather than a fixed width: model ids run from
+  // `gpt-5.6-luna` to a 40-character vendor slug, and a fixed column either
+  // wastes half the row or fails to align the case it was picked for.
+  const roleWidth = Math.max(...byRole.map(entry => entry.role.length));
+  const modelWidth = Math.max(...byRole.map(entry => entry.model.length));
+  for (const entry of byRole) {
+    const entryCost = formatCost(entry);
+    lines.push(
+      `  ${entry.role.padEnd(roleWidth)}  ${entry.model.padEnd(modelWidth)}` +
+      `  ↑${formatTokens(entry.inputTokens)}  ↓${formatTokens(entry.outputTokens)}` +
+      (entryCost ? `  ${entryCost}` : ''),
+    );
+  }
+
+  // Only when it would not merely repeat the header: a session with one agent
+  // in it has already said this.
+  if (session.costPartial) {
+    lines.push('  (+ means part of this ran on a model with no published price)');
+  }
+  return lines.join('\n');
 }

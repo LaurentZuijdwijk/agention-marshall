@@ -38,6 +38,13 @@ export interface ScriptedTurn {
   usage?: { promptTokens?: number; completionTokens?: number };
   /** Hold the response open this long before answering — for interrupt tests. */
   delayMs?: number;
+  /**
+   * Pause between streamed chunks, so the turn takes measurable wall-clock time
+   * to generate. Without it a fake turn streams inside a single millisecond,
+   * which is indistinguishable from a turn that produced nothing — see the
+   * phase clock in usage.ts.
+   */
+  chunkDelayMs?: number;
 }
 
 /** What the model was actually sent, for tests that assert on the prompt. */
@@ -104,7 +111,7 @@ export async function startFakeProvider(...turns: ScriptedTurn[]): Promise<FakeP
     const turn = queue.shift() ?? EXHAUSTED;
     if (turn.delayMs) await new Promise(resolve => setTimeout(resolve, turn.delayMs));
 
-    if (stream) streamTurn(res, turn, String(body.model ?? 'fake'));
+    if (stream) await streamTurn(res, turn, String(body.model ?? 'fake'));
     else send(res, 200, completion(turn, String(body.model ?? 'fake')));
   }
 
@@ -167,7 +174,7 @@ function completion(turn: ScriptedTurn, model: string) {
  * accumulating those fragments is the agent's job, and a single-chunk fake
  * would never exercise it.
  */
-function streamTurn(res: ServerResponse, turn: ScriptedTurn, model: string): void {
+async function streamTurn(res: ServerResponse, turn: ScriptedTurn, model: string): Promise<void> {
   res.writeHead(200, {
     'content-type': 'text/event-stream',
     'cache-control': 'no-cache',
@@ -180,23 +187,28 @@ function streamTurn(res: ServerResponse, turn: ScriptedTurn, model: string): voi
       id: 'chatcmpl-fake', object: 'chat.completion.chunk', created, model, choices, ...extra,
     })}\n\n`);
   };
-  const delta = (d: Record<string, unknown>) =>
+  const pause = turn.chunkDelayMs
+    ? () => new Promise<void>(resolve => setTimeout(resolve, turn.chunkDelayMs))
+    : () => Promise.resolve();
+  const delta = async (d: Record<string, unknown>) => {
     chunk([{ index: 0, delta: d, finish_reason: null }]);
+    await pause();
+  };
 
-  delta({ role: 'assistant' });
-  for (const piece of split(turn.reasoning ?? '')) delta({ reasoning: piece });
-  for (const piece of split(turn.text ?? '')) delta({ content: piece });
+  await delta({ role: 'assistant' });
+  for (const piece of split(turn.reasoning ?? '')) await delta({ reasoning: piece });
+  for (const piece of split(turn.text ?? '')) await delta({ content: piece });
 
   const calls = turn.toolCalls ?? [];
-  calls.forEach((call, i) => {
+  for (const [i, call] of calls.entries()) {
     const args = JSON.stringify(call.arguments);
     // The name arrives with the id in the opening fragment; the arguments follow
     // in pieces, which is how every real server does it.
-    delta({ tool_calls: [{ index: i, id: toolCallId(call, i), type: 'function', function: { name: call.name, arguments: '' } }] });
+    await delta({ tool_calls: [{ index: i, id: toolCallId(call, i), type: 'function', function: { name: call.name, arguments: '' } }] });
     for (const piece of split(args)) {
-      delta({ tool_calls: [{ index: i, function: { arguments: piece } }] });
+      await delta({ tool_calls: [{ index: i, function: { arguments: piece } }] });
     }
-  });
+  }
 
   chunk([{ index: 0, delta: {}, finish_reason: calls.length > 0 ? 'tool_calls' : 'stop' }]);
   // Usage rides a choices-less final chunk, per `stream_options.include_usage`.

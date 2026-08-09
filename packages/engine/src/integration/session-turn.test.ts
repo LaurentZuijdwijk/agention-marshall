@@ -429,3 +429,108 @@ test('history tracing stays off unless it is asked for', async (t) => {
   assert.equal(existsSync(join(root, '.marshall', 'logs', 'history.log')), false,
     'a conversation must not be written to disk by default');
 });
+
+test('token spend is reported from the provider, and accumulates across turns', async (t) => {
+  const root = tempRoot();
+  const fake = await startFakeProvider(
+    { text: 'Thinking about it.', usage: { promptTokens: 1200, completionTokens: 340 } },
+    { text: 'And again.', usage: { promptTokens: 900, completionTokens: 110 } },
+  );
+  t.after(() => fake.close());
+
+  const rec = recorder();
+  const session = makeSession(root, fake, rec.client);
+  t.after(() => session.dispose());
+
+  await session.run('first');
+  const afterFirst = rec.events.filter(e => e.type === 'usage');
+  const first = afterFirst.at(-1);
+  assert.ok(first && first.type === 'usage', 'a turn has to report what it spent');
+  assert.deepEqual(
+    { inputTokens: first.turn.inputTokens, outputTokens: first.turn.outputTokens },
+    { inputTokens: 1200, outputTokens: 340 },
+    'the numbers are the provider\'s own, not an estimate',
+  );
+  assert.equal(first.final, true, 'the last reading of a finished turn is the final one');
+
+  await session.run('second');
+  const second = rec.events.filter(e => e.type === 'usage').at(-1);
+  assert.ok(second && second.type === 'usage');
+  assert.deepEqual(
+    { inputTokens: second.turn.inputTokens, outputTokens: second.turn.outputTokens },
+    { inputTokens: 900, outputTokens: 110 },
+    'the turn shows only its own spend',
+  );
+  assert.deepEqual(
+    { inputTokens: second.session.inputTokens, outputTokens: second.session.outputTokens },
+    { inputTokens: 2100, outputTokens: 450 },
+    'the session shows both turns — the bug here is one turn overwriting the last',
+  );
+
+  // Same figures, on demand, for /tokens.
+  const report = session.usageReport();
+  assert.deepEqual(report.byRole.map(r => r.role), ['coder']);
+  assert.equal(report.session.inputTokens, 2100);
+  assert.equal(report.byRole[0].model, 'llamacpp/test-model', 'the breakdown names the model that ran');
+});
+
+test('a local model is costed at zero rather than left unpriced', async (t) => {
+  const root = tempRoot();
+  const fake = await startFakeProvider({ text: 'Done.', usage: { promptTokens: 500, completionTokens: 50 } });
+  t.after(() => fake.close());
+
+  const session = makeSession(root, fake, recorder().client);
+  t.after(() => session.dispose());
+
+  await session.run('do a thing');
+
+  // makeSession runs on `llamacpp`, which the user hosts themselves.
+  assert.equal(session.usageReport().session.costUsd, 0);
+});
+
+test('a rate that survives a model whose thinking is not streamed back', async (t) => {
+  const root = tempRoot();
+  // 300ms of silence, then a short visible answer — but the provider bills 2,100
+  // completion tokens, most of them reasoning the client never saw. Timing only
+  // the visible chunks reported this turn at tens of thousands of tok/s.
+  const fake = await startFakeProvider({
+    text: 'Short answer after a long think.',
+    delayMs: 300,
+    chunkDelayMs: 2,
+    usage: { promptTokens: 3000, completionTokens: 2100 },
+  });
+  t.after(() => fake.close());
+
+  const rec = recorder();
+  const session = makeSession(root, fake, rec.client);
+  t.after(() => session.dispose());
+
+  await session.run('think hard');
+
+  const last = rec.events.filter(e => e.type === 'usage').at(-1);
+  assert.ok(last && last.type === 'usage');
+  assert.ok(last.rates?.output !== undefined, 'the turn has an output rate');
+  assert.ok(last.rates.output < 20_000,
+    `2,100 tokens over a third of a second is not ${last.rates.output.toFixed(0)} tok/s — `
+    + 'the silent thinking has to count as working time');
+  assert.ok(last.ttftMs !== undefined && last.ttftMs >= 250,
+    'and the wait before the first token is reported rather than divided into');
+});
+
+test('a non-streaming turn still gets a rate', async (t) => {
+  // No chunks means no time to first token, but the request was outstanding all
+  // the same — which is the whole of what the rate needs.
+  const root = tempRoot();
+  const fake = await startFakeProvider({ text: 'Done.', delayMs: 120, usage: { promptTokens: 400, completionTokens: 60 } });
+  t.after(() => fake.close());
+
+  const rec = recorder();
+  const session = makeSession(root, fake, rec.client);
+  t.after(() => session.dispose());
+
+  await session.run('go');
+
+  const last = rec.events.filter(e => e.type === 'usage').at(-1);
+  assert.ok(last && last.type === 'usage');
+  assert.ok(last.rates?.output !== undefined && last.rates.output > 0);
+});

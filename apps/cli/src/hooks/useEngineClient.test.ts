@@ -2,15 +2,22 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createEngineClient } from './useEngineClient.js';
 import type { TranscriptPort, TurnOutcome } from './useEngineClient.js';
-import type { OutputEvent } from '@agentionai/marshall-engine';
+import type { OutputEvent, UsageTotals } from '@agentionai/marshall-engine';
 import type { ApprovalRequest } from '@agentionai/marshall-tools';
 
 interface Pushed { role: string; content: string; extra?: Record<string, unknown> }
 
-function harness(opts: { usage?: boolean; reasoning?: string; stream?: string } = {}) {
+function harness(opts: { reasoning?: string; stream?: string } = {}) {
   const pushed: Pushed[] = [];
   const calls: string[] = [];
-  const usage: Array<{ inputTokens: number; outputTokens: number; durationMs: number }> = [];
+  const usage: Array<{
+    turn: UsageTotals;
+    session: UsageTotals;
+    durationMs: number;
+    final: boolean;
+    rates?: { output?: number };
+    ttftMs?: number;
+  }> = [];
   let pendingReasoning = opts.reasoning ?? '';
   // Stands in for the live buffer the real port keeps: tokens land in it and a
   // take empties it, which is what the ordering rules below are written against.
@@ -27,9 +34,8 @@ function harness(opts: { usage?: boolean; reasoning?: string; stream?: string } 
     takeReasoning: () => { const r = pendingReasoning; pendingReasoning = ''; calls.push('takeReasoning'); return r; },
     turnStarted: () => calls.push('turnStarted'),
     turnEnded: (o: TurnOutcome) => calls.push(`turnEnded:${o}`),
-    reportUsage: (inputTokens, outputTokens, durationMs) => usage.push({ inputTokens, outputTokens, durationMs }),
+    reportUsage: (u) => usage.push(u),
     requestApproval: async () => 'approve',
-    showUsage: () => opts.usage ?? false,
   };
 
   const client = createEngineClient(port);
@@ -269,17 +275,34 @@ describe('step ordering', () => {
 });
 
 describe('usage', () => {
-  it('is hidden by default', () => {
-    const h = harness({ usage: false });
-    h.send({ type: 'usage', inputTokens: 10, outputTokens: 20, durationMs: 1500 });
-    assert.deepEqual(h.calls, []);
+  const spend = (inputTokens: number, outputTokens: number) => ({ inputTokens, outputTokens });
+
+  it('reports every sample to the status port, transcript untouched', () => {
+    // Ungated: the status row this feeds is always on screen, and used to spend
+    // its whole life saying "metrics unavailable" because the `/tokens` toggle
+    // it inherited defaulted to off.
+    const h = harness();
+    h.send({ type: 'usage', durationMs: 1500, turn: spend(10, 20), session: spend(30, 40), final: false });
+    assert.deepEqual(h.pushed, [], 'usage is a status row, not a transcript row');
+    assert.deepEqual(h.usage, [
+      { turn: spend(10, 20), session: spend(30, 40), durationMs: 1500, final: false, rates: undefined, ttftMs: undefined },
+    ]);
   });
 
-  it('reports usage to the status port when enabled', () => {
-    const h = harness({ usage: true });
-    h.send({ type: 'usage', inputTokens: 10, outputTokens: 20, durationMs: 1500 });
-    assert.deepEqual(h.pushed, []);
-    assert.deepEqual(h.usage, [{ inputTokens: 10, outputTokens: 20, durationMs: 1500 }]);
+  it('passes the turn and session rollups through untouched', () => {
+    const h = harness();
+    const turn = { inputTokens: 10, outputTokens: 20, costUsd: 0.5, costPartial: true };
+    h.send({ type: 'usage', durationMs: 1500, turn, session: spend(30, 40), final: true });
+    assert.deepEqual(h.usage[0].turn, turn, 'cost travels with the totals it belongs to');
+    assert.equal(h.usage[0].final, true);
+  });
+
+  it('carries the rate and the first-token time through to the status row', () => {
+    const h = harness();
+    const rates = { output: 48.2 };
+    h.send({ type: 'usage', durationMs: 1500, turn: spend(10, 20), session: spend(30, 40), final: true, rates, ttftMs: 1200 });
+    assert.deepEqual(h.usage[0].rates, rates);
+    assert.equal(h.usage[0].ttftMs, 1200);
   });
 });
 
