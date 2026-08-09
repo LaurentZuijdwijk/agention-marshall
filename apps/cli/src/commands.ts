@@ -280,7 +280,7 @@ export function runSlashCommand(input: string, deps: CommandDeps): void {
         const rows = (Object.keys(SAFETY_LEVEL_WORDS) as SafetyLevelWord[])
           .map(word => `  ${word.padEnd(8)} — ${SAFETY_LEVEL_WORDS[word].blurb}`);
         transcript.push('info', [
-          'usage: /safety [none|default|agentic]',
+          'usage: /safety [yolo|default|agentic]',
           ...rows,
           `current: ${current}`,
         ].join('\n'));
@@ -297,8 +297,8 @@ export function runSlashCommand(input: string, deps: CommandDeps): void {
       const { level, blurb } = SAFETY_LEVEL_WORDS[command.level];
       session.setSafetyLevel(level);
       deps.onSafetyLevelChange?.(level);
-      transcript.push('info', command.level === 'none'
-        ? `⚠ safety: none — ${blurb}`
+      transcript.push('info', command.level === 'yolo'
+        ? `⚠ safety: yolo — ${blurb}`
         : `safety: ${command.level} — ${blurb}`);
       return;
     }

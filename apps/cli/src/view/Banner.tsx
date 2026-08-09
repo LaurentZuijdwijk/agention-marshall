@@ -108,7 +108,7 @@ export interface HeaderMeta {
   fastModel?: string;
   fastProvider?: string;
   /**
-   * The tool-call safety level ('none' | 'default' | 'agentic'), shown only
+   * The tool-call safety level ('yolo' | 'default' | 'agentic'), shown only
    * when it isn't 'default'. Session-only — see `/safety` — so this is the one
    * place a user rejoining the terminal mid-session can tell it's not the
    * usual human-in-the-loop gate without re-running `/safety`.
@@ -146,7 +146,7 @@ function Meta({ meta, dim, showKeys = true }: { meta: HeaderMeta; dim?: boolean;
       {meta.safety && meta.safety !== 'default' && (
         <Box>
           {label('safety')}
-          <Text color={dim ? C.faint : meta.safety === 'none' ? C.error : C.muted}>{meta.safety}</Text>
+          <Text color={dim ? C.faint : meta.safety === 'yolo' ? C.error : C.muted}>{meta.safety}</Text>
         </Box>
       )}
       {showKeys && (

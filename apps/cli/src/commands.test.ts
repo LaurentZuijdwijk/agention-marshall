@@ -451,7 +451,7 @@ describe('/safety', () => {
     runSlashCommand('/safety', deps);
     assert.equal(pushed[0].role, 'info');
     assert.match(pushed[0].content, /usage: \/safety/);
-    assert.match(pushed[0].content, /none/);
+    assert.match(pushed[0].content, /yolo/);
     assert.match(pushed[0].content, /agentic/);
     assert.match(pushed[0].content, /current: default/);
     assert.deepEqual(calls.safetyLevel, [], 'a bare /safety only informs, it never changes anything');
@@ -466,9 +466,9 @@ describe('/safety', () => {
     assert.match(pushed[0].content, /safety: default/);
   });
 
-  it('applies "none" directly with a visible warning', () => {
+  it('applies "yolo" directly with a visible warning', () => {
     const { deps, pushed, calls } = setup();
-    runSlashCommand('/safety none', deps);
+    runSlashCommand('/safety yolo', deps);
     assert.deepEqual(calls.safetyLevel, [1]);
     assert.equal(pushed[0].role, 'info');
     assert.match(pushed[0].content, /⚠/);
@@ -484,7 +484,7 @@ describe('/safety', () => {
 
   it('rejects an unknown level with usage', () => {
     const { deps, pushed, calls } = setup();
-    runSlashCommand('/safety yolo', deps);
+    runSlashCommand('/safety none', deps);
     assert.equal(pushed[0].role, 'error');
     assert.match(pushed[0].content, /usage: \/safety/);
     assert.deepEqual(calls.safetyLevel, []);

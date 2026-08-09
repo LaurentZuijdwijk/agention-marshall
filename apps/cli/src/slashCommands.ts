@@ -8,12 +8,13 @@ export type ModelTarget = 'both' | 'deep' | 'fast' | 'off';
 /**
  * The tool-call approval gate, named rather than numbered on the CLI surface —
  * `EngineConfig.safetyLevel` is still `1 | 2 | 3` underneath (see config.ts),
- * but "agentic" reads at a glance where "3" doesn't.
+ * but "agentic" reads at a glance where "3" doesn't. Level 1 is `yolo` on
+ * purpose: the word should feel reckless, because the mode is.
  */
-export type SafetyLevelWord = 'none' | 'default' | 'agentic';
+export type SafetyLevelWord = 'yolo' | 'default' | 'agentic';
 
 export const SAFETY_LEVEL_WORDS: Record<SafetyLevelWord, { level: 1 | 2 | 3; blurb: string }> = {
-  none: {
+  yolo: {
     level: 1,
     blurb: 'no approval gate at all — every tool call runs immediately (dangerous; for a sandboxed/CI setting only)',
   },
@@ -27,7 +28,7 @@ export const SAFETY_LEVEL_WORDS: Record<SafetyLevelWord, { level: 1 | 2 | 3; blu
   },
 };
 
-export const SAFETY_LEVEL_LABELS: Record<1 | 2 | 3, SafetyLevelWord> = { 1: 'none', 2: 'default', 3: 'agentic' };
+export const SAFETY_LEVEL_LABELS: Record<1 | 2 | 3, SafetyLevelWord> = { 1: 'yolo', 2: 'default', 3: 'agentic' };
 
 export type SlashCommandResult =
   | { type: 'unknown'; command: string }
@@ -84,7 +85,7 @@ export interface SubcommandWord {
  */
 export const SUBCOMMANDS: Record<string, readonly SubcommandWord[]> = {
   '/model': [{ word: 'deep' }, { word: 'fast' }, { word: 'off' }],
-  '/safety': [{ word: 'default' }, { word: 'none' }, { word: 'agentic' }],
+  '/safety': [{ word: 'default' }, { word: 'yolo' }, { word: 'agentic' }],
   '/jobs': [{ word: 'kill', operand: '<id>' }],
   '/mcp': [{ word: 'add' }, { word: 'remove', operand: '<name>' }, { word: 'reconnect', operand: '<name>' }],
 };
@@ -167,7 +168,7 @@ export function resolveSlashCommand(input: string): SlashCommandResult {
       const word = args.toLowerCase();
       return word in SAFETY_LEVEL_WORDS
         ? { type: 'safety', level: word as SafetyLevelWord }
-        : { type: 'usage', message: `usage: /safety [none|default|agentic] — got "${args}"` };
+        : { type: 'usage', message: `usage: /safety [yolo|default|agentic] — got "${args}"` };
     }
     case '/mcp': {
       if (!args) return { type: 'mcp', action: 'list' };
@@ -204,7 +205,7 @@ export const HELP = `commands:
   /goal <task>       — clarify what "done" looks like before making changes (used as context for your next task)
   /review [notes]    — get a second opinion on the current workspace state
   /safety            — show the current tool-call safety level and what each does
-  /safety none       — no approval gate at all (dangerous)
+  /safety yolo       — no approval gate at all (dangerous)
   /safety default    — you approve every state-changing tool call (the default)
   /safety agentic    — a judge model reviews each call first; choose it after this
   /jobs              — list background shell jobs from this session

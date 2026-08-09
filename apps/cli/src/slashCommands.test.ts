@@ -63,8 +63,8 @@ describe('slashCommands', () => {
       assert.equal((result as { level?: string }).level, undefined);
     });
 
-    it('reads the level word from /safety none|default|agentic', () => {
-      for (const level of ['none', 'default', 'agentic']) {
+    it('reads the level word from /safety yolo|default|agentic', () => {
+      for (const level of ['yolo', 'default', 'agentic']) {
         const result = resolveSlashCommand(`/safety ${level}`);
         assert.equal(result.type, 'safety');
         assert.equal((result as { level?: string }).level, level);
@@ -78,7 +78,7 @@ describe('slashCommands', () => {
     });
 
     it('rejects an unknown /safety level', () => {
-      const result = resolveSlashCommand('/safety yolo');
+      const result = resolveSlashCommand('/safety none');
       assert.equal(result.type, 'usage');
     });
 

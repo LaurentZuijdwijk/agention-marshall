@@ -32,8 +32,9 @@ confident are fine.
   through the same per-belt stamping mechanism `caller` already used, all the way to the
   judge's prompt. Without this the judge cannot tell "the user asked for this deletion"
   apart from "the agent decided to delete this on its own", see the investigation below.
-- `/safety [none|default|agentic]` in the CLI; picking `agentic` opens the same model-picker
-  wizard used for `/model`, retitled. Deliberately **session-only**, not persisted, matches
+- `/safety [yolo|default|agentic]` in the CLI; picking `agentic` opens the same model-picker
+  wizard used for `/model`, retitled. Level 1 is named `yolo` on purpose — the word should
+  feel reckless, because the mode is. Deliberately **session-only**, not persisted, matches
   `/light`, not the saved model profile. The startup banner shows a `safety` row when it
   isn't the default, since otherwise a non-default level is invisible after the confirmation
   message scrolls off.
