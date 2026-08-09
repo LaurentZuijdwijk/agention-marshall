@@ -35,7 +35,17 @@ export interface ScriptedTurn {
   toolCalls?: ScriptedToolCall[];
   /** Reasoning tokens. Streaming only — the non-streaming shape has nowhere to put them. */
   reasoning?: string;
-  usage?: { promptTokens?: number; completionTokens?: number };
+  usage?: {
+    promptTokens?: number;
+    completionTokens?: number;
+    /**
+     * A subset of `completionTokens`, reported the way a reasoning model does:
+     * under `completion_tokens_details`. Providers break it out precisely when
+     * the thinking was theirs to hide, which is what the throughput maths keys
+     * off — see `throughputOf`.
+     */
+    reasoningTokens?: number;
+  };
   /** Hold the response open this long before answering — for interrupt tests. */
   delayMs?: number;
   /**
@@ -136,7 +146,13 @@ function toolCallId(call: ScriptedToolCall, index: number): string {
 function usageBlock(turn: ScriptedTurn) {
   const prompt = turn.usage?.promptTokens ?? 10;
   const completion = turn.usage?.completionTokens ?? 5;
-  return { prompt_tokens: prompt, completion_tokens: completion, total_tokens: prompt + completion };
+  const reasoning = turn.usage?.reasoningTokens;
+  return {
+    prompt_tokens: prompt,
+    completion_tokens: completion,
+    total_tokens: prompt + completion,
+    ...(reasoning !== undefined ? { completion_tokens_details: { reasoning_tokens: reasoning } } : {}),
+  };
 }
 
 /** The `stream: false` body — one whole message. */

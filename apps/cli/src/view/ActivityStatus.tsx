@@ -16,20 +16,28 @@ export interface ActivityMetrics {
   /** Pre-formatted, because whether a cost is even knowable is the engine's call. */
   cost?: string;
   /**
-   * Output tokens per second of model time, already measured by the engine.
+   * Tokens per second, already measured and vetted by the engine.
    *
-   * Rendered next to the count it belongs to rather than as its own segment,
-   * because that is the only place the pairing is unambiguous: the rate is the
-   * watched agent's alone, while the counts beside it include sub-agents.
+   * Rendered next to the count each belongs to rather than as its own segment,
+   * because that is the only place the pairing is unambiguous: the rates are the
+   * watched agent's alone, while the counts beside them include sub-agents.
    *
-   * There is no matching figure for input. The wait before the first token is
-   * prompt processing on one model and silent thinking on the next, and nothing
-   * we can see tells the two apart — so `ttftMs` reports the wait itself rather
-   * than dividing tokens by it. See TurnPhases.
+   * `input` goes missing on a model that thinks without streaming it, where the
+   * wait before the first token is mostly generation and dividing the prompt by
+   * it means nothing. `ttftMs` reports that wait instead — true either way.
    */
-  rates?: { output?: number };
+  rates?: { input?: number; output?: number };
   /** Time to the turn's first token. */
   ttftMs?: number;
+  /**
+   * The share of `outputTokens` spent thinking.
+   *
+   * Shown because without it the row does not add up: the output rate is the
+   * rate the *streamed* tokens arrived at, so "2,100 at 2.5k/s" reads as a turn
+   * that took under a second when it took four. Naming the 2,000 it thought
+   * through resolves that, and is the more interesting number anyway.
+   */
+  reasoningTokens?: number;
 }
 
 /**
@@ -54,11 +62,18 @@ export function ActivityStatus({ state, metrics, pending = 0, blocked = false }:
 }) {
   if (state === 'idle' && pending === 0) return null;
   const label = state[0].toUpperCase() + state.slice(1);
-  const outputRate = formatRate(metrics?.rates?.output);
+  const withRate = (arrow: string, tokens?: number, perSecond?: number) => {
+    const rate = formatRate(perSecond);
+    return `${arrow}${formatTokens(tokens)}${rate ? ` ~${rate}` : ''}`;
+  };
+  const thinking = metrics?.reasoningTokens
+    ? ` (${groupDigits(metrics.reasoningTokens)} thinking)`
+    : '';
   const metric = metrics && (metrics.inputTokens !== undefined || metrics.outputTokens !== undefined)
     ? [
-        `↑${formatTokens(metrics.inputTokens)}`
-          + `  ↓${formatTokens(metrics.outputTokens)}${outputRate ? ` ~${outputRate}` : ''}`,
+        withRate('↑', metrics.inputTokens, metrics.rates?.input)
+          + `  ↓${formatTokens(metrics.outputTokens)}${thinking}`
+          + (formatRate(metrics.rates?.output) ? ` ~${formatRate(metrics.rates?.output)}` : ''),
         metrics.durationMs !== undefined ? `${(metrics.durationMs / 1000).toFixed(1)}s` : undefined,
         // Abbreviated because the row is already four segments wide, and this is
         // the one a reader glances at rather than reads.

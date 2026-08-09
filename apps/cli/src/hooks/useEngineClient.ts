@@ -45,8 +45,8 @@ export interface TranscriptPort {
     session: UsageTotals;
     durationMs: number;
     final: boolean;
-    /** Output rate for the watched agent — see the `usage` event. */
-    rates?: { output?: number };
+    /** Per-direction rates for the watched agent — see the `usage` event. */
+    rates?: { input?: number; output?: number };
     /** Time to the turn's first token. */
     ttftMs?: number;
   }): void;

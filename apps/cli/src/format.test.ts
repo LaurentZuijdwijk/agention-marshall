@@ -179,6 +179,18 @@ describe('formatUsageReport', () => {
     assert.equal(arrows[0], arrows[1], 'the token columns line up');
   });
 
+  it('breaks the thinking out of the output count', () => {
+    const text = formatUsageReport(report({
+      session: { inputTokens: 100_000, outputTokens: 9_000, reasoningTokens: 6_100, costUsd: 0.04 },
+    }));
+    assert.match(text, /↓9,000 \(6,100 thinking\)/,
+      'billed as output either way, so it sits inside that figure rather than beside it');
+  });
+
+  it('says nothing about thinking for a model that does none', () => {
+    assert.doesNotMatch(formatUsageReport(report()), /thinking/);
+  });
+
   it('says nothing about cost for a role that has no price', () => {
     const text = formatUsageReport(report({
       session: { inputTokens: 100, outputTokens: 50 },

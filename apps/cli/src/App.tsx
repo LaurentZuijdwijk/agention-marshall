@@ -198,6 +198,7 @@ export function App({
         cost: formatCost(turn),
         rates,
         ttftMs,
+        reasoningTokens: turn.reasoningTokens,
       });
     },
     turnEnded: (outcome) => {

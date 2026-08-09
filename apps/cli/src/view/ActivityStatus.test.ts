@@ -37,15 +37,35 @@ describe('ActivityStatus', () => {
     assert.match(text, /↓3,140 ~52\.4\/s/);
   });
 
-  it('never puts a rate on the input count', () => {
-    // The wait before the first token is prompt processing on one model and
-    // silent thinking on the next, and nothing visible tells them apart.
+  it('rates the prompt too when the provider reported a clean first-token time', () => {
+    const text = metricRow({
+      state: 'generating',
+      metrics: { inputTokens: 3_000, outputTokens: 400, rates: { input: 9677, output: 171 }, ttftMs: 310 },
+    });
+    assert.match(text, /↑3,000 ~9\.7k\/s/);
+    assert.match(text, /↓400 ~171\/s/);
+  });
+
+  it('leaves the input count bare when the engine withheld its rate', () => {
+    // Which it does for a model that thinks without streaming it: the wait
+    // before the first token is mostly generation, so dividing by it is
+    // meaningless. The wait itself is reported instead.
     const text = metricRow({
       state: 'generating',
       metrics: { inputTokens: 48_210, outputTokens: 3_140, rates: { output: 52.4 }, ttftMs: 1200 },
     });
     assert.match(text, /↑48,210 {2}↓/, 'the input count stands alone');
-    assert.match(text, /1\.2s→1st/, 'the wait itself is reported instead');
+    assert.match(text, /1\.2s→1st/);
+  });
+
+  it('names the thinking share, so the rate and the count agree', () => {
+    // Without it the row does not add up: 2,100 tokens at 56/s reads as 37s,
+    // but only the 100 streamed ones were rated.
+    const text = metricRow({
+      state: 'generating',
+      metrics: { inputTokens: 3_000, outputTokens: 2_100, reasoningTokens: 2_000, rates: { output: 56 }, ttftMs: 3000 },
+    });
+    assert.match(text, /↓2,100 \(2,000 thinking\) ~56\.0\/s/);
   });
 
   it('rates a provider that does not stream, and claims no first-token time', () => {

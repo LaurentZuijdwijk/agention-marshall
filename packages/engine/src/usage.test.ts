@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { createUsageTally, createPhaseClock, pricingFor, rate, formatCost, formatRate, formatTokens } from './usage.js';
+import { createUsageTally, throughputOf, pricingFor, rate, formatCost, formatRate, formatTokens } from './usage.js';
+import type { TokenUsage } from '@agentionai/agents/core';
 import type { AgentProfile } from './config.js';
 
 const CODER: AgentProfile = { provider: 'openrouter', model: 'openai/gpt-5.6-luna' };
@@ -179,110 +180,107 @@ describe('formatTokens', () => {
   });
 });
 
-describe('PhaseClock', () => {
-  /** A clock the test advances by hand, so the assertions are exact. */
-  function stopwatch() {
-    let t = 0;
-    const clock = createPhaseClock(() => t);
-    return { clock, tick: (ms: number) => { t += ms; } };
-  }
-
-  it('counts silent thinking as the working time it is', () => {
-    // The bug this replaced: a model whose reasoning is not streamed back sits
-    // quiet for seconds and then emits a short answer. Timing only the visible
-    // chunks divided every one of its output tokens — reasoning included — by
-    // the moment they took to arrive, and reported tens of thousands of tok/s.
-    const { clock, tick } = stopwatch();
-    clock.requestSent();
-    tick(4000);          // thinking, with nothing on the wire
-    clock.outputChunk();
-    tick(40);            // the visible answer
-    clock.outputChunk();
-    clock.paused();
-
-    const { workMs, ttftMs } = clock.read();
-    assert.equal(workMs, 4040, 'the whole request was time the model was working');
-    assert.equal(ttftMs, 4000, 'and the wait is reported rather than divided into');
-    assert.equal(Math.round(rate(2100, workMs)!), 520, 'a believable rate for 2,100 tokens');
+describe('throughputOf', () => {
+  const usage = (over: Partial<TokenUsage> = {}): TokenUsage => ({
+    input_tokens: 3000,
+    output_tokens: 2100,
+    total_tokens: 5100,
+    ...over,
   });
 
-  it('leaves tool time out, because the model is not working then', () => {
-    // The other half: a turn that spends 30s running tests must not report that
-    // as slow generation.
-    const { clock, tick } = stopwatch();
-    clock.requestSent();
-    tick(500);
-    clock.outputChunk();
-    clock.paused();      // tool calls dispatched
-    tick(30_000);        // the test suite runs
-    clock.requestSent(); // tool result in, next request goes out
-    tick(700);
-    clock.outputChunk();
-    clock.paused();
+  it('rates only the tokens that were streamed, not the ones thought in silence', () => {
+    // The bug this exists for. A reasoning model spends 4s producing 2,000
+    // tokens nobody sees, then streams the remaining 100 over 2s. Dividing all
+    // 2,100 by that 2s claims 1,050 tok/s for a turn that wrote 100.
+    const speed = throughputOf(usage({
+      reasoning_tokens: 2000,
+      timeToFirstTokenMs: 4000,
+      generationMs: 2000,
+      totalMs: 6000,
+    }));
 
-    assert.equal(clock.read().workMs, 1200);
+    assert.equal(speed.output, 50, '100 streamed tokens over 2s');
+    assert.equal(speed.hiddenTokens, 2000);
   });
 
-  it('dates a request from the last parallel tool to finish', () => {
-    // Several tools resolve one after another and each reports; only the last
-    // precedes the request that actually goes out. Counting from the first
-    // would charge the gaps between them to the model.
-    const { clock, tick } = stopwatch();
-    clock.paused();
-    clock.requestSent();
-    tick(5000);
-    clock.requestSent();
-    tick(3000);
-    clock.requestSent();
-    tick(250);
-    clock.outputChunk();
-    clock.paused();
+  it('falls back to the whole call when almost nothing was streamed', () => {
+    // Same shape, but the visible answer lands in 9ms. The subtraction is still
+    // right and the denominator is still meaningless — a rate over a few
+    // milliseconds is noise whatever is divided by it.
+    const speed = throughputOf(usage({
+      reasoning_tokens: 2000,
+      timeToFirstTokenMs: 4000,
+      generationMs: 9,
+      totalMs: 4009,
+    }));
 
-    assert.equal(clock.read().workMs, 250);
+    assert.equal(Math.round(speed.output!), 524, 'the whole call, and all 2,100 tokens');
   });
 
-  it('keeps the first token of the turn, not of each step', () => {
-    const { clock, tick } = stopwatch();
-    clock.requestSent();
-    tick(1200);
-    clock.outputChunk();
-    clock.paused();
-    clock.requestSent();
-    tick(9000);          // a much slower second step
-    clock.outputChunk();
-    clock.paused();
+  it('drops the input rate when anything was produced off-screen', () => {
+    // Time to first token is mostly thinking there, so dividing the prompt by
+    // it measures nothing. The wait is reported as a duration instead.
+    const speed = throughputOf(usage({
+      reasoning_tokens: 2000,
+      timeToFirstTokenMs: 4000,
+      generationMs: 2000,
+      totalMs: 6000,
+      inputTokensPerSecond: 750,
+    }));
 
-    assert.equal(clock.read().ttftMs, 1200, 'time to first token is a turn-level figure');
+    assert.equal(speed.input, undefined);
+    assert.equal(speed.ttftMs, 4000);
   });
 
-  it('counts the window still open, so a live reading is current', () => {
-    const { clock, tick } = stopwatch();
-    clock.requestSent();
-    tick(1500);
-    assert.equal(clock.read().workMs, 1500, 'still waiting, still working');
-    tick(600);
-    assert.equal(clock.read().workMs, 2100);
+  it('keeps the input rate when the wait really was prompt processing', () => {
+    const speed = throughputOf(usage({
+      reasoning_tokens: 0,
+      timeToFirstTokenMs: 1400,
+      generationMs: 4000,
+      totalMs: 5400,
+      inputTokensPerSecond: 2142.8,
+    }));
+
+    assert.equal(speed.input, 2142.8);
+    assert.equal(Math.round(speed.output!), 525);
+    assert.equal(speed.hiddenTokens, undefined, 'nothing was hidden');
   });
 
-  it('stops accruing once paused', () => {
-    const { clock, tick } = stopwatch();
-    clock.requestSent();
-    tick(400);
-    clock.paused();
-    tick(10_000);
+  it('falls back to the whole call when a provider hides thinking without saying so', () => {
+    // No reasoning_tokens to subtract, and a generation window that is a sliver
+    // of the call. Trusting that window would report 233,333 tok/s.
+    const speed = throughputOf(usage({
+      timeToFirstTokenMs: 4000,
+      generationMs: 9,
+      totalMs: 4009,
+    }));
 
-    assert.equal(clock.read().workMs, 400);
+    assert.equal(Math.round(speed.output!), 524, 'the whole call is the honest denominator');
   });
 
-  it('measures a provider that never streams at all', () => {
-    // No chunks, so no time to first token — but the request was still
-    // outstanding, and that is the whole of what the rate needs.
-    const { clock, tick } = stopwatch();
-    clock.requestSent();
-    tick(4000);
-    clock.paused();
+  it('trusts the generation window on an ordinary streamed turn', () => {
+    // Most of the call falls after the first token, so it is where the tokens
+    // came from — no fallback, and no dilution by the prefill.
+    const speed = throughputOf(usage({
+      output_tokens: 400,
+      timeToFirstTokenMs: 200,
+      generationMs: 4000,
+      totalMs: 4200,
+    }));
 
-    assert.deepEqual(clock.read(), { workMs: 4000, ttftMs: 0 });
+    assert.equal(speed.output, 100, '400 tokens over the 4s of generation');
+  });
+
+  it('rates an unstreamed call end to end', () => {
+    // No first-token mark at all, so there is no window to separate.
+    const speed = throughputOf(usage({ output_tokens: 60, totalMs: 2000 }));
+
+    assert.equal(speed.output, 30);
+    assert.equal(speed.ttftMs, undefined);
+  });
+
+  it('reports nothing rather than dividing by a missing timing', () => {
+    assert.deepEqual(throughputOf(usage()), {});
   });
 });
 

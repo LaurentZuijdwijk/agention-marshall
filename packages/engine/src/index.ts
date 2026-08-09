@@ -17,7 +17,7 @@ export {
   formatContext, formatParams, formatBytes, formatPrice,
 } from './models.js';
 export { Session } from './session.js';
-export type { Pricing, PriceBook, TokenCount, UsageTotals, RoleUsage, UsageReport, UsageTally, TurnPhases, PhaseClock } from './usage.js';
-export { createUsageTally, createPhaseClock, pricingFor, rate, formatTokens, formatCost, formatRate } from './usage.js';
+export type { Pricing, PriceBook, TokenCount, UsageTotals, RoleUsage, UsageReport, UsageTally, Throughput } from './usage.js';
+export { createUsageTally, throughputOf, pricingFor, rate, formatTokens, formatCost, formatRate } from './usage.js';
 export { McpRegistry } from './mcp.js';
 export type { McpServerConfig, McpServerState, McpStatus } from './mcp.js';

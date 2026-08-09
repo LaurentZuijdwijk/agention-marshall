@@ -497,7 +497,7 @@ test('a rate that survives a model whose thinking is not streamed back', async (
     text: 'Short answer after a long think.',
     delayMs: 300,
     chunkDelayMs: 2,
-    usage: { promptTokens: 3000, completionTokens: 2100 },
+    usage: { promptTokens: 3000, completionTokens: 2100, reasoningTokens: 2000 },
   });
   t.after(() => fake.close());
 
@@ -511,10 +511,36 @@ test('a rate that survives a model whose thinking is not streamed back', async (
   assert.ok(last && last.type === 'usage');
   assert.ok(last.rates?.output !== undefined, 'the turn has an output rate');
   assert.ok(last.rates.output < 20_000,
-    `2,100 tokens over a third of a second is not ${last.rates.output.toFixed(0)} tok/s — `
-    + 'the silent thinking has to count as working time');
+    `only ~100 of the 2,100 tokens streamed, so ${last.rates.output.toFixed(0)} tok/s means the `
+    + 'declared reasoning tokens were not subtracted');
+  assert.equal(last.rates.input, undefined,
+    'time to first token was mostly thinking, so there is no prompt rate to quote');
   assert.ok(last.ttftMs !== undefined && last.ttftMs >= 250,
-    'and the wait before the first token is reported rather than divided into');
+    'the wait is reported as a duration instead');
+  assert.equal(last.turn.reasoningTokens, 2000, 'and the thinking is broken out of the total');
+});
+
+test('a provider that hides thinking without declaring it still gets a sane rate', async (t) => {
+  // No reasoning_tokens to subtract. The generation window is a sliver of the
+  // call, which is the tell — trusting it reported six figures of tok/s.
+  const root = tempRoot();
+  const fake = await startFakeProvider({
+    text: 'Short answer after a long think.',
+    delayMs: 400,
+    usage: { promptTokens: 3000, completionTokens: 2100 },
+  });
+  t.after(() => fake.close());
+
+  const rec = recorder();
+  const session = makeSession(root, fake, rec.client);
+  t.after(() => session.dispose());
+
+  await session.run('think hard');
+
+  const last = rec.events.filter(e => e.type === 'usage').at(-1);
+  assert.ok(last && last.type === 'usage');
+  assert.ok(last.rates?.output !== undefined && last.rates.output < 20_000,
+    `${last.rates?.output?.toFixed(0)} tok/s — the whole call should be the denominator here`);
 });
 
 test('a non-streaming turn still gets a rate', async (t) => {

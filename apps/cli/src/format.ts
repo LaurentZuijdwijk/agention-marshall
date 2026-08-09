@@ -114,7 +114,9 @@ export function formatUsageReport(report: UsageReport): string {
 
   const cost = formatCost(session);
   const lines = [
-    `session  ↑${formatTokens(session.inputTokens)}  ↓${formatTokens(session.outputTokens)}${cost ? `  ${cost}` : ''}`,
+    `session  ↑${formatTokens(session.inputTokens)}  ↓${formatTokens(session.outputTokens)}`
+    + (session.reasoningTokens ? ` (${formatTokens(session.reasoningTokens)} thinking)` : '')
+    + (cost ? `  ${cost}` : ''),
   ];
 
   // Padded off the longest entry rather than a fixed width: model ids run from
@@ -127,6 +129,10 @@ export function formatUsageReport(report: UsageReport): string {
     lines.push(
       `  ${entry.role.padEnd(roleWidth)}  ${entry.model.padEnd(modelWidth)}` +
       `  ↑${formatTokens(entry.inputTokens)}  ↓${formatTokens(entry.outputTokens)}` +
+      // Billed as output either way, so it sits inside the ↓ figure rather than
+      // beside it. Worth naming because it is the one line item you can change
+      // without changing what you asked for.
+      (entry.reasoningTokens ? ` (${formatTokens(entry.reasoningTokens)} thinking)` : '') +
       (entryCost ? `  ${entryCost}` : ''),
     );
   }

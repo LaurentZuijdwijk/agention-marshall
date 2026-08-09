@@ -1,7 +1,7 @@
 import { join, dirname } from 'node:path';
 import { readFile, readdir, rm, appendFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { History, AgentEvent, BaseAgent, ToolResultEvent } from '@agentionai/agents/core';
+import { History, AgentEvent, BaseAgent } from '@agentionai/agents/core';
 import { toolResultMaskingPlugin } from '@agentionai/agents/history/plugins';
 import type { ToolResultMaskingPlugin } from '@agentionai/agents/history/plugins';
 import {
@@ -36,13 +36,9 @@ import type { ImageAttachment } from './images.js';
 import { describeAgentError, providerErrorDiagnostics, isBadRequestError, isContextLengthError } from './errors.js';
 import { resolveRoleProfile, resolveModel, routingSummary, resolveSearchProfile } from './config.js';
 import type { EngineConfig, AgentProfile, Role, SafetyLevel, SafetyAgentConfig } from './config.js';
-import { createUsageTally, createPhaseClock, rate } from './usage.js';
-import type { PriceBook, UsageReport, PhaseClock } from './usage.js';
+import { createUsageTally, throughputOf } from './usage.js';
+import type { PriceBook, UsageReport } from './usage.js';
 import type { ClientInterface } from './types.js';
-
-interface AgentWithUsage extends BaseAgent<string, string> {
-  lastTokenUsage?: { input_tokens: number; output_tokens: number };
-}
 
 const NEVER_MASK_TOOLS = [
   'list_dir', 'note_write', 'note_read', 'note_list', 'log_append', 'log_read', 'context', 'search',
@@ -314,10 +310,8 @@ export class Session {
     key: string,
     role: Role,
     profile: AgentProfile,
-    agent: AgentWithUsage,
+    agent: BaseAgent<string, string>,
     startMs: number,
-    /** Absent for the side agents, which do not stream — see TurnPhases. */
-    clock?: PhaseClock,
   ): () => UsageReport {
     const emit = (final: boolean): UsageReport => {
       const usage = agent.lastTokenUsage;
@@ -325,12 +319,13 @@ export class Session {
         this.usage.record(key, { role, profile }, {
           inputTokens: usage.input_tokens,
           outputTokens: usage.output_tokens,
+          ...(usage.reasoning_tokens !== undefined ? { reasoningTokens: usage.reasoning_tokens } : {}),
         });
       }
-      // This agent's own counts over this agent's own clock. The rollup below
-      // includes sub-agents, which have neither.
-      const phases = clock?.read();
-      const output = usage && phases ? rate(usage.output_tokens, phases.workMs) : undefined;
+      // This agent's own rates, from timings the SDK took inside each API call.
+      // The rollup below includes sub-agents, which ran on their own clocks in
+      // parallel and so share no wall-clock a rate could be taken over.
+      const speed = usage ? throughputOf(usage) : undefined;
       const report = this.usage.report();
       // Silence rather than zeroes, the final reading included. Before the first
       // response lands there is nothing to report yet, and on a provider that
@@ -343,8 +338,10 @@ export class Session {
           turn: report.turn,
           session: report.session,
           final,
-          ...(output !== undefined ? { rates: { output } } : {}),
-          ...(phases && phases.ttftMs > 0 ? { ttftMs: phases.ttftMs } : {}),
+          ...(speed && (speed.input !== undefined || speed.output !== undefined)
+            ? { rates: { ...(speed.input !== undefined ? { input: speed.input } : {}), ...(speed.output !== undefined ? { output: speed.output } : {}) } }
+            : {}),
+          ...(speed?.ttftMs !== undefined ? { ttftMs: speed.ttftMs } : {}),
         });
       }
       return report;
@@ -637,9 +634,7 @@ export class Session {
     let errorReported = false;
     let detachToolResult: (() => void) | null = null;
     let stopSampling: (() => UsageReport) | null = null;
-    let detachPhases: (() => void) | null = null;
     const startMs = Date.now();
-    const clock = createPhaseClock();
     // Opened before the agent exists, so anything this turn delegates lands in
     // the right turn's column even if the coder itself never reports.
     const usageKey = `coder@${this.usage.startTurn()}`;
@@ -682,7 +677,7 @@ export class Session {
         // key off whether their tool resolved — and this closes the same gap for
         // the fixed rules.
         systemPrompt: buildSystemPrompt({ scratch: !light, background: !light }),
-      }) as AgentWithUsage;
+      });
       if (coderProfile.provider === 'llamacpp') this.llamaModelLoaded = true;
 
       // Shared with /plan and /review. The per-run file/shell tools die with the
@@ -690,20 +685,7 @@ export class Session {
       // plugin's retrieve tool are built once and shared by every run — without
       // the detach in `finally` each turn stacks another listener on those five.
       detachToolResult = this.events.attachToolListeners(agent, tools, signal);
-      stopSampling = this.sampleUsage(usageKey, 'coder', coderProfile, agent, startMs, clock);
-
-      // The phase boundaries, kept out of session-events because that module
-      // only translates events into client output and owns no state. A tool
-      // result is where the next request begins; the calls themselves are where
-      // generation stops and time stops counting toward either rate.
-      const onToolUse = () => clock.paused();
-      const onToolResult = () => clock.requestSent();
-      agent.on(AgentEvent.TOOL_USE, onToolUse);
-      for (const tool of tools) tool.on(ToolResultEvent.RESULT, onToolResult);
-      detachPhases = () => {
-        agent.off(AgentEvent.TOOL_USE, onToolUse);
-        for (const tool of tools) tool.off(ToolResultEvent.RESULT, onToolResult);
-      };
+      stopSampling = this.sampleUsage(usageKey, 'coder', coderProfile, agent, startMs);
 
       agent.on(AgentEvent.ERROR, (err: unknown) => {
         if (signal.aborted) return;
@@ -735,12 +717,8 @@ export class Session {
       // attempts afterward) finished on its own, which can take minutes on local models.
       const stream = (input: string | ReturnType<typeof buildInput>): Promise<string> =>
         new Promise<string>((resolve, reject) => {
-          clock.requestSent();
           runAgent(agent, input, chunk => {
             if (signal.aborted) return;
-            // Reasoning counts: the provider bills it as output and the model
-            // spent the same seconds writing it.
-            clock.outputChunk();
             this.client.onOutput(chunk.type === 'reasoning'
               ? { type: 'reasoning', text: chunk.content }
               : { type: 'token', text: chunk.content });
@@ -795,10 +773,6 @@ export class Session {
       }
     } finally {
       detachToolResult?.();
-      detachPhases?.();
-      // Stops the clock before the reading is taken, so the last generation
-      // window closes at the answer rather than running on into the report.
-      clock.paused();
       // Before `maybeResume`, which can start the next turn synchronously: the
       // final reading has to be attributed to the turn that spent it, and the
       // sampler for the next one must not be running alongside this one's.
@@ -869,7 +843,7 @@ export class Session {
         systemPrompt,
         extraInstructions: contextTool ? SURVEY_TOOL_GUIDANCE : undefined,
         name: eventType,
-      }) as AgentWithUsage;
+      });
 
       // /plan and /review used to run completely silently — no tool calls, no
       // results — so a long review looked like a hang. Tagged with the agent

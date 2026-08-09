@@ -104,15 +104,16 @@ export type OutputEvent =
       session: UsageTotals;
       final: boolean;
       /**
-       * Output tokens per second of model time — see TurnPhases for what counts
-       * as model time and why input has no matching figure.
+       * Tokens per second — see `throughputOf` for which of these can be
+       * trusted when, and why `input` goes missing on a model that thinks
+       * without streaming it.
        *
        * Describes only the agent whose stream is being watched, and its own
        * token counts, unlike `turn`. Sub-agents run in parallel on other models
        * and other clocks, so there is no wall-clock they and the coder share
        * that a rate could honestly be taken over.
        */
-      rates?: { output?: number };
+      rates?: { input?: number; output?: number };
       /** Time to the turn's first token. Absent until one arrives. */
       ttftMs?: number;
     }
