@@ -1,5 +1,50 @@
 # @agentionai/marshall-cli
 
+## 0.13.0
+
+### Minor Changes
+
+- a9c7bb7: Rename `/safety none` to `/safety yolo`.
+
+  Level 1 removes the approval gate entirely, and `none` was the wrong word for
+  that: in a list of `none | default | agentic` it reads as the neutral low end of
+  a spectrum rather than as the setting that lets every tool call run unreviewed.
+  `yolo` is not a joke — it is the point. A name you are slightly reluctant to type
+  is doing useful work on the one mode that has no other guardrail, and the banner
+  already shows it in red whenever the level is not the default.
+
+  `/safety none` now returns the usage line naming the three current words. The
+  level is session-only and never persisted, so nothing on disk or in a config
+  needs migrating; only muscle memory.
+
+### Patch Changes
+
+- e1c2498: Keep the rendered frame inside the terminal, in both directions.
+
+  Ink erases a frame by rewinding as many rows as its output has lines, which is
+  only correct while the frame fits. Too tall and Ink clears the terminal —
+  scrollback included — then reprints the whole static transcript on every render;
+  with the activity spinner ticking at 80ms that was a dozen full-screen repaints a
+  second, which read as flicker, unscrollable history and a frozen UI. Too wide and
+  the terminal wraps a line the rewind never gets back, leaving the top row of the
+  frame behind — one stale row per frame, which is the same answer printed over and
+  over.
+
+  So: the approval panel is budgeted against `stdout.rows` instead of a fixed
+  twenty lines of detail and cuts each line to one row; the queue-a-prompt input
+  steps aside on terminals too short to hold both; the spinner stops animating
+  while the turn is blocked on you; and nothing renders into the terminal's last
+  column. The width has to be applied to `<Static>`'s rows individually as well as
+  to the root, because static items are laid out in their own pass and do not
+  inherit it — unconstrained, a committed transcript row measured 121 columns wide
+  in a 120-column terminal.
+
+  Approvals need at least 20 rows to fit; below that the panel is degraded by
+  design rather than silently oversized.
+
+- Updated dependencies [a48a143]
+  - @agentionai/marshall-engine@0.11.0
+
 ## 0.12.0
 
 ### Minor Changes
