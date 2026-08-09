@@ -30,6 +30,7 @@ import {
   SURVEY_TOOL_GUIDANCE,
 } from './agent-factory.js';
 import { runAgent } from './streaming.js';
+import { formatTrace, traceMode } from './history-trace.js';
 import { checkAttachments, buildInput } from './images.js';
 import type { ImageAttachment } from './images.js';
 import { describeAgentError, providerErrorDiagnostics, isBadRequestError, isContextLengthError } from './errors.js';
@@ -288,6 +289,22 @@ export class Session {
     const line = `[${new Date().toISOString()}] ${entry}\n`;
     this.logDirReady
       .then(() => appendFile(this.logPath, line))
+      .catch(() => {});
+  }
+
+  /**
+   * Dump the conversation as the model receives it — see history-trace.ts.
+   *
+   * A separate file from the session log, and read from the environment at call
+   * time rather than construction, so turning it on is a matter of restarting
+   * with the variable set and turning it off costs nothing at all.
+   */
+  private traceHistory(label: string): void {
+    const mode = traceMode(process.env.MARSHALL_TRACE_HISTORY);
+    if (mode === 'off') return;
+    const record = formatTrace(this.history, label, mode);
+    this.logDirReady
+      .then(() => appendFile(join(dirname(this.logPath), 'history.log'), record))
       .catch(() => {});
   }
 
@@ -588,6 +605,12 @@ export class Session {
         this.log(`ERROR ${message}`);
       });
 
+      // Before the call, not after: this is the document the model is about to
+      // be given for `task`, which is what every "it forgot the last answer"
+      // report is really asking about. The turn's own message is not in it yet
+      // — the agent adds that inside execute — so the pairing to read is this
+      // dump against the task named in its own header.
+      this.traceHistory(`before ${JSON.stringify(task)}`);
       this.client.onOutput({ type: 'thinking' });
       // Race instead of a plain await: the agent SDK has no cancellation hook, so
       // the run itself won't reject on abort — without this race, Esc would
@@ -664,6 +687,12 @@ export class Session {
       detachToolResult?.();
       this.currentTask = null;
       this.controller = null;
+      // Paired with the `before` dump above, so the turn's own contribution —
+      // its answer, its tool calls and their results — is the diff between the
+      // two. In the `finally` because an interrupted or failed turn still
+      // leaves history in a state the next turn inherits, and that state is
+      // exactly what is worth seeing when a turn went wrong.
+      this.traceHistory(`after ${JSON.stringify(task)}`);
       // A job that finished mid-turn was only queued — this is the boundary
       // where acting on it becomes safe, and the last chance to notice it before
       // the session goes idle.

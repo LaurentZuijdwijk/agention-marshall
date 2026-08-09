@@ -143,6 +143,25 @@ No `vscode` import ever touches the engine.
 npm test          # run all workspace tests
 ```
 
+### Diagnostics
+
+Two opt-in traces, both off by default and both written under `.marshall/logs/`:
+
+```bash
+MARSHALL_TRACE_HISTORY=1 marshall     # the conversation as the model receives it
+MARSHALL_TRACE_HISTORY=full marshall  # the same, without truncation
+MARSHALL_TRACE_RENDER=1 marshall      # every component render, for repaint bugs
+```
+
+`history.log` gets a record before and after each turn, so "the agent forgot the
+last answer" becomes checkable: the `before` record for a turn is exactly the
+document the model was given for it. Tool results the masking plugin rewrote on
+the way out are marked `[masked]` — present in storage, absent from the request,
+which is otherwise indistinguishable from a missing entry.
+
+The file holds your conversation, file contents included. `.marshall/` is
+gitignored; treat the log the way you would the code it quotes.
+
 ## Release process
 
 Releases use [Changesets](https://github.com/changesets/changesets). Keep release credentials out of the repository; authenticate with npm locally or through the release environment.

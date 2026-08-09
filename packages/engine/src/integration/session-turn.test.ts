@@ -366,3 +366,66 @@ test('streamed tokens reach the client as they arrive', async (t) => {
   assert.equal(tokens.map(e => (e as { text: string }).text).join(''), answer,
     'the token stream reassembles into exactly the answer');
 });
+
+// The question this answers is not "does history work" but "can Laurent find
+// out". A user reporting that the agent forgot the previous answer has, until
+// now, had no way to tell a missing history entry from a masked one from a
+// model that simply ignored it — the session log records the task and the tool
+// calls, never what was sent.
+test('MARSHALL_TRACE_HISTORY writes what the model was given, turn by turn', async (t) => {
+  const root = tempRoot();
+  const fake = await startFakeProvider(
+    { text: 'Here is a story about a lighthouse keeper on Skerry Isle.' },
+    { text: 'Written to story.md.' },
+  );
+  t.after(() => fake.close());
+
+  const previous = process.env.MARSHALL_TRACE_HISTORY;
+  process.env.MARSHALL_TRACE_HISTORY = '1';
+  t.after(() => {
+    if (previous === undefined) delete process.env.MARSHALL_TRACE_HISTORY;
+    else process.env.MARSHALL_TRACE_HISTORY = previous;
+  });
+
+  const session = makeSession(root, fake, recorder().client);
+  t.after(() => session.dispose());
+
+  await session.run('write me a short story');
+  await session.run('now write it to story.md');
+  // The write is fire-and-forget, like every other line in the session log.
+  await new Promise(resolve => setTimeout(resolve, 200));
+
+  const path = join(root, '.marshall', 'logs', 'history.log');
+  assert.equal(existsSync(path), true, 'tracing was on, so the file should exist');
+  const trace = readFileSync(path, 'utf8');
+
+  // The record that matters: what the second task was about to be given.
+  const followUp = trace
+    .split('\n\n')
+    .find(record => record.includes('before "now write it to story.md"'));
+  assert.ok(followUp, `no "before" record for the second turn in:\n${trace}`);
+  assert.match(followUp, /assistant text\s+Here is a story about a lighthouse keeper on Skerry Isle\./,
+    'the follow-up turn has to show the previous answer it depends on');
+  assert.match(followUp, /user text\s+write me a short story/);
+});
+
+test('history tracing stays off unless it is asked for', async (t) => {
+  const root = tempRoot();
+  const fake = await startFakeProvider({ text: 'Hello.' });
+  t.after(() => fake.close());
+
+  const previous = process.env.MARSHALL_TRACE_HISTORY;
+  delete process.env.MARSHALL_TRACE_HISTORY;
+  t.after(() => {
+    if (previous !== undefined) process.env.MARSHALL_TRACE_HISTORY = previous;
+  });
+
+  const session = makeSession(root, fake, recorder().client);
+  t.after(() => session.dispose());
+
+  await session.run('say hi');
+  await new Promise(resolve => setTimeout(resolve, 200));
+
+  assert.equal(existsSync(join(root, '.marshall', 'logs', 'history.log')), false,
+    'a conversation must not be written to disk by default');
+});
