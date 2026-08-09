@@ -1,7 +1,24 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { panelLayout, panelWidth, safeWidth, STATUS_ROWS, PROMPT_ROWS, MIN_PANEL_ROWS, MIN_TERMINAL_ROWS } from './layout.js';
-import { APPROVAL_CHROME_ROWS, detailWindow } from './ApprovalPanel.js';
+import { APPROVAL_CHROME_ROWS, detailRows, detailWindow } from './ApprovalPanel.js';
+
+const plainLines = (n: number) => Array.from({ length: n }, (_, i) => `line ${i}`);
+
+/** A diff whose first change sits behind the context formatFileDiff keeps. */
+const diffLines = (n: number) => [
+  '@@ 12 unchanged lines @@',
+  ' const a = 1;',
+  ' const b = 2;',
+  ' const c = 3;',
+  ...Array.from({ length: n }, (_, i) => `${i % 2 ? '+' : '-'} changed ${i}`),
+];
+
+/** Rows the detail block actually renders, notices included. */
+function detailBlockRows(lines: string[], budget: number, isDiff: boolean): number {
+  const { shown, hidden, skipped } = detailWindow(lines, budget, isDiff);
+  return shown.length + (hidden > 0 ? 1 : 0) + (skipped > 0 ? 1 : 0);
+}
 
 /**
  * The one property that matters: whatever renders below <Static> has to be
@@ -13,8 +30,7 @@ import { APPROVAL_CHROME_ROWS, detailWindow } from './ApprovalPanel.js';
 function approvalFrameRows(terminalRows: number, extraProvenanceRows = 0): number {
   const { rows, showPrompt } = panelLayout(terminalRows);
   const budget = rows - APPROVAL_CHROME_ROWS - extraProvenanceRows;
-  const { shown, hidden } = detailWindow(Array.from({ length: 500 }, (_, i) => `line ${i}`), budget);
-  const panelRows = APPROVAL_CHROME_ROWS + extraProvenanceRows + shown.length + (hidden > 0 ? 1 : 0);
+  const panelRows = APPROVAL_CHROME_ROWS + extraProvenanceRows + detailBlockRows(plainLines(500), budget, false);
   return panelRows + STATUS_ROWS + (showPrompt ? PROMPT_ROWS : 0);
 }
 
@@ -38,10 +54,14 @@ describe('panelLayout', () => {
       const { rows } = panelLayout(terminalRows);
       for (const provenance of [0, 1, 2]) {
         const chrome = APPROVAL_CHROME_ROWS + provenance;
-        const { shown, hidden } = detailWindow(Array.from({ length: 200 }, (_, i) => `line ${i}`), rows - chrome);
-        const rendered = chrome + shown.length + (hidden > 0 ? 1 : 0);
-        assert.ok(rendered <= rows,
-          `rows=${terminalRows} provenance=${provenance}: panel rendered ${rendered} into a budget of ${rows}`);
+        // Both detail shapes: a diff renders up to two notices (what it skipped
+        // above the first change, what it dropped below), so it is the one that
+        // can overrun a budget the plain path fits exactly.
+        for (const [lines, isDiff] of [[plainLines(200), false], [diffLines(200), true]] as const) {
+          const rendered = chrome + detailBlockRows(lines, rows - chrome, isDiff);
+          assert.ok(rendered <= rows,
+            `rows=${terminalRows} provenance=${provenance} isDiff=${isDiff}: panel rendered ${rendered} into a budget of ${rows}`);
+        }
       }
     }
   });
@@ -91,18 +111,75 @@ describe('panelWidth', () => {
   });
 });
 
+describe('detailRows', () => {
+  it('drops the path header a file diff opens with', () => {
+    // The description row right above the detail already names the file, and on
+    // a short terminal these two rows were half of the whole window.
+    const { lines, isDiff } = detailRows('--- src/a.ts\n+++ src/a.ts\n- old\n+ new');
+    assert.deepEqual(lines, ['- old', '+ new']);
+    assert.equal(isDiff, true);
+  });
+
+  it('leaves anything that is not a diff alone', () => {
+    const { lines, isDiff } = detailRows('rm -rf build\n--yes');
+    assert.deepEqual(lines, ['rm -rf build', '--yes']);
+    assert.equal(isDiff, false);
+  });
+});
+
 describe('detailWindow', () => {
   it('shows everything when it fits', () => {
-    const { shown, hidden } = detailWindow(['a', 'b', 'c'], 10);
+    const { shown, hidden, skipped } = detailWindow(['a', 'b', 'c'], 10);
     assert.deepEqual(shown, ['a', 'b', 'c']);
     assert.equal(hidden, 0);
+    assert.equal(skipped, 0);
   });
 
   it('keeps the head, and spends one row saying what it dropped', () => {
-    const { shown, hidden } = detailWindow(['a', 'b', 'c', 'd', 'e'], 3);
-    assert.deepEqual(shown, ['a', 'b'], 'a diff reads from the top');
+    const { shown, hidden, skipped } = detailWindow(['a', 'b', 'c', 'd', 'e'], 3);
+    assert.deepEqual(shown, ['a', 'b'], 'anything but a diff reads from the top');
     assert.equal(hidden, 3);
+    assert.equal(skipped, 0);
     assert.equal(shown.length + 1, 3, 'the notice has to fit inside the budget too');
+  });
+
+  it('windows a diff around its first change, not its first line', () => {
+    // Without this the whole budget goes to the context above the change: the
+    // reader is shown the code around an edit and never the edit.
+    const lines = [' ctx a', ' ctx b', ' ctx c', '- gone', '+ added', ' ctx d'];
+    const { shown, hidden, skipped } = detailWindow(lines, 4, true);
+    assert.equal(skipped, 2, 'one line of lead context is kept');
+    assert.deepEqual(shown, [' ctx c', '- gone'], 'and the change is in frame');
+    assert.equal(hidden, 2);
+    assert.equal(1 + shown.length + 1, 4, 'both notices are inside the budget');
+  });
+
+  it('gives rows the anchor did not need back to the context above it', () => {
+    // Anchoring on the change is a floor, not a target: if the tail leaves rows
+    // spare, showing more of what led up to the change beats a short panel.
+    const lines = [' a', ' b', ' c', ' d', ' e', '- gone', '+ added'];
+    const { shown, hidden, skipped } = detailWindow(lines, 6, true);
+    assert.equal(skipped, 2, 'anchoring alone would have skipped 4');
+    assert.deepEqual(shown, [' c', ' d', ' e', '- gone', '+ added']);
+    assert.equal(hidden, 0);
+    assert.equal(1 + shown.length, 6, 'the whole budget is used');
+  });
+
+  it('does not anchor a shell command on its flags', () => {
+    // A leading `-` is a flag here, and a command has to be read from its first
+    // word — `rm` is the part that matters, not `-rf`.
+    const { shown, skipped } = detailWindow(['rm \\', '-rf \\', 'build', 'dist'], 3, false);
+    assert.deepEqual(shown, ['rm \\', '-rf \\']);
+    assert.equal(skipped, 0);
+  });
+
+  it('reads a diff from the top when the budget is too small to anchor', () => {
+    // The skipped-lines notice costs a row. Below this size it takes back more
+    // than the anchoring gives.
+    const lines = [' ctx a', ' ctx b', ' ctx c', '- gone', '+ added'];
+    const { shown, skipped } = detailWindow(lines, 3, true);
+    assert.deepEqual(shown, [' ctx a', ' ctx b']);
+    assert.equal(skipped, 0);
   });
 
   it('renders nothing at all on a zero budget, not even the notice', () => {
@@ -110,8 +187,9 @@ describe('detailWindow', () => {
     // outside the budget, which is how the panel came to be one row taller than
     // the layout promised — and one row taller than the viewport is the bug the
     // whole budget exists to prevent.
-    const { shown, hidden } = detailWindow(['a', 'b'], 0);
+    const { shown, hidden, skipped } = detailWindow(['a', 'b'], 0);
     assert.deepEqual(shown, []);
     assert.equal(hidden, 0);
+    assert.equal(skipped, 0);
   });
 });
