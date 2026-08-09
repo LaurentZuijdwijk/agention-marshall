@@ -12,10 +12,15 @@ export interface ActivityMetrics {
 }
 
 /** Compact telemetry row; missing telemetry is stated rather than guessed. */
-export function ActivityStatus({ state, metrics, pending = 0 }: {
+export function ActivityStatus({ state, metrics, pending = 0, blocked = false }: {
   state: ActivityState;
   metrics?: ActivityMetrics;
   pending?: number;
+  /**
+   * The turn is open but waiting on the user — an approval, a question. The
+   * agent is not working, so the spinner stops: see Spinner's `animate`.
+   */
+  blocked?: boolean;
 }) {
   if (state === 'idle' && pending === 0) return null;
   const label = state[0].toUpperCase() + state.slice(1);
@@ -29,7 +34,11 @@ export function ActivityStatus({ state, metrics, pending = 0 }: {
   return (
     <Box paddingX={2} marginTop={1}>
       {active ? (
-        <Spinner label={state === 'loading' ? 'loading' : state} inline />
+        <Spinner
+          label={blocked ? 'waiting for you' : state === 'loading' ? 'loading' : state}
+          animate={!blocked}
+          inline
+        />
       ) : (
         <Text color={state === 'error' ? C.error : state === 'cancelled' ? C.warn : C.muted}>
           {label}

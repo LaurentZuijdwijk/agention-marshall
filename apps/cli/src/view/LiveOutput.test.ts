@@ -44,8 +44,9 @@ describe('splitLiveRows', () => {
 });
 
 describe('liveWidth', () => {
-  it('leaves room for the gutter', () => {
-    assert.equal(liveWidth(100), 98);
+  it('leaves room for the root gutter and the assistant glyph', () => {
+    // Two columns held back from the terminal edge, then two for `◆ `.
+    assert.equal(liveWidth(100), 96);
   });
 
   it('stays usable on a very narrow terminal', () => {

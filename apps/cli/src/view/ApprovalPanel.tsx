@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import type { ApprovalRequest, ApprovalDecision } from '@agentionai/marshall-tools';
 import { C, G } from './theme.js';
+import { truncate } from '../format.js';
+import { panelWidth } from './layout.js';
 
 // ── approval select ────────────────────────────────────────────────────────────
 
@@ -67,15 +69,52 @@ function detailColor(line: string): string {
   return C.muted;
 }
 
-const DETAIL_LINES = 20;
+/**
+ * Rows the panel spends on everything that is not the detail block: its own
+ * margin and border, the header, the description and its margin, the detail
+ * block's margin, and the six the select costs (margin, three options, margin,
+ * hint).
+ *
+ * Counted rather than measured because the budget has to be known *before* the
+ * frame is rendered — see view/layout.ts for why it has to be known at all.
+ */
+export const APPROVAL_CHROME_ROWS = 14;
 
-export function ApprovalPanel({ request, pending, onSelect }: {
+/**
+ * The slice of the detail worth showing, given the rows available.
+ *
+ * The head, not the tail: a diff or a command reads from the top, and the first
+ * line is the one that says what this is. When it does not all fit, one row goes
+ * to saying so — silently showing two thirds of a diff is the one outcome an
+ * approval prompt cannot afford.
+ */
+export function detailWindow(lines: string[], budget: number): { shown: string[]; hidden: number } {
+  // No budget means no room to say there is more either. Reporting `hidden` here
+  // would render the notice as a row outside the budget, which is the whole
+  // thing being avoided — a panel one row taller than it promised is a frame one
+  // row taller than the viewport. Only reachable on a terminal already too short
+  // to show an approval; see MIN_TERMINAL_ROWS.
+  if (budget <= 0) return { shown: [], hidden: 0 };
+  if (lines.length <= budget) return { shown: lines, hidden: 0 };
+  const shown = lines.slice(0, budget - 1);
+  return { shown, hidden: lines.length - shown.length };
+}
+
+export function ApprovalPanel({ request, pending, columns, rows, onSelect }: {
   request: ApprovalRequest;
   pending: number;
+  /** Terminal width, so every line can be cut to exactly one row. */
+  columns: number;
+  /** Rows this panel may occupy in total — see panelLayout. */
+  rows: number;
   onSelect: (d: ApprovalDecision) => void;
 }) {
-  const lines = request.detail.split('\n');
-  const overflow = lines.length - DETAIL_LINES;
+  const width = panelWidth(columns);
+  // The two optional provenance rows are part of the chrome when they render.
+  const chrome = APPROVAL_CHROME_ROWS
+    + (request.source?.kind === 'mcp' ? 1 : 0)
+    + (request.caller ? 1 : 0);
+  const { shown, hidden } = detailWindow(request.detail.split('\n'), rows - chrome);
 
   return (
     <Box flexDirection="column" borderStyle="round" borderColor={C.warn} paddingX={1} marginY={1}>
@@ -84,8 +123,12 @@ export function ApprovalPanel({ request, pending, onSelect }: {
         {pending > 1 && <Text color={C.faint}>  {pending} queued</Text>}
       </Box>
 
+      {/* Everything below is cut to one row rather than wrapped. A row budget
+          only holds while one line renders as one row, and the strings here are
+          shell commands, diff hunks and MCP-supplied text — all of them
+          routinely wider than the terminal. */}
       <Box marginTop={1}>
-        <Text color={C.tool} bold>{request.description}</Text>
+        <Text color={C.tool} bold>{truncate(request.description, width)}</Text>
       </Box>
 
       {/* Provenance, and the only warning the user gets. A builtin tool is code
@@ -95,7 +138,7 @@ export function ApprovalPanel({ request, pending, onSelect }: {
       {request.source?.kind === 'mcp' && (
         <Box>
           <Text color={C.warn}>
-            {G.warn} remote tool from the {request.source.server} MCP server
+            {truncate(`${G.warn} remote tool from the ${request.source.server} MCP server`, width)}
           </Text>
         </Box>
       )}
@@ -106,16 +149,16 @@ export function ApprovalPanel({ request, pending, onSelect }: {
       {request.caller && (
         <Box>
           <Text color={C.faint}>
-            requested by {request.caller.id ?? request.caller.role} {G.bullet} {request.caller.model}
+            {truncate(`requested by ${request.caller.id ?? request.caller.role} ${G.bullet} ${request.caller.model}`, width)}
           </Text>
         </Box>
       )}
 
       <Box marginTop={1} flexDirection="column">
-        {lines.slice(0, DETAIL_LINES).map((line, i) => (
-          <Text key={i} color={detailColor(line)}>{line}</Text>
+        {shown.map((line, i) => (
+          <Text key={i} color={detailColor(line)}>{truncate(line, width)}</Text>
         ))}
-        {overflow > 0 && <Text color={C.faint}>… {overflow} more lines</Text>}
+        {hidden > 0 && <Text color={C.faint}>… {hidden} more lines</Text>}
       </Box>
 
       <ApprovalSelect onSelect={onSelect} />

@@ -2,6 +2,7 @@ import React from 'react';
 import { Box, Text } from 'ink';
 import { C, G } from './theme.js';
 import { clampToRows } from '../format.js';
+import { safeWidth } from './layout.js';
 
 /**
  * Everything in the non-static region besides the prompt: the reasoning buffer
@@ -17,9 +18,17 @@ import { clampToRows } from '../format.js';
  *  border + line + border), its hint, and the assistant row's gutter and margin. */
 const STREAM_RESERVE_ROWS = 10;
 
-/** Wrapping width for the live text, given the terminal's columns. */
+/**
+ * Wrapping width for the live text, given the terminal's columns: the root's
+ * own gutter, then two more for the `◆ ` in the left column.
+ *
+ * It has to match what Ink will actually do, not merely be conservative. This
+ * width is what `clampToRows` counts rows with, so a width wider than reality
+ * under-counts them, and the block quietly overruns the budget that keeps the
+ * live region inside the viewport.
+ */
 export function liveWidth(columns: number): number {
-  return Math.max(20, columns - 2);
+  return Math.max(20, safeWidth(columns) - 2);
 }
 
 /**

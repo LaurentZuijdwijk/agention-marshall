@@ -18,6 +18,7 @@ import { PromptFrame } from './view/PromptFrame.js';
 import { InputPrompt } from './view/InputPrompt.js';
 import { LiveOutput } from './view/LiveOutput.js';
 import { ActivityStatus } from './view/ActivityStatus.js';
+import { panelLayout, safeWidth } from './view/layout.js';
 import type { Message } from './view/message.js';
 import { useTranscript } from './hooks/useTranscript.js';
 import { useApprovals } from './hooks/useApprovals.js';
@@ -546,12 +547,36 @@ export function App({
 
   const accepting = mode.type === 'idle' || mode.type === 'running' || mode.type === 'login-pending' || mode.type === 'approval';
 
+  // Everything below <Static> shares one height budget, and blowing it makes Ink
+  // repaint the whole screen — transcript included — on every render. That is
+  // the flicker, the dead scrollback and the doubled rows all at once, so the
+  // panels are given their rows explicitly rather than sized to their content.
+  // See view/layout.ts.
+  const columns = stdout?.columns ?? 80;
+  const rows = stdout?.rows ?? 24;
+  const modal = mode.type === 'approval' || mode.type === 'question';
+  const panel = panelLayout(rows);
+
   return (
-    <Box flexDirection="column">
-      {/* Held back until boot finishes so the static header can never be on
-          screen at the same time as the animated one. */}
+    // The width is load-bearing, not cosmetic. Nothing may reach the terminal's
+    // last column: Ink erases the frame by rewinding as many rows as the output
+    // has lines, so a line the terminal had to wrap costs a row the rewind never
+    // gets back, and the top of the frame is left on screen — one stale row per
+    // frame, which is the duplicated output. See view/layout.ts.
+    <Box flexDirection="column" width={safeWidth(columns)}>
+      {/* The same width again, per row, because <Static> does not inherit it:
+          Ink lays static items out in their own pass, against the full terminal.
+          Without this the committed transcript rendered past the last column and
+          was hard-wrapped mid-word while the live region below it stayed inside.
+
+          Items are held back until boot finishes, so the static header can never
+          be on screen at the same time as the animated one. */}
       <Static key={transcript.epoch} items={booting ? NO_MESSAGES : transcript.messages}>
-        {(msg) => <MessageRow key={msg.key} msg={msg} />}
+        {(msg) => (
+          <Box key={msg.key} flexDirection="column" width={safeWidth(columns)}>
+            <MessageRow msg={msg} columns={safeWidth(columns)} />
+          </Box>
+        )}
       </Static>
 
       {booting && (
@@ -569,29 +594,40 @@ export function App({
       <LiveOutput
         stream={transcript.stream}
         reasoning={transcript.reasoning}
-        columns={stdout?.columns ?? 80}
-        rows={stdout?.rows ?? 24}
+        columns={columns}
+        rows={rows}
       />
 
       {mode.type === 'approval' && (
-        <ApprovalPanel request={mode.request} pending={approvals.pending} onSelect={resolveApproval} />
+        <ApprovalPanel
+          request={mode.request}
+          pending={approvals.pending}
+          columns={columns}
+          rows={panel.rows}
+          onSelect={resolveApproval}
+        />
       )}
       {mode.type === 'question' && (
         <QuestionPanel
           request={mode.request}
           pending={questions.pending}
+          columns={columns}
+          rows={panel.rows}
           onAnswer={(answer) => { const next = questions.resolve(answer); transcript.push('user', answer); setMode(next?.show ? { type: 'question', request: next.show } : { type: 'running' }); }}
           onCancel={() => { const next = questions.resolve(NO_ANSWER); setMode(next?.show ? { type: 'question', request: next.show } : { type: 'running' }); }}
         />
       )}
 
       {!booting && (
-        <ActivityStatus state={activity} metrics={metrics} pending={pendingPrompts.length} />
+        <ActivityStatus state={activity} metrics={metrics} pending={pendingPrompts.length} blocked={modal} />
       )}
 
       {wizard}
 
-      {!booting && accepting && !wizard && (
+      {/* Typing under an approval queues a prompt rather than answering it, so
+          on a terminal too short to hold both the panel wins and the input goes.
+          Esc still interrupts, and the approval keys still work. */}
+      {!booting && accepting && !wizard && (!modal || panel.showPrompt) && (
         <InputPrompt
           kind={mode.type === 'login-pending' ? 'login' : steering ? 'steering' : 'task'}
           value={input}

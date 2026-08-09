@@ -3,9 +3,21 @@ import { Box, Text, useInput } from 'ink';
 import { TextInput } from './TextInput.js';
 import type { AskRequest } from '@agentionai/marshall-tools';
 import { C, G } from './theme.js';
+import { truncate, windowRange } from '../format.js';
+import { panelWidth } from './layout.js';
 
-export function QuestionPanel({ request, pending, onAnswer, onCancel }: {
-  request: AskRequest; pending: number; onAnswer: (answer: string) => void; onCancel: () => void;
+/** Margin, border, the question, the hint, border, margin. */
+const QUESTION_CHROME_ROWS = 6;
+
+export function QuestionPanel({ request, pending, columns, rows, onAnswer, onCancel }: {
+  request: AskRequest;
+  pending: number;
+  /** Terminal width, so an option too long to fit is cut to one row. */
+  columns: number;
+  /** Rows this panel may occupy in total — see panelLayout. */
+  rows: number;
+  onAnswer: (answer: string) => void;
+  onCancel: () => void;
 }) {
   const options = [...(request.options ?? []), ...(request.allowFreeText ? ['Other…'] : [])];
   const [cursor, setCursor] = useState(0);
@@ -30,9 +42,15 @@ export function QuestionPanel({ request, pending, onAnswer, onCancel }: {
       else onAnswer(request.multiSelect ? selected.concat(selected.includes(cursor) ? [] : [cursor]).sort().map(i => options[i]).join(', ') : options[cursor]);
     }
   });
+  // One row per option, and only as many as the terminal has room for — the
+  // panel has to stay shorter than the viewport (see view/layout.ts). The window
+  // follows the cursor, so an option off the end is still reachable by arrowing
+  // to it.
+  const width = panelWidth(columns);
+  const { start, end } = windowRange(options.length, cursor, Math.max(1, rows - QUESTION_CHROME_ROWS));
   return <Box flexDirection="column" borderStyle="round" borderColor={C.accent} paddingX={1} marginY={1}>
-    <Text color={C.accent} bold>{G.prompt} {request.question}{pending > 1 ? `  (${pending} queued)` : ''}</Text>
-    {free ? <TextInput value={freeValue} onChange={setFreeValue} onSubmit={onAnswer} /> : options.map((option, i) => <Text key={i} color={i === cursor ? C.accent : C.muted} bold={i === cursor}>{i === cursor ? `${G.prompt} ` : '  '}{i + 1}. {option}{request.multiSelect && selected.includes(i) ? ' ✓' : ''}</Text>)}
+    <Text color={C.accent} bold>{truncate(`${G.prompt} ${request.question}${pending > 1 ? `  (${pending} queued)` : ''}`, width)}</Text>
+    {free ? <TextInput value={freeValue} onChange={setFreeValue} onSubmit={onAnswer} /> : options.slice(start, end).map((option, i) => { const index = start + i; return <Text key={index} color={index === cursor ? C.accent : C.muted} bold={index === cursor}>{truncate(`${index === cursor ? `${G.prompt} ` : '  '}${index + 1}. ${option}${request.multiSelect && selected.includes(index) ? ' ✓' : ''}`, width)}</Text>; })}
     <Text color={C.faint}>↑↓ move · enter select · esc cancel</Text>
   </Box>;
 }
