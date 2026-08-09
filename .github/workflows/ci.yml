@@ -18,6 +18,9 @@ jobs:
 
       - run: npm ci
 
+      - name: Build (tools + engine emit dist that typechecking resolves)
+        run: npm run build -w packages/tools -w packages/engine
+
       - name: Typecheck
         run: |
           npx tsc --noEmit -p packages/tools/tsconfig.json
