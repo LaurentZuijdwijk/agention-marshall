@@ -1,5 +1,17 @@
 # @agentionai/marshall-cli
 
+## 0.14.2
+
+### Patch Changes
+
+- Ship the engine's OpenRouter app attribution.
+
+  No CLI code changes: requests on an `openrouter` profile now carry
+  `HTTP-Referer`, `X-OpenRouter-Title` and `X-OpenRouter-Categories`, which the
+  engine sets. The CLI's engine dependency is `*`, so a fresh install would have
+  picked that up on its own — this release exists so an already-installed CLI
+  gets it from an upgrade rather than only from a reinstall.
+
 ## 0.14.1
 
 ### Patch Changes
