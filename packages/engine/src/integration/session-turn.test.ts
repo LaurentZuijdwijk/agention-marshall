@@ -560,3 +560,30 @@ test('a non-streaming turn still gets a rate', async (t) => {
   assert.ok(last && last.type === 'usage');
   assert.ok(last.rates?.output !== undefined && last.rates.output > 0);
 });
+
+test('usage is read whichever chunk the provider hangs it on', async (t) => {
+  // OpenRouter attaches usage to the chunk carrying `finish_reason` rather than
+  // to a trailing choices-less one. Reading only the latter is what had every
+  // OpenRouter turn reporting ↑0 ↓0 while llama.cpp reported fine — the counts
+  // were never missing, just looked for in the wrong place.
+  const root = tempRoot();
+  const fake = await startFakeProvider({
+    text: 'Done.',
+    usageOnFinalChunk: true,
+    usage: { promptTokens: 2871, completionTokens: 29 },
+  });
+  t.after(() => fake.close());
+
+  const rec = recorder();
+  const session = makeSession(root, fake, rec.client);
+  t.after(() => session.dispose());
+
+  await session.run('hello');
+
+  const last = rec.events.filter(e => e.type === 'usage').at(-1);
+  assert.ok(last && last.type === 'usage', 'a turn that spent tokens has to report them');
+  assert.deepEqual(
+    { inputTokens: last.turn.inputTokens, outputTokens: last.turn.outputTokens },
+    { inputTokens: 2871, outputTokens: 29 },
+  );
+});

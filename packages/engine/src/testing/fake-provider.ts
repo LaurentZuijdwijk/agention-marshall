@@ -46,6 +46,16 @@ export interface ScriptedTurn {
      */
     reasoningTokens?: number;
   };
+  /**
+   * Put the usage block on the last *content* chunk rather than on a trailing
+   * choices-less one.
+   *
+   * Both layouts are real: the spec's `stream_options.include_usage` produces
+   * the trailing chunk, and OpenRouter attaches usage to the chunk carrying
+   * `finish_reason`. Reading only the first layout is why an OpenRouter turn
+   * reported ↑0 ↓0 while llama.cpp reported fine.
+   */
+  usageOnFinalChunk?: boolean;
   /** Hold the response open this long before answering — for interrupt tests. */
   delayMs?: number;
   /**
@@ -226,9 +236,14 @@ async function streamTurn(res: ServerResponse, turn: ScriptedTurn, model: string
     }
   }
 
-  chunk([{ index: 0, delta: {}, finish_reason: calls.length > 0 ? 'tool_calls' : 'stop' }]);
-  // Usage rides a choices-less final chunk, per `stream_options.include_usage`.
-  chunk([], { usage: usageBlock(turn) });
+  const finish = [{ index: 0, delta: {}, finish_reason: calls.length > 0 ? 'tool_calls' : 'stop' }];
+  if (turn.usageOnFinalChunk) {
+    chunk(finish, { usage: usageBlock(turn) });
+  } else {
+    chunk(finish);
+    // Usage rides a choices-less final chunk, per `stream_options.include_usage`.
+    chunk([], { usage: usageBlock(turn) });
+  }
   res.write('data: [DONE]\n\n');
   res.end();
 }

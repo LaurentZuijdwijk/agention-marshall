@@ -24,7 +24,7 @@
     "test": "node --import tsx/esm --test 'src/**/*.test.ts'"
   },
   "dependencies": {
-    "@agentionai/agents": "^1.2.0",
+    "@agentionai/agents": "^1.3.0",
     "@agentionai/marshall-tools": "*",
     "@anthropic-ai/sdk": "^0.71.2",
     "@google/generative-ai": "^0.24.0",
