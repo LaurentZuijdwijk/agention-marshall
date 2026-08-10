@@ -8,8 +8,10 @@
   "scripts": {
     "cli": "npm run build -w packages/tools -w packages/engine && node --import tsx/esm apps/cli/src/index.tsx",
     "build": "npm run build -w packages/tools -w packages/engine",
+    "build:all": "npm run build -w packages/tools -w packages/engine -w apps/cli",
     "pretest": "npm run build",
-    "test": "npm run test --workspaces --if-present"
+    "test": "npm run test --workspaces --if-present",
+    "release": "npm test && npm run build:all && changeset publish"
   },
   "devDependencies": {
     "@changesets/cli": "^2.31.0"
