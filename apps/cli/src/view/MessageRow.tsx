@@ -1,7 +1,7 @@
 import React from 'react';
 import { Box, Text } from 'ink';
 import { Header, STARTUP_TAGLINES } from './Banner.js';
-import { Markdown } from './Markdown.js';
+import { MarkdownView } from './MarkdownView.js';
 import { C, G } from './theme.js';
 import { AssistantText } from './AssistantText.js';
 import { truncate } from '../format.js';
@@ -90,7 +90,7 @@ export function MessageRow({ msg, columns = process.stdout.columns ?? 80 }: {
             <Text color={C.warn} bold>{msg.title}</Text>
             {msg.note && <Text color={C.faint}>  {msg.note}</Text>}
           </Box>
-          <Markdown text={msg.content} />
+          <MarkdownView text={msg.content} />
         </Box>
       );
 

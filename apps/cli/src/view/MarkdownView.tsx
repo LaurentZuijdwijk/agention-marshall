@@ -101,7 +101,7 @@ function BlockRow({ block }: { block: Block }) {
 }
 
 /** Render markdown-ish text. See `markdown.ts` for what is and isn't supported. */
-export function Markdown({ text }: { text: string }) {
+export function MarkdownView({ text }: { text: string }) {
   const blocks = parseBlocks(text);
   return (
     <Box flexDirection="column">

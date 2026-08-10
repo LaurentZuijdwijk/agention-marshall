@@ -1,6 +1,6 @@
 import React from 'react';
 import { Box, Text } from 'ink';
-import { Markdown } from './Markdown.js';
+import { MarkdownView } from './MarkdownView.js';
 import { C, G } from './theme.js';
 
 /**
@@ -13,7 +13,7 @@ export function AssistantText({ text }: { text: string }) {
     <Box marginBottom={1}>
       <Text color={C.accent}>{G.assistant} </Text>
       <Box flexDirection="column" flexGrow={1}>
-        <Markdown text={text} />
+        <MarkdownView text={text} />
       </Box>
     </Box>
   );
