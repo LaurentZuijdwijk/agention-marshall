@@ -71,9 +71,18 @@ function Wordmark({ rows, reveal, sweep }: { rows: string[]; reveal: number; swe
  *  see the note on `Banner` about the two keeping identical geometry. `dim`
  *  during the reveal, so it settles in with `Meta` rather than arriving whole
  *  while the wordmark is still being written. */
-function Tagline({ dim }: { dim?: boolean }) {
+export const STARTUP_TAGLINES = [
+  'Build me software, make no mistakes',
+  'Build fast. Break nothing.',
+  'Ship code. Fear consequences.',
+  'No bugs. No excuses.',
+  'Deploy boldly. Roll back quietly.',
+  'Turn caffeine into infrastructure.',
+] as const;
+
+function Tagline({ text, dim }: { text: string; dim?: boolean }) {
   return (
-    <Text color={dim ? C.faint : C.muted} italic>Build me software, make no mistakes</Text>
+    <Text color={dim ? C.faint : C.muted} italic>{text}</Text>
   );
 }
 
@@ -172,11 +181,18 @@ function Meta({ meta, dim, showKeys = true }: { meta: HeaderMeta; dim?: boolean;
  * what `/clear` does, and which would throw away the conversation above — or
  * to print something that reads as a continuation. This is that.
  */
-export function Header({ meta, columns = process.stdout.columns ?? 80, compact = false }: {
+export function Header({ meta, columns = process.stdout.columns ?? 80, compact = false, tagline }: {
   meta: HeaderMeta;
   columns?: number;
   compact?: boolean;
+  tagline?: string;
 }) {
+  // Pin the fallback at first render, same as the animated banner below — a
+  // re-render must not roll a fresh sentence. Callers hand the session's pick in
+  // via `tagline`, so this fallback normally never fires.
+  const [effectiveTagline] = useState(
+    () => tagline ?? STARTUP_TAGLINES[Math.floor(Math.random() * STARTUP_TAGLINES.length)],
+  );
   if (compact) {
     return (
       <Box flexDirection="column" marginTop={1} marginBottom={1}>
@@ -194,7 +210,7 @@ export function Header({ meta, columns = process.stdout.columns ?? 80, compact =
     <Box flexDirection="column" marginBottom={1}>
       <Wordmark rows={rows} reveal={1} sweep={-9999} />
       <Rule width={rows[0].length} reveal={1} />
-      <Tagline />
+      <Tagline text={effectiveTagline} />
       <Box marginTop={1}><Meta meta={meta} /></Box>
     </Box>
   );
@@ -212,12 +228,19 @@ const TOTAL_FRAMES  = REVEAL_FRAMES + SHIMMER_FRAMES;
  * final frame is swapped for the static header the wordmark simply locks in
  * place instead of jumping.
  */
-export function Banner({ meta, onDone, columns = process.stdout.columns ?? 80 }: {
+export function Banner({ meta, onDone, columns = process.stdout.columns ?? 80, tagline }: {
   meta: HeaderMeta;
   onDone: () => void;
   columns?: number;
+  tagline?: string;
 }) {
   const rows = pickLogo(columns);
+  // Pick once at mount — the banner re-renders every animation frame, and
+  // computing this in the render body would draw a new random sentence each
+  // frame, flashing through the whole list.
+  const [selectedTagline] = useState(
+    () => tagline ?? STARTUP_TAGLINES[Math.floor(Math.random() * STARTUP_TAGLINES.length)],
+  );
   const width = rows[0].length;
 
   const [frame, setFrame] = useState(0);
@@ -252,7 +275,7 @@ export function Banner({ meta, onDone, columns = process.stdout.columns ?? 80 }:
     <Box flexDirection="column" marginBottom={1}>
       <Wordmark rows={rows} reveal={reveal} sweep={sweep} />
       <Rule width={width} reveal={reveal} />
-      <Tagline dim={revealing} />
+      <Tagline text={selectedTagline} dim={revealing} />
       <Box marginTop={1}>
         {revealing
           // Keep the block reserved so the header doesn't pop the layout down.

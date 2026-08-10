@@ -1,6 +1,6 @@
 import React from 'react';
 import { Box, Text } from 'ink';
-import { Header } from './Banner.js';
+import { Header, STARTUP_TAGLINES } from './Banner.js';
 import { Markdown } from './Markdown.js';
 import { C, G } from './theme.js';
 import { AssistantText } from './AssistantText.js';
@@ -70,7 +70,7 @@ export function MessageRow({ msg, columns = process.stdout.columns ?? 80 }: {
 }) {
   switch (msg.role) {
     case 'header':
-      return msg.meta ? <Header meta={msg.meta} compact={msg.compact} /> : null;
+      return msg.meta ? <Header meta={msg.meta} compact={msg.compact} tagline={msg.tagline} /> : null;
 
     case 'user':
       return (

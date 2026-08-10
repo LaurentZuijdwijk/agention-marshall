@@ -7,7 +7,7 @@ import type { ApprovalDecision } from '@agentionai/marshall-tools';
 import { Setup } from './view/Setup.js';
 import { McpSetup } from './view/McpSetup.js';
 import type { McpScope } from './view/McpSetup.js';
-import { Banner } from './view/Banner.js';
+import { Banner, STARTUP_TAGLINES } from './view/Banner.js';
 import type { HeaderMeta } from './view/Banner.js';
 import { C, G } from './view/theme.js';
 import { shortenPath } from './format.js';
@@ -156,8 +156,14 @@ export function App({
     fastProvider: fast?.provider,
     safety: SAFETY_LEVEL_LABELS[safetyLevel],
   });
+  // The session's tagline, chosen once: the animated banner and the static header
+  // that replaces it must settle on the same sentence, so the pick lives here and
+  // is handed to both rather than rolled twice.
+  const [sessionTagline] = useState(
+    () => STARTUP_TAGLINES[Math.floor(Math.random() * STARTUP_TAGLINES.length)],
+  );
   const headerMessage = (deep: AgentProfile, fast?: AgentProfile, compact = false): Message =>
-    ({ key: transcript.nextKey(), role: 'header', content: '', meta: headerMeta(deep, fast), compact });
+    ({ key: transcript.nextKey(), role: 'header', content: '', meta: headerMeta(deep, fast), compact, tagline: sessionTagline });
 
   // ── engine client ──────────────────────────────────────────────────────────
   //
@@ -608,6 +614,7 @@ export function App({
       {booting && (
         <Banner
           meta={headerMeta(agentProfile, initialFastProfile)}
+          tagline={sessionTagline}
           onDone={() => {
             transcript.reset([headerMessage(agentProfile, initialFastProfile)]);
             setBooting(false);

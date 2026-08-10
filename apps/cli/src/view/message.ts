@@ -19,6 +19,8 @@ export interface Message {
    *  after a mid-session model switch, where the full banner would appear as a
    *  second logo rather than replacing the first. */
   compact?: boolean;
+  /** Startup tagline chosen for this session's banner. */
+  tagline?: string;
   /** Tool name, or the heading above a markdown block. */
   title?: string;
   /** Dim aside next to the title. */

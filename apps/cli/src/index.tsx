@@ -45,6 +45,13 @@ installCrashLogging(workspaceRoot);
 // result as a transcript row once the banner is done.
 const updateCheck = checkForUpdate();
 
+// Start with a clean visible terminal, like Ctrl-L, so the shell prompt and
+// previous command output do not sit above the session banner. Keep scrollback
+// intact and avoid emitting control codes when stdout is redirected.
+if (process.stdout.isTTY) {
+  process.stdout.write('\u001B[2J\u001B[H');
+}
+
 let inkInstance: ReturnType<typeof render> | undefined;
 let replayTranscript: () => void = () => {};
 installResizeRedraw(() => inkInstance, () => replayTranscript());
