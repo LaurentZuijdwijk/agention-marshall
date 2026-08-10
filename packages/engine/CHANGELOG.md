@@ -1,5 +1,17 @@
 # @agentionai/marshall-engine
 
+## 0.13.2
+
+### Patch Changes
+
+- Improve concurrent approval handling and bound tool transcripts included in history compression prompts.
+
+## 0.13.1
+
+### Patch Changes
+
+- Improve concurrent approval handling so “always approve” cascades to matching queued tool calls, and bound tool transcripts passed to history compression prompts.
+
 ## 0.13.0
 
 ### Minor Changes

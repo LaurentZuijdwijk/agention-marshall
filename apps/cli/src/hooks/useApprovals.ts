@@ -12,9 +12,12 @@ interface PendingApproval {
  * Returned rather than applied, so this hook has no opinion about modes or
  * transcripts — the caller decides what "next request" or "queue empty" means.
  */
-export type QueueEffect =
-  | { show: ApprovalRequest }
-  | { show: null };
+export interface QueueEffect {
+  /** The request to display now, or null when the queue is empty. */
+  show: ApprovalRequest | null;
+  /** How many queued requests the decision answered besides the front one. */
+  cascaded: number;
+}
 
 export interface Approvals {
   /** How many are waiting, including the one on screen. */
@@ -24,7 +27,7 @@ export interface Approvals {
    * display, or null when one is already showing.
    */
   enqueue(request: ApprovalRequest): { promise: Promise<ApprovalDecision>; show: ApprovalRequest | null };
-  /** Resolve the front request; returns what to show next. */
+  /** Resolve the front request; returns what to show next and cascade count. */
   resolve(decision: ApprovalDecision): QueueEffect | null;
   /** Deny everything queued. Returns how many were denied (0 if none). */
   denyAll(): number;
@@ -56,7 +59,19 @@ export function createApprovalQueue(): Approvals {
       const item = queue.shift();
       if (!item) return null;
       item.resolve(decision);
-      return queue.length > 0 ? { show: queue[0].request } : { show: null };
+
+      // "Always approve this tool" must answer concurrent calls already queued
+      // for that tool, not just future calls handled by the engine's session list.
+      let cascaded = 0;
+      if (decision === 'always') {
+        for (let i = queue.length - 1; i >= 0; i--) {
+          if (queue[i].request.toolName !== item.request.toolName) continue;
+          queue.splice(i, 1)[0].resolve('approve');
+          cascaded++;
+        }
+      }
+
+      return { show: queue.length > 0 ? queue[0].request : null, cascaded };
     },
 
     denyAll(): number {

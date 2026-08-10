@@ -43,6 +43,26 @@ const COMPRESSION_STEP_TOKENS = 3_000;
  */
 const CONTEXT_ERROR_MARGIN = 1_024;
 
+/**
+ * Compression is already a lossy operation. Do not send raw tool transcripts
+ * back through the model: a single file/search result can be larger than the
+ * local model's entire context window and makes every bounded reduce step
+ * expensive. Keep the shape of each tool result, but leave the actual details
+ * retrievable from the main history/masking tool.
+ */
+const TOOL_PROMPT_LIMIT = 1_200;
+const SUMMARY_PROMPT_LIMIT = 24_000;
+
+export function compactSummaryPrompt(prompt: string): string {
+  const compacted = prompt.split('\n').map((line) => {
+    if (!/^\[tool\]:/i.test(line) || line.length <= TOOL_PROMPT_LIMIT) return line;
+    return `${line.slice(0, TOOL_PROMPT_LIMIT)} …[tool output omitted during compression]`;
+  }).join('\n');
+
+  if (compacted.length <= SUMMARY_PROMPT_LIMIT) return compacted;
+  return `${compacted.slice(0, SUMMARY_PROMPT_LIMIT)}\n[older compression input omitted]`;
+}
+
 export class CompressionManager {
   private ready = false;
   /** The plugin can only be added once — History has no removal. */
@@ -131,7 +151,7 @@ export class CompressionManager {
       execute: (prompt: string) => {
         const agent = this.summaryAgent;
         if (!agent) throw new Error('no summariser is configured');
-        return agent.execute(prompt);
+        return agent.execute(compactSummaryPrompt(prompt));
       },
     } as unknown as BaseAgent<string, string>));
   }

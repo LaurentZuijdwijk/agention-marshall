@@ -702,6 +702,17 @@ test('reduceToTarget shrinks history in steps no larger than COMPRESSION_STEP_TO
   session.dispose();
 });
 
+test('compactSummaryPrompt bounds raw tool output and total prompt size', async () => {
+  const { compactSummaryPrompt } = await import('./session-compression.js');
+  const toolLine = `[tool]: ${'x'.repeat(2_000)}`;
+  const prompt = compactSummaryPrompt(`${toolLine}
+[assistant]: keep this decision`);
+
+  assert.ok(prompt.length < 24_100, 'compression prompts should have a hard size ceiling');
+  assert.match(prompt, /tool output omitted during compression/);
+  assert.match(prompt, /keep this decision/);
+});
+
 // ---------------------------------------------------------------------------
 // contextErrorTarget — size the cut to the measured overage
 //

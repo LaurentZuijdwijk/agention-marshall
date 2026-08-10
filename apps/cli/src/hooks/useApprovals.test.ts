@@ -29,7 +29,7 @@ describe('single approval', () => {
   it('reports an empty queue once the last one is answered', () => {
     const a = queue();
     a.enqueue(req('write_file'));
-    assert.deepEqual(a.resolve('approve'), { show: null });
+    assert.deepEqual(a.resolve('approve'), { show: null, cascaded: 0 });
     assert.equal(a.pending, 0);
   });
 });
@@ -46,8 +46,8 @@ describe('parallel tool use', () => {
     const a = queue();
     a.enqueue(req('edit_file'));
     a.enqueue(req('run_shell'));
-    assert.deepEqual(a.resolve('approve'), { show: req('run_shell') });
-    assert.deepEqual(a.resolve('deny'), { show: null });
+    assert.deepEqual(a.resolve('approve'), { show: req('run_shell'), cascaded: 0 });
+    assert.deepEqual(a.resolve('deny'), { show: null, cascaded: 0 });
   });
 
   it('resolves each caller with its own decision, in order', async () => {
@@ -57,6 +57,30 @@ describe('parallel tool use', () => {
     a.resolve('approve');
     a.resolve('deny');
     assert.deepEqual(await Promise.all([first, second]), ['approve', 'deny']);
+  });
+
+  it('cascades always approval to queued calls of the same tool', async () => {
+    const a = queue();
+    const first = a.enqueue(req('write_file')).promise;
+    const second = a.enqueue(req('write_file')).promise;
+    const third = a.enqueue(req('write_file')).promise;
+
+    assert.deepEqual(a.resolve('always'), { show: null, cascaded: 2 });
+    assert.deepEqual(await Promise.all([first, second, third]), ['always', 'approve', 'approve']);
+    assert.equal(a.pending, 0);
+  });
+
+  it('only cascades matching tools and preserves other queue order', async () => {
+    const a = queue();
+    const first = a.enqueue(req('write_file')).promise;
+    const shell = a.enqueue(req('run_shell')).promise;
+    const third = a.enqueue(req('write_file')).promise;
+
+    assert.deepEqual(a.resolve('always'), { show: req('run_shell'), cascaded: 1 });
+    assert.equal(await first, 'always');
+    assert.equal(await third, 'approve');
+    assert.deepEqual(a.resolve('deny'), { show: null, cascaded: 0 });
+    assert.equal(await shell, 'deny');
   });
 });
 

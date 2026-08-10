@@ -350,7 +350,9 @@ export function App({
   const resolveApproval = (decision: ApprovalDecision) => {
     const next = approvals.resolve(decision);
     if (!next) return;
-    transcript.push('info', APPROVAL_LABELS[decision]);
+    transcript.push('info', next.cascaded > 0
+      ? `${APPROVAL_LABELS[decision]} (${next.cascaded + 1} matching actions)`
+      : APPROVAL_LABELS[decision]);
     setMode(next.show ? { type: 'approval', request: next.show } : { type: 'running' });
   };
 
