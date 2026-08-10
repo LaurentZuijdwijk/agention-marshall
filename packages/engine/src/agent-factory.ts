@@ -22,6 +22,22 @@ class OpenRouterAgent extends OpenAICompatibleAgent {
 }
 
 /**
+ * App attribution for OpenRouter — the URL is the identifier the rankings and
+ * per-app analytics key on, the title is only the display name, and neither
+ * carries anything about the request itself.
+ *
+ * Sent for every `openrouter` profile, including ones pointed at a proxy via
+ * `host`: a gateway in front of OpenRouter forwards them on, and anything else
+ * ignores headers it doesn't know.
+ */
+export const OPENROUTER_ATTRIBUTION: Readonly<Record<string, string>> = {
+  'HTTP-Referer': 'https://marshall.agention.ai',
+  'X-OpenRouter-Title': 'Marshall',
+  // `cli-agent` is OpenRouter's marketplace category for terminal coding assistants.
+  'X-OpenRouter-Categories': 'cli-agent',
+};
+
+/**
  * Which optional parts of the belt the agent actually has.
  *
  * The system prompt is built from this rather than being a fixed string,
@@ -264,6 +280,7 @@ export async function createAgent(
         return new OpenRouterAgent({
           ...base,
           baseURL: routerHost,
+          defaultHeaders: { ...OPENROUTER_ATTRIBUTION },
         } as OpenAICompatibleConfig, history);
       }
       default: {

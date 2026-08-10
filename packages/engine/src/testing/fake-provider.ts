@@ -76,6 +76,8 @@ export interface RecordedRequest {
   tools: string[];
   /** The whole body, for anything the fields above don't cover. */
   body: Record<string, unknown>;
+  /** Request headers, lowercased by Node — for attribution and auth assertions. */
+  headers: Record<string, string>;
 }
 
 export interface FakeProvider {
@@ -126,6 +128,7 @@ export async function startFakeProvider(...turns: ScriptedTurn[]): Promise<FakeP
         ? body.tools.map((t: any) => String(t?.function?.name ?? ''))
         : [],
       body,
+      headers: flattenHeaders(req.headers),
     });
 
     const turn = queue.shift() ?? EXHAUSTED;
@@ -257,6 +260,16 @@ function split(text: string, size = 8): string[] {
 }
 
 // ── plumbing ──────────────────────────────────────────────────────────────────
+
+/** Repeated headers keep only the last value — no caller here sends any. */
+function flattenHeaders(headers: IncomingMessage['headers']): Record<string, string> {
+  const flat: Record<string, string> = {};
+  for (const [name, value] of Object.entries(headers)) {
+    if (value === undefined) continue;
+    flat[name] = Array.isArray(value) ? value[value.length - 1] : value;
+  }
+  return flat;
+}
 
 function send(res: ServerResponse, status: number, body: unknown): void {
   const payload = JSON.stringify(body);
