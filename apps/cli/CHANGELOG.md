@@ -1,5 +1,60 @@
 # @agentionai/marshall-cli
 
+## 0.14.0
+
+### Minor Changes
+
+- Show token spend, cost and throughput in the status row.
+
+  The row previously read "metrics unavailable" for the whole of every session:
+  the usage event was gated behind the `/tokens` preference, which defaults to
+  off. That gate made sense when the event pushed an opt-in transcript row, but it
+  had since been repointed at an always-visible footer, which then spent its space
+  saying its numbers were missing.
+
+  It now fills in during the turn and reads, for example:
+
+      ↑17,288  ↓1,500 (283 thinking) ~301/s  ·  17.0s  ·  3.8s→1st  ·  $0.0005
+
+  Counts include every sub-agent the turn fanned out to; the rate describes the
+  agent being watched, which is why the two sit side by side. Thinking is shown as
+  a share of output rather than an addition to it, because that is how it is
+  billed, and because without it the rate and the count do not appear to agree.
+
+  `/tokens` becomes a report rather than a toggle — session total plus a line per
+  role and model — since the toggle had nothing left to hide. Costs come from
+  OpenRouter's public catalogue, fetched once in the background and only when a
+  profile actually routes through it.
+
+### Patch Changes
+
+- Show more of the diff in the approval panel.
+
+  The detail window was spending its rows on things that were not the diff. On a
+  short terminal two of the four visible rows were `--- path` and `+++ path`,
+  directly under a description line that already named the file, and most of the
+  diff was cut.
+
+  The path header is stripped at render, a diff is windowed around its first
+  change rather than its first line — the context kept either side could otherwise
+  push the change itself out of frame — and two blank rows that sat inside blocks
+  are reclaimed. Anything that is not a diff still reads from the top, because in
+  a shell command a leading `-` is a flag and the first word is what says what
+  will run.
+
+- Rotate the startup tagline, and open on a clean screen.
+
+  Six taglines instead of one, picked once per session and shared by the animated
+  banner and the static header that replaces it, so the sentence does not change
+  as the reveal locks into place.
+
+  Startup also clears the visible terminal, like Ctrl-L, so the shell prompt and
+  whatever ran before it do not sit above the banner. Scrollback is kept, and
+  nothing is emitted when stdout is not a TTY.
+
+- Updated dependencies
+  - @agentionai/marshall-engine@0.12.0
+
 ## 0.13.0
 
 ### Minor Changes

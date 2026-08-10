@@ -1,5 +1,35 @@
 # @agentionai/marshall-engine
 
+## 0.12.0
+
+### Minor Changes
+
+- Report what a session spends: tokens, cost and throughput.
+
+  A new usage tally collects from every agent separately and rolls sub-agents into
+  the turn that fanned them out — the coder's own counter is all a provider hands
+  back, and it makes a turn that spent most of its tokens inside three parallel
+  `context` calls look nearly free. `Session.usageReport()` returns the session
+  total plus a breakdown per role and model, and the `usage` event now carries
+  turn and session rollups, sampled while the turn runs rather than only at the
+  end.
+
+  Cost is computed from prices the client supplies through `Session.setPricing()`.
+  Self-hosted providers are priced at a known zero, so a llama.cpp fast tier
+  alongside a hosted deep tier still totals exactly rather than reporting a floor.
+  A total is omitted rather than shown as `$0.00` when nothing that ran had a
+  published price.
+
+  Throughput comes from `@agentionai/agents` 1.3.0, which times each API call from
+  the inside and sums across a tool-use loop, so tool execution and approval waits
+  are excluded. Two corrections on top of the raw figures, both for reasoning
+  models that do not stream their thinking: the output rate divides only the
+  tokens that were actually streamed, and the input rate is withheld when anything
+  was produced off-screen, since time-to-first-token is then mostly generation.
+  The wait is reported as a duration instead.
+
+  Requires `@agentionai/agents` ^1.3.0.
+
 ## 0.11.0
 
 ### Minor Changes
