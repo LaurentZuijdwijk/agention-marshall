@@ -64,7 +64,7 @@ export function LiveOutput({ stream, reasoning, columns, rows }: {
           them in — and it is what lands in <Static> when the turn completes. */}
       {reasoning !== '' && (
         <Box marginBottom={1}>
-          <Text color={C.faint} italic>{clampToRows(reasoning, width, reasoningRows)}</Text>
+          <Text color={C.thinking} italic>{clampToRows(reasoning, width, reasoningRows)}</Text>
         </Box>
       )}
 
@@ -78,7 +78,7 @@ export function LiveOutput({ stream, reasoning, columns, rows }: {
         <Box marginBottom={1}>
           <Text color={C.accent}>{G.assistant} </Text>
           <Box flexDirection="column" flexGrow={1}>
-            <Text color={C.text}>{clampToRows(stream, width, streamRows)}</Text>
+            <Text color={C.output}>{clampToRows(stream, width, streamRows)}</Text>
           </Box>
         </Box>
       )}

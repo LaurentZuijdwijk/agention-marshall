@@ -91,12 +91,12 @@ function BlockRow({ block }: { block: Block }) {
       return (
         <Box>
           <Text color={C.accent}>{'  '.repeat(block.indent)}{block.marker} </Text>
-          <Text color={C.text}><Inline spans={block.spans} /></Text>
+          <Text color={C.output}><Inline spans={block.spans} /></Text>
         </Box>
       );
 
     case 'para':
-      return <Text color={C.text}><Inline spans={block.spans} /></Text>;
+      return <Text color={C.output}><Inline spans={block.spans} /></Text>;
   }
 }
 

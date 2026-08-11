@@ -76,7 +76,7 @@ export function MessageRow({ msg, columns = process.stdout.columns ?? 80 }: {
       return (
         <Box marginTop={1}>
           <Text color={C.user} bold>{G.prompt} </Text>
-          <Text color={C.text} bold>{msg.content}</Text>
+          <Text color={C.user} bold>{msg.content}</Text>
         </Box>
       );
 
@@ -230,8 +230,8 @@ export function MessageRow({ msg, columns = process.stdout.columns ?? 80 }: {
     case 'reasoning':
       return (
         <Box flexDirection="column" marginY={1}>
-          <Text color={C.faint} bold>reasoning</Text>
-          <Text color={C.faint} italic>{msg.content}</Text>
+          <Text color={C.thinking} bold>reasoning</Text>
+          <Text color={C.thinking} italic>{msg.content}</Text>
         </Box>
       );
 

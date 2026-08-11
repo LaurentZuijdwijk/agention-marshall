@@ -156,7 +156,7 @@ function Meta({ meta, dim, showKeys = true }: { meta: HeaderMeta; dim?: boolean;
       )}
       <Box>
         {label('dir')}
-        <Text color={dim ? C.faint : C.text}>{meta.dir}</Text>
+        <Text color={dim ? C.faint : C.muted}>{meta.dir}</Text>
       </Box>
       {meta.safety && (
         <Box>
