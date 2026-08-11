@@ -1,5 +1,11 @@
 # @agentionai/marshall-tools
 
+## Unreleased
+
+### Patch Changes
+
+- Update the OpenAI and Gemini provider integration through `@agentionai/agents` 1.6.0-beta.0, fixing tool definitions, Gemini tool responses, and thought-signature handling.
+
 ## 0.6.0
 
 ### Minor Changes

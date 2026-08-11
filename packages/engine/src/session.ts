@@ -758,6 +758,19 @@ export class Session {
         // otherwise the bad message survives into the summary.
         this.popLastHistoryMessage();
         const compressed = await this.compression.compressForContextError(message);
+
+        // A 400 only *might* be an overflow: providers that report one without
+        // saying so (llama.cpp answers a bare "Provider returned error") are the
+        // reason this path accepts any bad request. When compression could not
+        // free a single token and the provider never mentioned context, the
+        // window is not what went wrong — an OpenAI tool-schema rejection spent
+        // a release being reported as a full context window over 921 tokens.
+        // Show what the provider actually said instead of guessing.
+        if (!compressed && !isContextLengthError(message)) {
+          this.log(`BAD_REQUEST_NOT_CONTEXT ${JSON.stringify(message)}`);
+          throw err;
+        }
+
         this.log(`CONTEXT_ERROR_HANDED_BACK compressed=${compressed}`);
         this.steeringContext = task;
         this.client.onOutput({ type: 'context-full', compressed });

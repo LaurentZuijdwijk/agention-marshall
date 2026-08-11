@@ -1,5 +1,13 @@
 # @agentionai/marshall-engine
 
+## Unreleased
+
+### Patch Changes
+
+- Persist runtime and safety settings, preserve validated safety-agent profiles, and report invalid or unsafe project configuration without accepting credentials from workspace files.
+- Improve provider error reporting by distinguishing rate limits and quotas, including retry guidance, and avoid misreporting unrelated bad requests as context-window exhaustion.
+- Fix OpenAI and Gemini tool calls and history handling through `@agentionai/agents` 1.6.0-beta.0, including strict tool schemas, structured Gemini tool responses, and Gemini thought signatures.
+
 ## 0.13.2
 
 ### Patch Changes

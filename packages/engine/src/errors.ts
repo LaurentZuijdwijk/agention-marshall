@@ -25,6 +25,58 @@ export function isContextLengthError(message: string): boolean {
     .test(message);
 }
 
+/**
+ * True for "you are asking too often, or too much this month".
+ *
+ * Worth its own branch because the raw text is the worst of any provider error:
+ * Gemini answers a spent quota with the message, a help link, a rate-limit doc
+ * link, a usage-dashboard link and a `QuotaFailure` payload, which fills the
+ * transcript with about twenty lines that say one thing.
+ */
+export function isRateLimitError(message: string): boolean {
+  return /\b429\b|too many requests|rate.?limit|RESOURCE_EXHAUSTED|quota exceeded|insufficient_quota/i
+    .test(message);
+}
+
+/** How long the provider asked us to wait, in whole seconds. */
+export function retryAfterSeconds(message: string): number | undefined {
+  // "Please retry in 44.7s" (Google) and "Please try again in 20s" (OpenAI).
+  const spoken = message.match(/(?:retry|try again)\s+(?:in|after)\s+(\d+(?:\.\d+)?)\s*(m?s)\b/i);
+  const structured = message.match(/"?retryDelay"?\s*[:=]\s*"?(\d+(?:\.\d+)?)\s*(m?s)/i);
+  const found = spoken ?? structured;
+  if (!found) return undefined;
+  const value = Number(found[1]);
+  const seconds = found[2].toLowerCase() === 'ms' ? value / 1000 : value;
+  return Number.isFinite(seconds) ? Math.max(1, Math.ceil(seconds)) : undefined;
+}
+
+/** `45s`, `3m`, `2h` — a wait the reader doesn't have to divide themselves. */
+function formatWait(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+  return `${Math.round(seconds / 3600)}h`;
+}
+
+/**
+ * The quota that was actually hit, when the provider names it.
+ *
+ * Google's is the one worth parsing: it reports the limit, the model it applies
+ * to and the window, and those three together are the difference between "wait
+ * a moment" and "this model is done until tomorrow — use another one".
+ */
+function describeQuota(message: string): string | undefined {
+  const limit = message.match(/limit:\s*(\d+)/i)?.[1] ?? message.match(/"quotaValue":\s*"?(\d+)/i)?.[1];
+  if (!limit) return undefined;
+
+  const model = message.match(/model:\s*([\w.:@/-]+)/i)?.[1];
+  const window = /PerDay/i.test(message) ? 'per day'
+    : /PerMinute/i.test(message) ? 'per minute'
+      : undefined;
+  const tier = /free.?tier/i.test(message) ? 'free-tier ' : '';
+
+  return `${tier}quota of ${limit} requests${window ? ` ${window}` : ''}${model ? ` for ${model}` : ''}`;
+}
+
 /** Whether a provider error represents an HTTP 400 response. */
 export function isBadRequestError(err: unknown): boolean {
   const seen = new Set<unknown>();
@@ -118,6 +170,20 @@ export function describeAgentError(label: string, profile: AgentProfile, err: un
 
   if (isConnectionError(full)) {
     return `${who} — cannot reach ${endpointFor(profile)}. Is the server running and reachable?`;
+  }
+  // Before the context-length check: a quota message can mention token limits,
+  // and being told to shorten the prompt is no help when the account is capped.
+  if (isRateLimitError(full)) {
+    const quota = describeQuota(full);
+    const wait = retryAfterSeconds(full);
+    // A per-day quota is spent, not busy. The retry delay providers attach to
+    // one is the generic backoff, and repeating it as advice sends the reader
+    // back in a minute to fail again.
+    const daily = /per day/.test(quota ?? '');
+    const advice = daily
+      ? ' Use another model, or raise the limit on your plan.'
+      : wait ? ` Retry in ${formatWait(wait)}.` : '';
+    return `${who} — rate limited by ${profile.provider}${quota ? `: ${quota} is spent.` : '.'}${advice}`;
   }
   if (isContextLengthError(full)) {
     return `${who} — context length exceeded. Reduce the prompt/history or lower max tokens (server response: ${full})`;
