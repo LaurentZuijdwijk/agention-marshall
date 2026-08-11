@@ -519,7 +519,7 @@ export function App({
         applyProfiles, activeProfile, quit,
         onRuntimeModeChange: (mode, scope) => {
           setRuntimeMode(mode);
-          void saveSettings(workspaceRoot, current => ({ ...current, mode }), scope)
+          void saveSettings(workspaceRoot, current => ({ ...current, runtime: mode }), scope)
             .then(() => {
               // A global write that this repo already overrides would otherwise
               // look like it did nothing the next time the user opens it here.

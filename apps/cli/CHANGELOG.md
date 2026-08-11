@@ -1,5 +1,17 @@
 # @agentionai/marshall-cli
 
+## Unreleased
+
+### Minor Changes
+
+- Persist runtime and safety settings in the project or global configuration, replace `/light` with `/runtime`, and retain provider credentials without writing secrets to project config.
+- Refactor setup into reusable wizard chrome, model discovery, and model-picker components, including live local/OpenRouter model metadata and custom model selection.
+
+### Patch Changes
+
+- Improve CLI readability across terminal themes with light-background detection, higher-contrast palettes, and distinct assistant/reasoning colours.
+- Update the OpenAI and Gemini provider integration through `@agentionai/agents` 1.6.0-beta.0.
+
 ## 0.14.4
 
 ### Patch Changes

@@ -1,128 +1,17 @@
-import React, { useState, useEffect } from 'react';
+// ── setup wizard ──────────────────────────────────────────────────────────────
+//
+// The provider → host → key → model walk, and nothing else: discovery lives in
+// services/modelCatalog, the picker in ModelPicker, the frame in WizardChrome.
+
+import React, { useState } from 'react';
 import { Box, Text, useInput } from 'ink';
-import { TextInput } from './TextInput.js';
-import {
-  PROVIDER_DEFAULTS,
-  parseLlamaCppModels, applyLlamaCppProps, parseOllamaModels, parseOpenRouterModels,
-  formatContext, formatBytes, formatPrice,
-} from '@agentionai/marshall-engine';
-import type { Provider, Tier, ModelInfo } from '@agentionai/marshall-engine';
-import { C, G, brand } from './theme.js';
+import { PROVIDER_DEFAULTS } from '@agentionai/marshall-engine';
+import type { Provider, Tier } from '@agentionai/marshall-engine';
+import { C, G } from './theme.js';
+import { Title, Hint, BackableTextInput } from './WizardChrome.js';
+import { CUSTOM, ModelSelect } from './ModelPicker.js';
+import { PROVIDERS, providerHasHost } from '../services/modelCatalog.js';
 import { traceRender } from '../renderTrace.js';
-import { windowRange } from '../format.js';
-
-// ── data ──────────────────────────────────────────────────────────────────────
-
-/**
- * Offered in this order on purpose. The three providers whose model list is
- * fetched live come first — they are the ones where the wizard does real work
- * rather than showing a hardcoded preset, and openrouter and llamacpp are where
- * most sessions actually land.
- */
-const PROVIDERS: Array<{ value: Provider; hint: string }> = [
-  { value: 'openrouter', hint: 'OPENROUTER_API_KEY' },
-  { value: 'llamacpp',   hint: 'no key needed'      },
-  { value: 'ollama',     hint: 'no key needed'      },
-  { value: 'claude',     hint: 'ANTHROPIC_API_KEY' },
-  { value: 'openai',     hint: 'OPENAI_API_KEY'    },
-  { value: 'gemini',     hint: 'GEMINI_API_KEY'     },
-  { value: 'mistral',    hint: 'MISTRAL_API_KEY'    },
-];
-
-const MODEL_PRESETS: Record<Provider, string[]> = {
-  claude:     ['claude-sonnet-4-6', 'claude-opus-4-6', 'claude-haiku-4-5-20251001'],
-  openai:     ['gpt-4o', 'gpt-4o-mini', 'o3-mini'],
-  gemini:     ['gemini-2.0-flash', 'gemini-1.5-pro'],
-  mistral:    ['mistral-large-latest', 'mistral-small-latest', 'codestral-latest'],
-  ollama:     ['llama3.2', 'codellama', 'qwen2.5', 'deepseek-r1'],
-  llamacpp:   [],
-  openrouter: [],
-};
-
-const CUSTOM = '(custom…)';
-
-function providerHasHost(provider: Provider): boolean {
-  // Only local servers ask for a URL. OpenRouter has a host in its defaults
-  // (https://openrouter.ai/api/v1) but it's fixed — no input needed.
-  return provider === 'ollama' || provider === 'llamacpp';
-}
-
-const TIMEOUT_MS = 3_000;
-
-async function getJson(url: string): Promise<unknown | null> {
-  try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT_MS) });
-    return res.ok ? await res.json() : null;
-  } catch {
-    return null; // unreachable, timed out, or not JSON
-  }
-}
-
-/**
- * Probe a local model server. Tries Ollama's native API first, then the
- * OpenAI-compatible /v1/models endpoint (llama.cpp, LM Studio, LocalAI, …).
- * Returns an empty array if the server is unreachable within the timeout.
- */
-async function fetchLocalModels(host: string): Promise<ModelInfo[]> {
-  // Ollama native. /api/ps tells us which of them are actually resident; it is
-  // a nice-to-have, so a failure there still leaves us with the full list.
-  const tags = await getJson(`${host}/api/tags`);
-  if (tags) {
-    const running = await getJson(`${host}/api/ps`);
-    const models = parseOllamaModels(tags, running);
-    if (models.length > 0) return models;
-  }
-
-  // OpenAI-compatible. /props distinguishes a llama.cpp router (many models,
-  // each with its own load state) from a plain single-model server.
-  const listed = await getJson(`${host}/v1/models`);
-  if (listed) {
-    const models = parseLlamaCppModels(listed);
-    if (models.length > 0) return applyLlamaCppProps(models, await getJson(`${host}/props`));
-  }
-
-  return [];
-}
-
-/** OpenRouter's public catalogue — no key required; capability metadata is live. */
-async function fetchOpenRouterModels(pinned: string[]): Promise<ModelInfo[]> {
-  const listed = await getJson('https://openrouter.ai/api/v1/models');
-  return listed ? parseOpenRouterModels(listed, pinned) : [];
-}
-
-// ── title ─────────────────────────────────────────────────────────────────────
-
-const WORDMARK = 'marshall';
-
-/** Gradient wordmark plus the current step, shared by every wizard screen. */
-function Title({ step }: { step: string }) {
-  traceRender('Title', step.slice(0, 30));
-  return (
-    <Box>
-      <Box flexShrink={0}>
-        <Text>
-          {[...WORDMARK].map((ch, i) => (
-            <Text key={i} bold color={brand(i / (WORDMARK.length - 1))}>{ch}</Text>
-          ))}
-        </Text>
-      </Box>
-      <Box flexShrink={0}>
-        <Text color={C.faint}>  {G.bullet}  </Text>
-      </Box>
-      <Box flexGrow={1} minWidth={8}>
-        <Text color={C.muted} wrap="truncate-end">{step}</Text>
-      </Box>
-    </Box>
-  );
-}
-
-function Hint({ children }: { children: React.ReactNode }) {
-  traceRender('Hint');
-  // wrap={false}: a hint is one line of chrome, never prose. Letting it wrap
-  // means a narrow terminal asks Yoga to measure it at <1 column, which is
-  // the state that used to send wrap-ansi into a runaway allocation.
-  return <Text color={C.faint} wrap="truncate-end">{children}</Text>;
-}
 
 // ── provider select ───────────────────────────────────────────────────────────
 
@@ -171,281 +60,14 @@ function ProviderSelect({ onSelect, onBack, offerSameAsDeep }: {
   );
 }
 
-// ── host input ────────────────────────────────────────────────────────────────
-
-function BackableTextInput({
-  value, onChange, onSubmit, onBack, placeholder, mask,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  onSubmit: (v: string) => void;
-  onBack: () => void;
-  placeholder?: string;
-  mask?: string;
-}) {
-  traceRender('BackableTextInput', `len=${value.length} cols=${process.stdout.columns}`);
-  useInput((_, key) => {
-    if (key.escape) onBack();
-  });
-
-  // The prompt glyph must not compete with the input for space. Without
-  // flexShrink={0} on the glyph and a minWidth on the field, flex shrink can
-  // drive the input's width to zero — and Ink then asks wrap-ansi to wrap text
-  // into zero columns, which never terminates and allocates until the heap
-  // dies. Reserving room makes that state unreachable rather than unlikely.
-  return (
-    <Box paddingX={1} flexDirection="row">
-      <Box flexShrink={0}>
-        <Text color={C.brandTo} bold>{G.prompt} </Text>
-      </Box>
-      <Box flexGrow={1} minWidth={16}>
-        <TextInput value={value} onChange={onChange} onSubmit={onSubmit} placeholder={placeholder} mask={mask} />
-      </Box>
-    </Box>
-  );
-}
-
-// ── model select ──────────────────────────────────────────────────────────────
-
-function ModelSelect({
-  provider, host, onSelect, onBack,
-}: {
-  provider: Provider;
-  host: string;
-  onSelect: (model: string) => void;
-  onBack: () => void;
-}) {
-  traceRender('ModelSelect', provider);
-  const fetchesModels = provider === 'ollama' || provider === 'llamacpp' || provider === 'openrouter';
-  const presets = (): ModelInfo[] => MODEL_PRESETS[provider].map(id => ({ id }));
-
-  // null = still probing the server
-  const [models, setModels] = useState<ModelInfo[] | null>(
-    fetchesModels ? null : presets(),
-  );
-  const [fetchNote, setFetchNote] = useState('');
-
-  useEffect(() => {
-    if (!fetchesModels) return;
-
-    if (provider === 'openrouter') {
-      fetchOpenRouterModels(MODEL_PRESETS.openrouter).then(fetched => {
-        if (fetched.length > 0) {
-          setModels(fetched);
-          setFetchNote(`${fetched.length} text models from openrouter.ai`);
-        } else {
-          setModels(presets());
-          setFetchNote('openrouter.ai unreachable — showing defaults');
-        }
-      });
-      return;
-    }
-
-    fetchLocalModels(host).then(fetched => {
-      if (fetched.length > 0) {
-        // Resident models first — those answer instantly, the rest pay a load.
-        const ordered = [...fetched].sort((a, b) => Number(b.loaded ?? false) - Number(a.loaded ?? false));
-        const live = fetched.filter(m => m.loaded).length;
-        setModels(ordered);
-        setFetchNote(
-          `${fetched.length} model${fetched.length === 1 ? '' : 's'} from ${host}` +
-          (live > 0 ? `  ${G.bullet}  ${live} loaded` : ''),
-        );
-      } else {
-        setModels(presets());
-        setFetchNote(`${host} unreachable — showing defaults`);
-      }
-    });
-  }, [provider, host]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  if (models === null) {
-    return (
-      <Box flexDirection="column" gap={1}>
-        <Hint>probing {host}…</Hint>
-      </Box>
-    );
-  }
-
-  return (
-    <Box flexDirection="column" gap={1}>
-      {fetchNote ? <Hint>{fetchNote}</Hint> : null}
-      <ModelList models={models} onSelect={onSelect} onBack={onBack} />
-    </Box>
-  );
-}
-
-// ── model list ────────────────────────────────────────────────────────────────
-
-/** How many rows to show before the list starts scrolling around the cursor. */
-const VISIBLE_MODELS = 9;
-
-/** Case-insensitive typeahead matching against both the provider ID and label. */
-export function filterModels(models: ModelInfo[], query: string): ModelInfo[] {
-  const needle = query.trim().toLocaleLowerCase();
-  if (!needle) return models;
-  return models.filter(model =>
-    model.id.toLocaleLowerCase().includes(needle) ||
-    model.label?.toLocaleLowerCase().includes(needle),
-  );
-}
-
-function statusGlyph(model: ModelInfo): { glyph: string; color: string } {
-  if (model.failed)             return { glyph: G.no,   color: C.error };
-  if (model.supportsTools === false) return { glyph: G.warn, color: C.warn  };
-  if (model.loaded)             return { glyph: G.tool, color: C.ok    };
-  return { glyph: '○', color: C.faint };
-}
-
-/** The line under the list describing whichever model the cursor is on. */
-function ModelDetail({ model }: { model: ModelInfo }) {
-  if (model.id === CUSTOM) return <Hint>type any model ID the server accepts</Hint>;
-
-  const facts: string[] = [];
-  if (model.paramsLabel) facts.push(model.paramsLabel);
-  if (model.quant)       facts.push(model.quant);
-  if (model.sizeBytes)   facts.push(formatBytes(model.sizeBytes));
-  if (model.extraModalities) facts.push(...model.extraModalities);
-
-  if (model.pricing) {
-    facts.push(`${formatPrice(model.pricing.prompt)} in · ${formatPrice(model.pricing.completion)} out`);
-  }
-  if (model.label) facts.push(model.label);
-  if (model.context) {
-    const ceiling = model.contextTrain && model.contextTrain > model.context
-      ? ` of ${formatContext(model.contextTrain)} trained`
-      : '';
-    facts.push(
-      model.contextSource === 'active'
-        ? `${formatContext(model.context)} context${ceiling}`
-        : `${formatContext(model.context)} context when loaded`,
-    );
-  }
-  if (model.maxOutput) facts.push(`${formatContext(model.maxOutput)} max output`);
-  if (model.reasoning) facts.push('reasoning');
-  if (model.supportsTools === false) facts.push('no tool support');
-
-  if (model.failed) facts.push('last start failed');
-  else if (!model.loaded) facts.push('not loaded — first request will load it');
-
-  return <Hint>{facts.length > 0 ? facts.join(`  ${G.bullet}  `) : 'no details reported'}</Hint>;
-}
-
-function ModelList({
-  models, onSelect, onBack,
-}: {
-  models: ModelInfo[];
-  onSelect: (value: string) => void;
-  onBack?: () => void;
-}) {
-  traceRender('ModelList');
-  const [cursor, setCursor] = useState(0);
-  const [query, setQuery] = useState('');
-  const filtered = filterModels(models, query);
-  const items = [...filtered, { id: CUSTOM } as ModelInfo];
-  // `cursor` can point past the end of `items` for one render after a search
-  // narrows the list — the effect below that resets it to 0 only runs *after*
-  // that render commits, not before — so every direct index read below clamps
-  // to the current `items`, rather than trusting the effect alone to keep it
-  // in range. Without this, `items[cursor]` was `undefined` for that one frame
-  // and crashed whatever read `.id` off it.
-  const activeIndex = Math.min(cursor, items.length - 1);
-
-  useEffect(() => {
-    setCursor(0);
-  }, [query]);
-
-  useInput((input, key) => {
-    if (key.upArrow)   { setCursor(c => (c - 1 + items.length) % items.length); return; }
-    if (key.downArrow) { setCursor(c => (c + 1) % items.length); return; }
-    if (key.return)    { onSelect(items[activeIndex].id); return; }
-    if (key.leftArrow || key.escape) {
-      if (query) { setQuery(''); setCursor(0); } else onBack?.();
-      return;
-    }
-    if (key.backspace || key.delete) { setQuery(q => q.slice(0, -1)); return; }
-    if (!key.ctrl && !key.meta && !key.tab && input && /^[\x20-\x7e]+$/.test(input)) {
-      setQuery(q => q + input);
-    }
-  });
-
-  // Leave room for the gutter, status glyph, context and optional price column.
-  const showPrice = models.some(m => m.pricing) && (process.stdout.columns ?? 80) >= 64;
-  const available = Math.max(24, (process.stdout.columns ?? 80) - (showPrice ? 34 : 18));
-  const nameWidth = Math.min(available, Math.max(...items.map(m => m.id.length)));
-
-  const { start, end } = windowRange(items.length, activeIndex, VISIBLE_MODELS);
-  const above = start;
-  const below = items.length - end;
-
-  return (
-    <Box flexDirection="column">
-      <Box paddingLeft={2}>
-        <Text color={C.faint}>search </Text>
-        <Text color={query ? C.brandTo : C.faint}>{query || 'type to filter'}</Text>
-        {query && <Text color={C.faint}>  ({filtered.length} match{filtered.length === 1 ? '' : 'es'})</Text>}
-      </Box>
-      {filtered.length === 0 && <Hint>no matching models — press escape to clear</Hint>}
-      {above > 0 && <Text color={C.faint}>  ↑ {above} more</Text>}
-
-      {items.slice(start, end).map((model, i) => {
-        const index = start + i;
-        const active = index === activeIndex;
-        const { glyph, color } = statusGlyph(model);
-        const isCustom = model.id === CUSTOM;
-        const name = model.id.length > nameWidth
-          ? model.id.slice(0, nameWidth - 1) + '…'
-          : model.id.padEnd(nameWidth);
-
-        return (
-          <Box key={model.id}>
-            <Box flexShrink={0}>
-              <Text color={active ? C.brandTo : C.faint} bold={active}>
-                {active ? `${G.prompt} ` : '  '}
-              </Text>
-            </Box>
-            <Box flexShrink={0}>
-              <Text color={color}>{isCustom ? '  ' : `${glyph} `}</Text>
-            </Box>
-            <Box flexShrink={1} minWidth={4}>
-              <Text color={active ? C.brandTo : C.muted} bold={active} wrap="truncate-end">{name}</Text>
-            </Box>
-            {model.context !== undefined && (
-              <Box flexShrink={0}>
-                <Text color={model.contextSource === 'active' ? C.accent : C.faint}>
-                  {'  '}{formatContext(model.context).padStart(5)}
-                </Text>
-              </Box>
-            )}
-            {showPrice && model.pricing && (
-              <Box flexShrink={0}>
-                <Text color={C.faint}>
-                  {'  '}{model.pricing.prompt === 0 && model.pricing.completion === 0
-                    ? 'free'
-                    : `${formatPrice(model.pricing.prompt)}/${formatPrice(model.pricing.completion)}`}
-                </Text>
-              </Box>
-            )}
-          </Box>
-        );
-      })}
-
-      {below > 0 && <Text color={C.faint}>  ↓ {below} more</Text>}
-
-      <Box marginTop={1} paddingLeft={2}>
-        <ModelDetail model={items[activeIndex]} />
-      </Box>
-    </Box>
-  );
-}
-
-// ── setup wizard ──────────────────────────────────────────────────────────────
+// ── steps ─────────────────────────────────────────────────────────────────────
 
 type Step =
   | { name: 'provider' }
   | { name: 'host'; provider: Provider }
-  | { name: 'model'; provider: Provider; host?: string }
-  | { name: 'custom'; provider: Provider; host?: string }
-  | { name: 'key'; provider: Provider; model: string; host?: string };
+  | { name: 'model'; provider: Provider; host?: string; apiKey?: string }
+  | { name: 'custom'; provider: Provider; host?: string; apiKey?: string }
+  | { name: 'key'; provider: Provider; host?: string };
 
 export interface SetupProps {
   initial?: { provider?: Provider; model?: string; host?: string };
@@ -559,16 +181,18 @@ export function Setup({ initial, tier = 'deep', title, blurb, deepLabel, savedHo
 
   const defaultHostFor = (provider: Provider): string => seedHost(provider, savedHosts, initial);
 
-  // A provider with an envKey and no key already in the environment needs one
-  // from the user before the session can start — ask right after the model.
-  const needsKey = (provider: Provider): boolean => {
+  // Environment keys are already available to the session. Only prompt when
+  // neither the environment nor the global saved-key selection has a value.
+  const keyFor = (provider: Provider): string | undefined => {
     const envKey = PROVIDER_DEFAULTS[provider].envKey;
-    return envKey !== null && !process.env[envKey];
+    return savedKeys?.[provider] || (envKey ? process.env[envKey] : undefined) || undefined;
   };
+  const needsKey = (provider: Provider): boolean => Boolean(
+    PROVIDER_DEFAULTS[provider].envKey && !keyFor(provider),
+  );
 
-  const finish = (provider: Provider, model: string, host?: string) => {
-    if (needsKey(provider)) setStep({ name: 'key', provider, model, host });
-    else onComplete(provider, model, host);
+  const enterModelStep = (provider: Provider, host?: string, apiKey?: string) => {
+    setStep({ name: 'model', provider, host, apiKey });
   };
 
   const label = (rest: string) => `${title ?? `${tier} model`}  ${G.bullet}  ${rest}`;
@@ -590,7 +214,11 @@ export function Setup({ initial, tier = 'deep', title, blurb, deepLabel, savedHo
               setHostInput(defaultHostFor(p));
               setStep({ name: 'host', provider: p });
             } else {
-              setStep({ name: 'model', provider: p });
+              const stored = keyFor(p);
+              if (needsKey(p)) {
+                setKeyInput('');
+                setStep({ name: 'key', provider: p });
+              } else enterModelStep(p, undefined, stored);
             }
           }}
         />
@@ -609,7 +237,11 @@ export function Setup({ initial, tier = 'deep', title, blurb, deepLabel, savedHo
           onChange={setHostInput}
           onSubmit={(val) => {
             const h = val.trim() || defaultHostFor(provider);
-            setStep({ name: 'model', provider, host: h });
+            const stored = keyFor(provider);
+            if (needsKey(provider)) {
+              setKeyInput('');
+              setStep({ name: 'key', provider, host: h });
+            } else enterModelStep(provider, h, stored);
           }}
           onBack={() => setStep({ name: 'provider' })}
         />
@@ -620,20 +252,16 @@ export function Setup({ initial, tier = 'deep', title, blurb, deepLabel, savedHo
 
   if (step.name === 'model') {
     const { provider, host } = step;
-    const resolvedHost = host ?? defaultHostFor(provider);
-
     return (
       <Box flexDirection="column" gap={1}>
         <Title step={label(`${provider}  ${G.bullet}  choose a model`)} />
         <ModelSelect
           provider={provider}
-          host={resolvedHost}
+          host={host ?? defaultHostFor(provider)}
+          apiKey={step.apiKey}
           onSelect={(val) => {
-            if (val === CUSTOM) {
-              setStep({ name: 'custom', provider, host });
-            } else {
-              finish(provider, val, host);
-            }
+            if (val === CUSTOM) setStep({ name: 'custom', provider, host, apiKey: step.apiKey });
+            else onComplete(provider, val, host, step.apiKey);
           }}
           onBack={() => (providerHasHost(provider) ? setStep({ name: 'host', provider }) : setStep({ name: 'provider' }))}
         />
@@ -643,9 +271,9 @@ export function Setup({ initial, tier = 'deep', title, blurb, deepLabel, savedHo
   }
 
   if (step.name === 'key') {
-    const { provider, model, host } = step;
+    const { provider, host } = step;
     const envKey = PROVIDER_DEFAULTS[provider].envKey!;
-    const stored = savedKeys?.[provider];
+    const stored = keyFor(provider);
     const text = keyStepText(envKey, stored);
     return (
       <Box flexDirection="column" gap={1}>
@@ -658,9 +286,11 @@ export function Setup({ initial, tier = 'deep', title, blurb, deepLabel, savedHo
           onChange={setKeyInput}
           onSubmit={(val) => {
             const k = resolveKeyInput(val, stored);
-            if (k) onComplete(provider, model, host, k);
+            if (k) enterModelStep(provider, host, k);
           }}
-          onBack={() => setStep({ name: 'model', provider, host })}
+          // Only hosted providers reach the key step, and they have no host
+          // step — the screen before this one is the provider select.
+          onBack={() => setStep({ name: 'provider' })}
           placeholder={text.placeholder}
           mask="*"
         />
@@ -679,9 +309,9 @@ export function Setup({ initial, tier = 'deep', title, blurb, deepLabel, savedHo
         onChange={setCustomInput}
         onSubmit={(val) => {
           const m = val.trim();
-          if (m) finish(provider, m, host);
+          if (m) onComplete(provider, m, host, step.apiKey);
         }}
-        onBack={() => setStep({ name: 'model', provider, host })}
+        onBack={() => setStep({ name: 'model', provider, host, apiKey: step.apiKey })}
         placeholder={PROVIDER_DEFAULTS[provider].model}
       />
       <Hint>{`enter confirms ${G.bullet} esc back`}</Hint>
