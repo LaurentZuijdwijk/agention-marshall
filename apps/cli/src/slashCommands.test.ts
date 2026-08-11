@@ -48,13 +48,38 @@ describe('slashCommands', () => {
       assert.equal(result.type, 'clear');
     });
 
-    it('returns light for /light', () => {
-      assert.equal(resolveSlashCommand('/light').type, 'light');
+    it('returns the current mode for bare /runtime', () => {
+      assert.deepEqual(resolveSlashCommand('/runtime'), { type: 'runtime', mode: undefined, scope: 'project' });
     });
 
-    it('rejects /light with an argument rather than guessing on/off', () => {
-      const result = resolveSlashCommand('/light on');
-      assert.equal(result.type, 'usage');
+    it('reads default, light and agentic modes', () => {
+      for (const mode of ['default', 'light', 'agentic']) {
+        assert.deepEqual(resolveSlashCommand(`/runtime ${mode}`), { type: 'runtime', mode, scope: 'project' });
+      }
+    });
+
+    it('takes --global on either side of the mode', () => {
+      assert.deepEqual(resolveSlashCommand('/runtime light --global'), { type: 'runtime', mode: 'light', scope: 'global' });
+      assert.deepEqual(resolveSlashCommand('/runtime --global light'), { type: 'runtime', mode: 'light', scope: 'global' });
+    });
+
+    it('rejects a bare --global, which asks to save nothing anywhere', () => {
+      assert.equal(resolveSlashCommand('/runtime --global').type, 'usage');
+    });
+
+    it('rejects an unknown mode', () => {
+      assert.equal(resolveSlashCommand('/runtime on').type, 'usage');
+    });
+
+    it('rejects two modes rather than picking one', () => {
+      assert.equal(resolveSlashCommand('/runtime light default').type, 'usage');
+    });
+
+    it('is not a prefix of /model, so tab does not rewrite a complete command', () => {
+      // The reason this is /runtime and not /mode: completing "/mode" turned it
+      // into "/model", a different command entirely.
+      assert.equal(completeSlash('/runtime'), '');
+      assert.equal(completeSlash('/mod'), 'el');
     });
 
     it('returns safety with no level for bare /safety', () => {

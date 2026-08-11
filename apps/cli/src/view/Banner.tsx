@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Box, Text } from 'ink';
 import { C, G, brand, mix } from './theme.js';
+import type { RuntimeMode } from '../services/settings.js';
 
 // ── wordmark ──────────────────────────────────────────────────────────────────
 
@@ -123,6 +124,11 @@ export interface HeaderMeta {
    * usual human-in-the-loop gate without re-running `/safety`.
    */
   safety?: string;
+  /** Startup settings that affect this session. */
+  version?: string;
+  runtime?: RuntimeMode;
+  webSearch?: boolean;
+  github?: boolean;
 }
 
 /** The key/value block that sits under the wordmark. `keys` is boot-time
@@ -152,10 +158,30 @@ function Meta({ meta, dim, showKeys = true }: { meta: HeaderMeta; dim?: boolean;
         {label('dir')}
         <Text color={dim ? C.faint : C.text}>{meta.dir}</Text>
       </Box>
-      {meta.safety && meta.safety !== 'default' && (
+      {meta.safety && (
         <Box>
           {label('safety')}
           <Text color={dim ? C.faint : meta.safety === 'yolo' ? C.error : C.muted}>{meta.safety}</Text>
+        </Box>
+      )}
+      {meta.version && (
+        <Box>
+          {label('version')}
+          <Text color={dim ? C.faint : C.muted}>v{meta.version}</Text>
+        </Box>
+      )}
+      {meta.runtime && (
+        <Box>
+          {label('runtime')}
+          <Text color={dim ? C.faint : C.muted}>{meta.runtime}</Text>
+        </Box>
+      )}
+      {(meta.webSearch === false || meta.github) && (
+        <Box>
+          {label('settings')}
+          <Text color={dim ? C.faint : C.muted}>
+            {[meta.webSearch === false && 'web off', meta.github && 'GitHub on'].filter(Boolean).join('  ·  ')}
+          </Text>
         </Box>
       )}
       {showKeys && (

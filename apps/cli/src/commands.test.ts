@@ -48,6 +48,7 @@ function setup(overrides: Partial<CommandDeps> & { jobs?: BackgroundJob[]; serve
     mcpReconnected: [] as string[],
     mcpChanged: 0,
     light: [] as boolean[],
+    runtimeMode: [] as Array<[string, string]>,
     safetyLevel: [] as SafetyLevel[],
     safetyAgent: [] as Array<SafetyAgentConfig | undefined>,
     safetyLevelReported: [] as SafetyLevel[],
@@ -123,6 +124,7 @@ function setup(overrides: Partial<CommandDeps> & { jobs?: BackgroundJob[]; serve
     startLogin: () => ({ authUrl: 'https://auth.example' } as never),
     onMcpChanged: () => { calls.mcpChanged++; },
     onSafetyLevelChange: (level) => { calls.safetyLevelReported.push(level); },
+    onRuntimeModeChange: (mode, scope) => { calls.runtimeMode.push([mode, scope]); },
     ...overrides,
   };
 
@@ -421,10 +423,10 @@ describe('/mcp', () => {
   });
 });
 
-describe('/light', () => {
+describe('/runtime', () => {
   it('turns the lean belt on and says which tools just went away', () => {
     const { deps, pushed, calls } = setup();
-    runSlashCommand('/light', deps);
+    runSlashCommand('/runtime light', deps);
     assert.deepEqual(calls.light, [true]);
     assert.equal(pushed[0].role, 'info');
     // The saving is the reason to use it, and the missing tools are the cost —
@@ -434,24 +436,55 @@ describe('/light', () => {
       'the belt is rebuilt per turn, so the change is not retroactive');
   });
 
-  it('toggles back off', () => {
+  it('goes back to the full belt', () => {
     const { deps, calls } = setup();
-    runSlashCommand('/light', deps);
-    runSlashCommand('/light', deps);
-    assert.deepEqual(calls.light, [true, false], 'reads the session, not a local flag');
+    runSlashCommand('/runtime light', deps);
+    runSlashCommand('/runtime default', deps);
+    assert.deepEqual(calls.light, [true, false]);
   });
 
-  it('rejects an argument with usage', () => {
+  it('reports the current mode without changing it', () => {
     const { deps, pushed, calls } = setup();
-    runSlashCommand('/light on', deps);
+    runSlashCommand('/runtime', deps);
+    assert.equal(pushed[0].role, 'info');
+    assert.match(pushed[0].content, /runtime: default/);
+    assert.deepEqual(calls.light, [], 'a bare /runtime only informs');
+    assert.deepEqual(calls.runtimeMode, [], 'and saves nothing');
+  });
+
+  it('persists to the project by default', () => {
+    const { deps, calls } = setup();
+    runSlashCommand('/runtime light', deps);
+    assert.deepEqual(calls.runtimeMode, [['light', 'project']]);
+  });
+
+  it('persists globally with --global, and says so', () => {
+    const { deps, pushed, calls } = setup();
+    runSlashCommand('/runtime light --global', deps);
+    assert.deepEqual(calls.runtimeMode, [['light', 'global']]);
+    assert.match(pushed[0].content, /every workspace/);
+  });
+
+  it('refuses agentic without saving a mode the engine cannot honour', () => {
+    const { deps, pushed, calls } = setup();
+    runSlashCommand('/runtime agentic', deps);
+    assert.equal(pushed[0].role, 'info');
+    assert.match(pushed[0].content, /not available yet/);
+    assert.deepEqual(calls.light, []);
+    assert.deepEqual(calls.runtimeMode, [], 'nothing is written for a mode that does not exist');
+  });
+
+  it('rejects an unknown mode with usage', () => {
+    const { deps, pushed, calls } = setup();
+    runSlashCommand('/runtime on', deps);
     assert.equal(pushed[0].role, 'error');
-    assert.match(pushed[0].content, /usage: \/light/);
+    assert.match(pushed[0].content, /usage: \/runtime/);
     assert.deepEqual(calls.light, [], 'nothing is toggled by a misuse');
   });
 
   it('refuses before a model is chosen', () => {
     const { deps, pushed } = setup({ session: null });
-    runSlashCommand('/light', deps);
+    runSlashCommand('/runtime light', deps);
     assert.equal(pushed[0].role, 'error');
   });
 });

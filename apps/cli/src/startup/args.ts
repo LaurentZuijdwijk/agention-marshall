@@ -111,8 +111,8 @@ Options:
       --no-web-search     Disable web search (on by default for the claude provider)
       --light             Lean belt for small models: no scratchpad, background jobs or
                            sub-agents, and a prompt with only the rules that still apply
-                           (~1100 fewer tokens per request). Also "light": true in config,
-                           or /light in the session
+                           (~1100 fewer tokens per request). Also /runtime light in the
+                           session, which saves it for next time
   -h, --help              Show this help
 
 Provider defaults:

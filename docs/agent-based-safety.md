@@ -34,10 +34,21 @@ confident are fine.
   apart from "the agent decided to delete this on its own", see the investigation below.
 - `/safety [yolo|default|agentic]` in the CLI; picking `agentic` opens the same model-picker
   wizard used for `/model`, retitled. Level 1 is named `yolo` on purpose — the word should
-  feel reckless, because the mode is. Deliberately **session-only**, not persisted, matches
-  `/light`, not the saved model profile. The startup banner shows a `safety` row when it
-  isn't the default, since otherwise a non-default level is invisible after the confirmation
-  message scrolls off.
+  feel reckless, because the mode is.
+- Levels 2 and 3 **are persisted**, to `.marshall/config.json` under `settings`, along with
+  the judge's provider/model/host. Turning a real gate on should not be something you have
+  to remember to redo every morning. Level 1 is deliberately **not** persistable: a gate
+  that disables itself again on the next launch, from a file that can be committed and
+  shared, is not a decision anyone should be able to make once. `/safety yolo` therefore
+  leaves whatever level was pinned alone.
+- The stored judge never carries an `apiKey` — that file is meant to be committed. It is
+  authenticated at load time from the global config or the provider's environment variable,
+  and `toSafetyAgentConfig` will not hand the main model's key to a judge pointed at a
+  different host. A judge that still cannot authenticate is unreachable, which falls back
+  to asking the human rather than approving; `settingsWarnings` says so at startup, and a
+  level 3 with no usable judge is read back as level 2 rather than as no gate at all.
+- The startup banner shows the `safety` row on every session, since a level that was
+  restored from config is otherwise invisible.
 - Every judge call is logged in full (system prompt, user prompt, raw response) to
   `.marshall/logs/session.log`, untruncated. This is what "test in detail and try to
   break it" needs.

@@ -18,6 +18,7 @@ import type { LoginSession } from './login.js';
 import type { SetMode } from './mode.js';
 import { resolveSlashCommand, HELP, SAFETY_LEVEL_WORDS, SAFETY_LEVEL_LABELS } from './slashCommands.js';
 import type { SafetyLevelWord } from './slashCommands.js';
+import type { RuntimeMode, SettingsScope } from './services/settings.js';
 import { currentVersion, checkForUpdate, describeUpdate, manualInstallCommand } from './update-check.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -63,6 +64,9 @@ export interface CommandDeps {
   /** Persist the server list after `/mcp remove` — the add path saves from the
    *  App, which is where the wizard's result lands. */
   onMcpChanged?(): void;
+  /** Persist the runtime mode, in the project config or globally. The App owns
+   *  the write so this stays free of the filesystem. */
+  onRuntimeModeChange?(mode: RuntimeMode, scope: SettingsScope): void;
   /** Config problems that produce no server, e.g. a project enabling a name
    *  nothing defines. Shown by `/mcp`, which is where someone goes looking. */
   mcpWarnings?: string[];
@@ -257,20 +261,41 @@ export function runSlashCommand(input: string, deps: CommandDeps): void {
       return;
     }
 
-    case 'light': {
+    case 'runtime': {
       if (!session) {
         transcript.push('error', 'no model chosen yet — finish setup first');
         return;
       }
-      const on = !session.light;
-      session.setLight(on);
-      // Says what actually changed rather than just "on": the whole point is
-      // which tools just disappeared, and a model that can no longer background
-      // a test run should not be a surprise mid-task.
-      transcript.push('info', on
-        ? 'light mode on — no scratchpad, background jobs or sub-agents; ~1100 fewer tokens per request.\n'
-          + 'Takes effect on your next message. /light again to restore them.'
-        : 'light mode off — the full tool belt is back from your next message');
+      const current: RuntimeMode = session.light ? 'light' : 'default';
+      if (!command.mode) {
+        transcript.push('info', [
+          `runtime: ${current}`,
+          '  default — the full tool belt',
+          '  light   — lean tool belt for small models: no scratchpad, background jobs',
+          '            or sub-agents, and ~1100 fewer tokens per request',
+          '  agentic — coming soon',
+          'add --global to save a mode for every workspace',
+        ].join('\n'));
+        return;
+      }
+      if (command.mode === 'agentic') {
+        // Nothing is saved either: pinning a mode the engine cannot honour would
+        // leave the file describing a session that never existed.
+        transcript.push('info', 'agentic runtime is not available yet');
+        return;
+      }
+      const light = command.mode === 'light';
+      session.setLight(light);
+      deps.onRuntimeModeChange?.(command.mode, command.scope);
+      // Says what actually changed rather than just the name: a model that can
+      // no longer background a test run should not be a surprise mid-task.
+      transcript.push('info', [
+        light
+          ? 'runtime: light — no scratchpad, background jobs or sub-agents.'
+          : 'runtime: default — the full tool belt is back.',
+        `Takes effect on your next message, and is saved ${
+          command.scope === 'global' ? 'for every workspace' : 'for this workspace'}.`,
+      ].join('\n'));
       return;
     }
 

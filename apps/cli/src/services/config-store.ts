@@ -21,10 +21,14 @@ import type { AgentProfile, McpServerConfig } from '@agentionai/marshall-engine'
 //
 // A project-local `.marshall/config.json`, if the repo has one, is deep-merged
 // on top of the global config — project values win. This lets a repo pin its
-// own model/provider without touching the user's global credentials. If that
-// file is checked in, it should NOT hold a bare `apiKey` — reference an env
-// var (or omit `apiKey` entirely and rely on the provider's default env var)
-// instead, or a future contributor's secret ends up committed for everyone.
+// own model/provider without touching the user's global credentials.
+//
+// That file cannot supply a credential: `loadConfig` strips every `apiKey` out
+// of the project layer and `projectSecretWarnings` reports it, because the file
+// is meant to be committed and a key in it is a leak for everyone who clones
+// the repo. Use the global config, or the provider's environment variable in a
+// gitignored `.env` (see startup/workspace.ts, which loads those before
+// anything resolves).
 
 export interface SavedProfile {
   provider?: string;
@@ -72,11 +76,15 @@ export interface SavedProjectMcp {
 export interface SavedConfig extends SavedProfile {
   models?: { deep?: SavedProfile; fast?: SavedProfile };
   /**
-   * Start with the lean tool belt — see EngineConfig.light.
-   *
-   * Safe in the project file as well as the global one: it selects behaviour
-   * and cannot carry a credential, which is the line AGENTS.md draws. A repo
-   * that is normally driven by a small local model can commit it.
+   * Versioned, non-secret runtime settings. Deliberately `unknown`: this is
+   * untrusted file content, and `services/settings.ts` owns both the shape and
+   * the validation. Nothing else should read into it.
+   */
+  settings?: unknown;
+  /**
+   * Pre-settings way of asking for the lean tool belt. Still read, so existing
+   * config files keep working; `settings.mode` is where it lives now, and the
+   * first write through `saveSettings` folds this key into it.
    */
   light?: boolean;
   providers?: SavedProviderEntry[];
@@ -100,7 +108,7 @@ export function configPath(workspaceRoot: string): string {
   return join(workspaceRoot, '.marshall', 'config.json');
 }
 
-function readJsonConfig(path: string): SavedConfig {
+export function readJsonConfig(path: string): SavedConfig {
   if (!existsSync(path)) return {};
   try {
     const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
@@ -154,8 +162,49 @@ function mergeProviders(
 ): SavedProviderEntry[] {
   const byProvider = new Map<string, SavedProviderEntry>();
   for (const entry of global) if (entry?.provider) byProvider.set(entry.provider, entry);
-  for (const entry of project) if (entry?.provider) byProvider.set(entry.provider, entry);
+  // Field by field, not entry by entry: a project pinning one provider's *host*
+  // should not also erase the key stored globally for that same provider. Since
+  // the project layer cannot supply a key at all (see `stripProjectSecrets`),
+  // whole-entry replacement could only ever delete credentials, never set them.
+  for (const entry of project) {
+    if (!entry?.provider) continue;
+    byProvider.set(entry.provider, { ...byProvider.get(entry.provider), ...entry });
+  }
   return [...byProvider.values()];
+}
+
+/**
+ * Every place a credential could hide in a project file.
+ *
+ * The module comment has always said the project file must not hold an
+ * `apiKey`; this is what makes that true rather than aspirational. A key in a
+ * committed file is a leak for everyone who clones the repo, and "it worked, so
+ * nobody noticed" is exactly how it stays there. Stripped rather than rejected,
+ * so a file that is otherwise fine still pins its model.
+ */
+function stripProjectSecrets(project: SavedConfig): { config: SavedConfig; found: string[] } {
+  const found: string[] = [];
+  const scrub = <T extends SavedProfile>(profile: T | undefined, where: string): T | undefined => {
+    if (!profile?.apiKey) return profile;
+    found.push(where);
+    const { apiKey: _dropped, ...rest } = profile;
+    return rest as T;
+  };
+
+  const providers = project.providers?.map(entry =>
+    scrub(entry, `providers[${entry?.provider ?? '?'}]`) as SavedProviderEntry);
+  const models = project.models && {
+    ...project.models,
+    deep: scrub(project.models.deep, 'models.deep'),
+    fast: scrub(project.models.fast, 'models.fast'),
+  };
+
+  const config = {
+    ...scrub(project, 'apiKey'),
+    ...(models ? { models } : {}),
+    ...(providers ? { providers } : {}),
+  };
+  return { config, found };
 }
 
 /**
@@ -163,18 +212,35 @@ function mergeProviders(
  *
  * Loads the global config (creating it if this is the first run), then, if the
  * project has its own `.marshall/config.json`, deep-merges it on top — project
- * values win. See the module comment for why credentials belong in the global
- * file, not the project-local one.
+ * values win, except for credentials, which the project layer is not allowed to
+ * supply at all. See the module comment.
  */
 export function loadConfig(workspaceRoot: string): SavedConfig {
   ensureGlobalConfig();
   const global = readJsonConfig(globalConfigPath());
   const projectPath = configPath(workspaceRoot);
   if (!existsSync(projectPath)) return global;
-  const project = readJsonConfig(projectPath);
+  const { config: project } = stripProjectSecrets(readJsonConfig(projectPath));
   const merged = deepMerge(global, project);
   const providers = mergeProviders(global.providers ?? [], project.providers ?? []);
   return providers.length > 0 ? { ...merged, providers } : merged;
+}
+
+/**
+ * Credentials found in the project file, which `loadConfig` has ignored.
+ *
+ * Reported rather than silently dropped: someone who put a key there is going
+ * to wonder why authentication fails, and the answer ("that file gets
+ * committed") is the whole point of the rule.
+ */
+export function projectSecretWarnings(workspaceRoot: string): string[] {
+  const path = configPath(workspaceRoot);
+  if (!existsSync(path)) return [];
+  const { found } = stripProjectSecrets(readJsonConfig(path));
+  if (found.length === 0) return [];
+  return [`${path} contains an apiKey (${found.join(', ')}) — ignoring it, because that file `
+    + 'is meant to be committed. Put the key in the global config via /model, or in a '
+    + 'gitignored .env as the provider\'s environment variable.'];
 }
 
 /**
@@ -354,16 +420,22 @@ export function upsertProvider(
  *
  * Pure, so the merge rules are testable without touching a disk. The flat
  * top-level keys mirror the deep tier so an older build still finds a model.
+ *
+ * `existing` is spread back in rather than dropped. This used to take only the
+ * providers array, which meant choosing a model silently deleted every other
+ * section of the file — `mcpServers`, `mcp` and `settings` all lived through
+ * exactly one `/model` before disappearing.
  */
 export function buildConfig(
   deep: AgentProfile,
   fast: AgentProfile | undefined,
-  existingProviders: SavedProviderEntry[] = [],
+  existing: SavedConfig = {},
 ): SavedConfig {
-  let providers = upsertProvider(existingProviders, deep);
+  let providers = upsertProvider(existing.providers ?? [], deep);
   if (fast) providers = upsertProvider(providers, fast);
 
   return {
+    ...existing,
     ...strip(deep),
     models: { deep: strip(deep), ...(fast ? { fast: strip(fast) } : {}) },
     providers,
@@ -386,9 +458,9 @@ export async function saveConfig(
   const path = globalConfigPath();
   await mkdir(globalConfigDir(), { recursive: true });
 
-  let existing: SavedProviderEntry[] = [];
+  let existing: SavedConfig = {};
   try {
-    existing = (JSON.parse(await readFile(path, 'utf8')) as SavedConfig).providers ?? [];
+    existing = JSON.parse(await readFile(path, 'utf8')) as SavedConfig;
   } catch { /* no file yet, or unreadable — start from empty */ }
 
   await writeFile(path, JSON.stringify(buildConfig(deep, fast, existing), null, 2), { mode: 0o600 });

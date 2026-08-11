@@ -203,6 +203,68 @@ describe('App component', () => {
     instance.unmount();
   });
 
+  // The key precedence itself is settled in services/settings.test.ts; what
+  // matters here is that the resolved settings actually reach the engine,
+  // because a persisted level-3 gate that never gets handed to the Session
+  // leaves the user thinking a judge is reviewing calls when none is.
+  it('hands the resolved settings to the Session, judge and credential included', () => {
+    const ws = mkTemp();
+    let opts: any = null;
+    const SessionCapture = class extends MockSession {
+      constructor(o: any) { super(o); opts = o; }
+    };
+
+    const instance = renderTui(
+      React.createElement(App, {
+        workspaceRoot: ws,
+        agentProfile: { provider: 'openrouter' as const, model: 'm1', apiKey: 'deep-key' },
+        settings: {
+          runtime: 'light' as const,
+          safetyLevel: 3 as const,
+          safetyAgent: { provider: 'openrouter' as const, model: 'judge-model' },
+        },
+        savedKeys: {},
+        SessionCtor: SessionCapture as any,
+        startLoginCtor: mockStartLogin,
+        completeLoginCtor: mockCompleteLogin,
+      }),
+      { stdout: fakeStdout(chunk => { capturedOutput += chunk; }) },
+    );
+
+    assert.strictEqual(opts.safetyLevel, 3);
+    assert.strictEqual(opts.light, true, 'the runtime mode reaches the engine as its light flag');
+    assert.ok(opts.safetyAgent, 'a persisted judge must be configured at startup');
+    assert.strictEqual(opts.safetyAgent.profile.model, 'judge-model');
+    assert.strictEqual(opts.safetyAgent.profile.apiKey, 'deep-key');
+
+    instance.unmount();
+  });
+
+  it('defaults to the full belt and the human gate when nothing is pinned', () => {
+    const ws = mkTemp();
+    let opts: any = null;
+    const SessionCapture = class extends MockSession {
+      constructor(o: any) { super(o); opts = o; }
+    };
+
+    const instance = renderTui(
+      React.createElement(App, {
+        workspaceRoot: ws,
+        agentProfile: { provider: 'claude' as const, model: 'claude-sonnet-4-6' },
+        SessionCtor: SessionCapture as any,
+        startLoginCtor: mockStartLogin,
+        completeLoginCtor: mockCompleteLogin,
+      }),
+      { stdout: fakeStdout(chunk => { capturedOutput += chunk; }) },
+    );
+
+    assert.strictEqual(opts.safetyLevel, 2);
+    assert.strictEqual(opts.light, false);
+    assert.strictEqual(opts.safetyAgent, undefined);
+
+    instance.unmount();
+  });
+
   it('creates Session with correct workspace path', () => {
     const agentProfile = { provider: 'claude' as const, model: 'claude-sonnet-4-6' };
     const ws = mkTemp();

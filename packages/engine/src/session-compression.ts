@@ -82,7 +82,7 @@ export class CompressionManager {
 
   /**
    * `getConfig` is a getter, not a value: the session replaces its config
-   * wholesale on every `/model`, `/light` and `/safety` change, so a snapshot
+   * wholesale on every `/model`, `/runtime` and `/safety` change, so a snapshot
    * taken here would go stale the first time the user switches models.
    */
   constructor(

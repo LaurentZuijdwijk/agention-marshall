@@ -4,8 +4,9 @@ import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, statSync, existsSy
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import {
-  buildConfig, upsertProvider, loadConfig, savedDeepProfile, savedProviders, savedHosts,
+  buildConfig, upsertProvider, loadConfig, savedDeepProfile, savedProviders, savedHosts, savedKeys,
   saveConfig, configPath, globalConfigPath, savedMcpServers, resolveMcpServers, danglingMcpSelections,
+  projectSecretWarnings,
 } from './config-store.js';
 import type { SavedConfig } from './config-store.js';
 import type { SavedProviderEntry } from './config-store.js';
@@ -90,8 +91,42 @@ describe('buildConfig', () => {
   });
 
   it('keeps a provider that neither tier uses', () => {
-    const out = buildConfig(ROUTER, undefined, [{ provider: 'ollama', host: 'http://localhost:11434' }]);
+    const out = buildConfig(ROUTER, undefined, { providers: [{ provider: 'ollama', host: 'http://localhost:11434' }] });
     assert.equal(out.providers?.find(e => e.provider === 'ollama')?.host, 'http://localhost:11434');
+  });
+});
+
+describe('project-local credentials', () => {
+  it('ignores an apiKey in the project file, wherever it hides', () => {
+    const root = ws();
+    writeGlobal({ providers: [{ provider: 'openrouter', apiKey: 'global-key' }] });
+    write(root, {
+      apiKey: 'top-level-leak',
+      models: { deep: { provider: 'openrouter', model: 'x', apiKey: 'deep-leak' } },
+      providers: [{ provider: 'openrouter', apiKey: 'provider-leak' }],
+    });
+
+    const config = loadConfig(root);
+    // The project file is meant to be committed, so it may pin the model but
+    // never the credential — the global entry is what authenticates.
+    assert.equal(config.apiKey, undefined);
+    assert.equal(config.models?.deep?.apiKey, undefined);
+    assert.equal(savedDeepProfile(config).model, 'x', 'the non-secret pin still applies');
+    assert.deepEqual(savedKeys(config), { openrouter: 'global-key' });
+  });
+
+  it('reports what it ignored, rather than just failing to authenticate later', () => {
+    const root = ws();
+    write(root, { apiKey: 'leak' });
+    const [warning] = projectSecretWarnings(root);
+    assert.match(warning, /apiKey/);
+    assert.match(warning, /\.env|global config/);
+  });
+
+  it('says nothing when the project file is clean', () => {
+    const root = ws();
+    write(root, { provider: 'llamacpp', model: 'qwen' });
+    assert.deepEqual(projectSecretWarnings(root), []);
   });
 });
 
@@ -214,6 +249,22 @@ describe('saveConfig', () => {
   it('writes 0600, since the file can hold an API key', async () => {
     await saveConfig(ROUTER, undefined);
     assert.equal(statSync(globalConfigPath()).mode & 0o777, 0o600);
+  });
+
+  it('leaves the rest of the global file alone', async () => {
+    // Choosing a model used to rebuild the file from the tiers alone, which
+    // silently deleted every other section — a configured MCP server survived
+    // exactly one /model.
+    writeGlobal({
+      mcpServers: [{ name: 'gh', url: 'https://example.com/mcp', headers: { auth: 't' } }],
+      settings: { version: 1, mode: 'light' },
+    });
+    await saveConfig(ROUTER, undefined);
+
+    const back = JSON.parse(readFileSync(globalConfigPath(), 'utf8'));
+    assert.deepEqual(back.mcpServers, [{ name: 'gh', url: 'https://example.com/mcp', headers: { auth: 't' } }]);
+    assert.deepEqual(back.settings, { version: 1, mode: 'light' });
+    assert.equal(back.model, 'deepseek/v4', 'and still records the tier it was called with');
   });
 
   it('recovers from a corrupt existing file instead of throwing', async () => {

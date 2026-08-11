@@ -36,9 +36,11 @@ import { useKeyBindings } from './hooks/useKeyBindings.js';
 import { startLogin, completeLogin } from './login.js';
 import type { LoginSession } from './login.js';
 import { runSlashCommand } from './commands.js';
-import { describeUpdate } from './update-check.js';
+import { describeUpdate, currentVersion } from './update-check.js';
 import type { UpdateInfo } from './update-check.js';
 import { saveMcpServers, saveProjectMcpSelection } from './services/config-store.js';
+import { saveSettings, projectSettings, toSafetyAgentConfig } from './services/settings.js';
+import type { RuntimeMode, Settings } from './services/settings.js';
 import { completeSlash, SAFETY_LEVEL_LABELS } from './slashCommands.js';
 import { completeAtPath, expandFileMentions } from './fileCompletion.js';
 import type { Mode } from './mode.js';
@@ -59,8 +61,12 @@ export interface AppProps {
   enableGitHub?: boolean;
   enableWebSearch?: boolean;
   maxTokens?: number;
-  /** Start with the lean tool belt — see EngineConfig.light. `/light` toggles it. */
-  light?: boolean;
+  /**
+   * Resolved non-secret settings: the runtime mode, the safety gate and its
+   * judge. Already merged from both config files and the CLI flags by
+   * services/settings.ts, which is the only thing that reads or writes them.
+   */
+  settings?: Settings;
   /**
    * Per-provider last-used host, loaded from the config `providers` array.
    * Lets the setup wizard re-seed each provider's own host when the user
@@ -74,6 +80,9 @@ export interface AppProps {
   mcpServers?: McpServerConfig[];
   /** MCP config that resolves to nothing — surfaced at startup and by `/mcp`. */
   mcpWarnings?: string[];
+  /** Settings or credentials in the config that were ignored, and why. Shown
+   *  once at startup, since a gate that quietly changed level is worth saying. */
+  configWarnings?: string[];
   /**
    * The startup version check, started before render so the network round trip
    * overlaps with boot. A newer release becomes one row in the transcript.
@@ -108,11 +117,12 @@ export function App({
   enableGitHub = false,
   enableWebSearch = true,
   maxTokens,
-  light = false,
+  settings = { runtime: 'default', safetyLevel: 2 },
   savedHosts,
   savedKeys,
   mcpServers,
   mcpWarnings,
+  configWarnings,
   updateCheck,
   registerRedraw,
   animate = Boolean(process.stdout.isTTY),
@@ -134,10 +144,13 @@ export function App({
     agentProfile.model ? { type: 'idle' } : { type: 'setup', tier: 'deep', chain: true },
   );
   const [steering, setSteering] = useState(false);
-  // Session-only by design (see /safety) — always starts at the default gate,
-  // and is mirrored here purely so the header can show it once it changes;
-  // the engine's own `session.safetyLevel` is the actual source of truth.
-  const [safetyLevel, setSafetyLevelState] = useState<SafetyLevel>(2);
+  // Both mirror the engine, which stays the source of truth: `session.light`
+  // and `session.safetyLevel` are what actually apply. These exist so the
+  // header can be reprinted later (a model switch, `/clear`, a resize replay)
+  // still showing what this session is really doing. They start from the
+  // resolved settings rather than a fixed default, because both are persisted.
+  const [safetyLevel, setSafetyLevelState] = useState<SafetyLevel>(settings.safetyLevel);
+  const [runtimeMode, setRuntimeMode] = useState<RuntimeMode>(settings.runtime);
   const [booting, setBooting] = useState(Boolean(agentProfile.model) && animate);
 
   const prefs = usePreferences();
@@ -155,6 +168,10 @@ export function App({
     fastModel: fast?.model,
     fastProvider: fast?.provider,
     safety: SAFETY_LEVEL_LABELS[safetyLevel],
+    version: currentVersion,
+    runtime: runtimeMode,
+    webSearch: enableWebSearch,
+    github: enableGitHub,
   });
   // The session's tagline, chosen once: the animated banner and the static header
   // that replaces it must settle on the same sentence, so the pick lives here and
@@ -224,12 +241,22 @@ export function App({
     },
   }), []));
 
-  const { session, activeProfile, fastProfile, savedHosts: hosts, savedKeys: keys, applyProfiles, stageProfile } =
+  // The stored judge names a provider and model but never a key, so it has to
+  // be authenticated at load time exactly like the main model. Without this a
+  // level-3 judge comes up unreachable, and while an unreachable judge falls
+  // back to asking the human rather than approving, that is not the gate that
+  // was configured. `toSafetyAgentConfig` owns the precedence.
+  const { session, activeProfile, fastProfile, savedHosts: hosts, savedKeys: keys, applyProfiles, stageProfile, persistSafety } =
     useSession({
       workspaceRoot, agentProfile, fastProfile: initialFastProfile,
       contextAgentProfile, plannerAgentProfile, reviewerAgentProfile,
-      enableGitHub, enableWebSearch, maxTokens, light, savedHosts, savedKeys, mcpServers,
+      enableGitHub, enableWebSearch, maxTokens, savedHosts, savedKeys, mcpServers,
       client, SessionCtor,
+      light: settings.runtime === 'light',
+      safetyLevel: settings.safetyLevel,
+      safetyAgent: settings.safetyAgent
+        ? toSafetyAgentConfig(settings.safetyAgent, { mainProfile: agentProfile, savedKeys })
+        : undefined,
       // Appended, not reset: the session keeps its history across a model
       // switch now, so wiping the visible conversation would misrepresent what
       // the new model can actually see. Compact because `<Static>` has already
@@ -264,7 +291,9 @@ export function App({
   useEffect(() => {
     // A dangling project selection is actionable configuration guidance, not a
     // failed connection; keep it in the informational MCP status style.
-    for (const warning of mcpWarnings ?? []) transcript.push('info', warning);
+    for (const warning of [...(mcpWarnings ?? []), ...(configWarnings ?? [])]) {
+      transcript.push('info', warning);
+    }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Held until boot finishes, because the animation's `onDone` *replaces* the
@@ -400,9 +429,9 @@ export function App({
 
   // ── safety judge wizard (/safety agentic) ─────────────────────────────────
   //
-  // Deliberately does not go through `applyProfiles`/`persist()` — the safety
-  // level and its judge model are session-only (see Session.setSafetyAgent),
-  // so nothing here touches config-store.
+  // Deliberately does not go through `applyProfiles`/`persist()`: that path
+  // writes credentials to the global config, and the judge is persisted through
+  // `persistSafety`, which strips the key and records only provider/model/host.
   const handleSafetySetupComplete = (
     provider: Provider | null,
     model: string | null,
@@ -410,8 +439,10 @@ export function App({
     apiKey?: string,
   ) => {
     if (provider && model && session) {
-      session.setSafetyAgent({ profile: { provider, model, host, ...(apiKey ? { apiKey } : {}) } });
+      const agent = { profile: { provider, model, host, ...(apiKey ? { apiKey } : {}) } };
+      session.setSafetyAgent(agent);
       session.setSafetyLevel(3);
+      persistSafety(3, agent);
       setSafetyLevelState(3);
       transcript.push('info', `safety: agentic — reviewing tool calls with ${provider}/${model}`);
     }
@@ -486,8 +517,29 @@ export function App({
         onMcpChanged: persistMcp,
         mcpWarnings,
         applyProfiles, activeProfile, quit,
+        onRuntimeModeChange: (mode, scope) => {
+          setRuntimeMode(mode);
+          void saveSettings(workspaceRoot, current => ({ ...current, mode }), scope)
+            .then(() => {
+              // A global write that this repo already overrides would otherwise
+              // look like it did nothing the next time the user opens it here.
+              if (scope !== 'global') return;
+              const pinned = projectSettings(workspaceRoot).runtime;
+              if (pinned && pinned !== mode) {
+                transcript.push('info',
+                  `note: this workspace pins runtime "${pinned}" in .marshall/config.json, `
+                  + `which still wins here. Run /runtime ${mode} to change it too.`);
+              }
+            })
+            .catch(() => {});
+        },
         startLogin: startLoginCtor,
-        onSafetyLevelChange: setSafetyLevelState,
+        onSafetyLevelChange: (level) => {
+          setSafetyLevelState(level);
+          // The whole judge config, not just its profile — `kind` and
+          // `maxOutputTokens` have to survive the round trip.
+          persistSafety(level, session?.safetyAgent);
+        },
       });
       return;
     }

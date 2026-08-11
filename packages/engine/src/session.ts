@@ -252,6 +252,14 @@ export class Session {
     return this.config.safetyAgent?.profile;
   }
 
+  /** The whole judge config, not just its profile. A caller persisting the
+   *  current gate needs `kind` and `maxOutputTokens` too — reading it back off
+   *  `safetyAgentProfile` silently drops them and downgrades a content-safety
+   *  judge to the default chat-judge shape on the next load. */
+  get safetyAgent(): SafetyAgentConfig | undefined {
+    return this.config.safetyAgent;
+  }
+
   /**
    * Switch the tool-call approval gate. Safe mid-turn for the same reason
    * `setLight` is: the gate builds its chain from `this.config` fresh on every

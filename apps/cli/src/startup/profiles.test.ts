@@ -162,21 +162,3 @@ describe('parseCliArgs', () => {
     assert.strictEqual(parsed.reviewerModel, 'r');
   });
 });
-
-describe('resolveProfiles — light mode', () => {
-  it('is off unless asked for', () => {
-    assert.strictEqual(resolveProfiles(flags(), {}).light, false);
-  });
-
-  it('is on with --light', () => {
-    assert.strictEqual(resolveProfiles(flags({ light: true }), {}).light, true);
-  });
-
-  it('is on from the config, so a machine with a small local model starts lean', () => {
-    assert.strictEqual(resolveProfiles(flags(), { light: true }).light, true);
-  });
-
-  it('takes --light on top of a config that does not set it', () => {
-    assert.strictEqual(resolveProfiles(flags({ light: true }), { light: false }).light, true);
-  });
-});

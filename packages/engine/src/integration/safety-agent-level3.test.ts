@@ -107,6 +107,31 @@ test('level 3, chat-judge kind: an unsafe command still reaches the human, annot
   assert.match(rec.approvals[0].detail, /rm -rf \//, 'the original command detail is preserved alongside the annotation');
 });
 
+test('level 3: an unreachable judge defers to the human instead of auto-approving', async (t) => {
+  const root = tempRoot();
+  const coder = await startFakeProvider(
+    { toolCalls: [{ name: 'run_shell', arguments: { command: 'rm -rf /' } }] },
+    { text: 'Done.' },
+  );
+  t.after(() => coder.close());
+
+  // The judge cannot even be reached (dead host). The call must NOT sail
+  // through as approved: it defers to the human, who can deny it.
+  const rec = recorder(() => 'deny');
+  const session = makeSession(
+    root, coder,
+    { profile: { provider: 'llamacpp', host: 'http://127.0.0.1:1', model: 'judge-unreachable' } },
+    rec.client,
+  );
+  t.after(() => session.dispose());
+
+  await session.run('clean everything up');
+
+  assert.equal(rec.approvals.length, 1, 'an unreachable judge must still escalate to the human');
+  assert.match(rec.approvals[0].detail, /rm -rf \//, 'the call detail is preserved for the human to judge');
+  assert.doesNotMatch(rec.approvals[0].detail, /UNSAFE/i, 'no false safety annotation from a judge that never answered');
+});
+
 test('level 3, chat-judge kind: the human can also confirm the denial', async (t) => {
   const root = tempRoot();
   const coder = await startFakeProvider(

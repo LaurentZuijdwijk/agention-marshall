@@ -13,7 +13,8 @@ import { resolveProfiles, StartupError } from './startup/profiles.js';
 import { installCrashLogging } from './startup/crash-log.js';
 import { installResizeRedraw } from './view/resize.js';
 import { checkForUpdate } from './update-check.js';
-import { loadConfig, savedHosts, savedKeys, loadMcpServers, loadMcpWarnings } from './services/config-store.js';
+import { loadConfig, savedHosts, savedKeys, loadMcpServers, loadMcpWarnings, projectSecretWarnings } from './services/config-store.js';
+import { readSettings, resolveSettings, settingsWarnings } from './services/settings.js';
 
 const flags = parseCliArgs();
 
@@ -29,6 +30,12 @@ loadEnvFiles(workspaceRoot);
 // provider/model/host keys are the pre-tier format and are still read as the
 // deep tier, so existing workspaces keep working untouched.
 const savedConfig = loadConfig(workspaceRoot);
+
+// Non-secret settings come through one reader, resolved once here, so nothing
+// downstream has to know which of the two config files a value came from or
+// whether a flag beat it. See services/settings.ts.
+const settings = resolveSettings(readSettings(savedConfig), { light: flags.light });
+const configWarnings = [...settingsWarnings(savedConfig), ...projectSecretWarnings(workspaceRoot)];
 
 let profiles;
 try {
@@ -67,11 +74,12 @@ inkInstance = render(
     enableGitHub={flags.github}
     enableWebSearch={flags.webSearch}
     maxTokens={profiles.maxTokens}
-    light={profiles.light}
+    settings={settings}
     savedHosts={savedHosts(savedConfig)}
     savedKeys={savedKeys(savedConfig)}
     mcpServers={loadMcpServers(workspaceRoot)}
     mcpWarnings={loadMcpWarnings(workspaceRoot)}
+    configWarnings={configWarnings}
     updateCheck={updateCheck}
     registerRedraw={fn => { replayTranscript = fn; }}
   />,

@@ -1,6 +1,11 @@
 // ── slash command parsing (pure logic, testable) ────────────────────────────────
 
-export const SLASH_COMMANDS = ['/clear', '/cwd', '/exit', '/goal', '/help', '/jobs', '/light', '/login', '/mcp', '/memory', '/model', '/plan', '/review', '/safety', '/stream', '/tokens', '/update', '/version'] as const;
+import type { RuntimeMode, SettingsScope } from './services/settings.js';
+
+// `/runtime` rather than `/mode`: a command name that is a strict prefix of
+// another one ("/mode" of "/model") makes tab completion actively wrong — the
+// complete, valid command silently grows into a different one.
+export const SLASH_COMMANDS = ['/clear', '/cwd', '/exit', '/goal', '/help', '/jobs', '/login', '/mcp', '/memory', '/model', '/plan', '/review', '/runtime', '/safety', '/stream', '/tokens', '/update', '/version'] as const;
 
 /** Which tier `/model` is about to change. `both` is the first-run chain. */
 export type ModelTarget = 'both' | 'deep' | 'fast' | 'off';
@@ -42,7 +47,8 @@ export type SlashCommandResult =
   | { type: 'login' }
   | { type: 'clear' }
   | { type: 'stream' }
-  | { type: 'light' }
+  /** No `mode` means "show the current one". `scope` is where a change is saved. */
+  | { type: 'runtime'; mode?: RuntimeMode; scope: SettingsScope }
   | { type: 'tokens' }
   | { type: 'update' }
   | { type: 'version' }
@@ -85,6 +91,7 @@ export interface SubcommandWord {
  */
 export const SUBCOMMANDS: Record<string, readonly SubcommandWord[]> = {
   '/model': [{ word: 'deep' }, { word: 'fast' }, { word: 'off' }],
+  '/runtime': [{ word: 'default' }, { word: 'light' }, { word: 'agentic' }],
   '/safety': [{ word: 'default' }, { word: 'yolo' }, { word: 'agentic' }],
   '/jobs': [{ word: 'kill', operand: '<id>' }],
   '/mcp': [{ word: 'add' }, { word: 'remove', operand: '<name>' }, { word: 'reconnect', operand: '<name>' }],
@@ -144,9 +151,26 @@ export function resolveSlashCommand(input: string): SlashCommandResult {
     case '/login': return { type: 'login' };
     case '/clear': return { type: 'clear' };
     case '/stream': return { type: 'stream' };
-    case '/light': return args
-      ? { type: 'usage', message: `usage: /light — got "${args}"` }
-      : { type: 'light' };
+    case '/runtime': {
+      const usage = `usage: /runtime [default|light|agentic] [--global] — got "${args}"`;
+      // `--global` is picked out wherever it sits, so neither word order is a
+      // usage error someone has to look up.
+      const words = args.toLowerCase().split(/\s+/).filter(Boolean);
+      const scope: SettingsScope = words.includes('--global') ? 'global' : 'project';
+      const rest = words.filter(word => word !== '--global');
+      if (rest.length === 0) {
+        // Asking to save nothing globally is a typo, not a query — reporting the
+        // current mode would look like the flag had been accepted.
+        return scope === 'global'
+          ? { type: 'usage', message: usage }
+          : { type: 'runtime', mode: undefined, scope };
+      }
+      if (rest.length > 1) return { type: 'usage', message: usage };
+      const mode = rest[0];
+      return mode === 'default' || mode === 'light' || mode === 'agentic'
+        ? { type: 'runtime', mode, scope }
+        : { type: 'usage', message: usage };
+    }
     case '/tokens': return { type: 'tokens' };
     case '/update': return args
       ? { type: 'usage', message: `usage: /update — got "${args}"` }
@@ -217,8 +241,13 @@ export const HELP = `commands:
   /clear             — clear history, dedupe cache, and scratch notes
   /tokens            — what this session has spent, per agent and model
   /stream            — toggle streaming tokens live vs showing the final response only
-  /light             — toggle the lean tool belt for small models (no scratchpad,
+  /runtime           — show the current runtime mode
+  /runtime default   — use the full tool belt
+  /runtime light     — use the lean tool belt for small models (no scratchpad,
                        background jobs or sub-agents; ~1100 fewer tokens per request)
+  /runtime agentic   — use agentic behaviour (coming soon)
+  /runtime <mode> --global
+                     — save it for every workspace, not just this one
   /version           — show the installed version
   /update            — check for and install the latest version
   /cwd               — show workspace path

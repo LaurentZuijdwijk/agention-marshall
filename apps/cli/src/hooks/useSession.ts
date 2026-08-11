@@ -1,7 +1,8 @@
 import { useRef, useState } from 'react';
 import { Session } from '@agentionai/marshall-engine';
-import type { AgentProfile, ClientInterface, Provider, McpServerConfig } from '@agentionai/marshall-engine';
+import type { AgentProfile, ClientInterface, Provider, McpServerConfig, SafetyAgentConfig, SafetyLevel } from '@agentionai/marshall-engine';
 import { saveConfig } from '../services/config-store.js';
+import { saveSettings, toSavedSafetyAgent } from '../services/settings.js';
 
 /**
  * Owns the engine Session and the two model tiers it was built from.
@@ -26,6 +27,7 @@ export interface SessionController {
    * asks for the fast tier before anything is built.
    */
   stageProfile(deep: AgentProfile): void;
+  persistSafety(level: SafetyLevel, agent?: SafetyAgentConfig): void;
 }
 
 export interface UseSessionOptions {
@@ -39,6 +41,8 @@ export interface UseSessionOptions {
   enableWebSearch?: boolean;
   maxTokens?: number;
   light?: boolean;
+  safetyLevel?: SafetyLevel;
+  safetyAgent?: SafetyAgentConfig;
   savedHosts?: Record<string, string | undefined>;
   savedKeys?: Record<string, string | undefined>;
   /** Servers loaded from the global config, connected at session start. */
@@ -54,7 +58,7 @@ export function useSession(options: UseSessionOptions): SessionController {
     workspaceRoot, agentProfile, fastProfile: initialFast,
     contextAgentProfile, plannerAgentProfile, reviewerAgentProfile,
     enableGitHub, enableWebSearch, maxTokens, light,
-    client, onProfilesChanged, SessionCtor = Session,
+    client, onProfilesChanged, SessionCtor = Session, safetyLevel, safetyAgent,
   } = options;
 
   const [activeProfile, setActiveProfile] = useState<AgentProfile>(agentProfile);
@@ -75,6 +79,8 @@ export function useSession(options: UseSessionOptions): SessionController {
       models: { deep, fast },
       workspaceRoot, enableGitHub, enableWebSearch, maxTokens, light,
       mcpServers: options.mcpServers,
+      ...(safetyLevel ? { safetyLevel } : {}),
+      ...(safetyAgent ? { safetyAgent } : {}),
       contextAgent: contextAgentProfile,
       plannerAgent: plannerAgentProfile,
       reviewerAgent: reviewerAgentProfile,
@@ -112,6 +118,21 @@ export function useSession(options: UseSessionOptions): SessionController {
     void saveConfig(deep, fast).catch(() => {});
   };
 
+  const persistSafety = (level: SafetyLevel, agent?: SafetyAgentConfig) => {
+    // YOLO (level 1) is session-only and is never written. Returning early
+    // also leaves any previously pinned level alone, which is the point: yolo
+    // is a decision about this session, not about the next one.
+    if (level === 1) return;
+    void saveSettings(workspaceRoot, current => ({
+      ...current,
+      safetyLevel: level,
+      // Passed through, not merged: dropping the judge is how a gate that no
+      // longer has one stops claiming it does. `saveSettings` removes the key
+      // when this is undefined.
+      safetyAgent: agent ? toSavedSafetyAgent(agent) : undefined,
+    })).catch(() => {});
+  };
+
   const applyProfiles = (deep: AgentProfile, fast: AgentProfile | undefined) => {
     // Switch in place when there is a session to switch. Rebuilding it used to
     // be the whole implementation, which silently discarded the conversation,
@@ -135,5 +156,6 @@ export function useSession(options: UseSessionOptions): SessionController {
     savedKeys,
     applyProfiles,
     stageProfile: setActiveProfile,
+    persistSafety,
   };
 }
