@@ -1,5 +1,72 @@
 # @agentionai/marshall-engine
 
+## 0.13.3
+
+### Patch Changes
+
+- f7bbefc: Fix the `openai` and `gemini` providers, which both failed on the first request
+  of every session, by taking `@agentionai/agents` 1.6.0-beta.0. Three bugs, all
+  fatal on their own and all fixed upstream:
+
+  - OpenAI tool definitions went out with `strict: true` unconditionally, and
+    OpenAI rejects a strict schema whose `required` list does not name every
+    property — so the ten tools with an optional parameter (`read_file`'s line
+    range, `search`'s path filters, the `gh_*` filters) turned into a 400 before
+    the model ran.
+  - Gemini tool results were sent as a bare JSON string where the API types
+    `functionResponse.response` as a protobuf Struct, which came back as a 400
+    quoting the whole tool output.
+  - the `thoughtSignature` Gemini 3 returns with each function call was dropped by
+    the history transformer, so replaying the call failed with "Function call is
+    missing a thought_signature". Gemini 2.5 did not require them and is no longer
+    offered on new API keys, so this affected every model a new user can reach.
+
+  A bad request that compression cannot shrink and that never mentions context
+  also stops being reported as "context window full", which is how the OpenAI one
+  hid: the CLI reported a full context window over a 921-token history.
+
+- e26473b: Persist runtime and safety settings, and replace `/light` with `/runtime`.
+
+  **Breaking:** `/light` is now `/runtime [default|light|agentic]`. The old command
+  toggled; the new one names the mode you want, and remembers it. `/runtime` on its
+  own reports the current mode. Add `--global` to save it for every workspace
+  instead of just this one. It is not called `/mode` because that is a strict
+  prefix of `/model`, which made tab completion rewrite a complete, valid command
+  into a different one.
+
+  Safety levels 2 and 3 are now persisted too, together with the judge model chosen
+  by `/safety agentic`, so turning a real approval gate on is not something you have
+  to redo every morning. Level 1 (`yolo`) is deliberately never written: a gate that
+  disables itself again on the next launch, from a file that can be committed, is
+  not a decision anyone should be able to make once. The stored judge records
+  provider, model and host but never an API key, and is authenticated at load time
+  from the global config or the provider's environment variable.
+
+  All non-secret settings now live under a versioned `settings` key in
+  `.marshall/config.json` or the global config, with one reader and one writer
+  (`services/settings.ts`). A settings block from an unrecognised version is ignored
+  rather than half-read, invalid values are reported at startup rather than silently
+  applied, and a level-3 gate whose judge cannot be validated is read back as level 2
+  rather than as no gate at all.
+
+  Fixes along the way:
+
+  - An `apiKey` in the project-local `.marshall/config.json` is now ignored and
+    reported, wherever in the file it appears. That file is meant to be committed.
+  - Choosing a model no longer wipes the rest of the global config. `saveConfig`
+    rebuilt the file from the model tiers alone, so a configured MCP server or
+    settings block survived exactly one `/model`.
+  - A project config pinning one provider's host no longer erases the API key stored
+    globally for that same provider.
+  - `Session` gained a `safetyAgent` getter. Reading the gate back off
+    `safetyAgentProfile` dropped `kind` and `maxOutputTokens`, which silently
+    downgraded a content-safety judge to the default chat-judge shape.
+  - The header's `mode` row now tracks `/runtime` instead of showing the value it
+    booted with.
+
+- Updated dependencies [f7bbefc]
+  - @agentionai/marshall-tools@0.6.1
+
 ## Unreleased
 
 ### Patch Changes
