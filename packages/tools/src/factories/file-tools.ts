@@ -249,7 +249,9 @@ export function createFileTools(config: ToolConfig, dedupeCache?: DedupeCache): 
   // Serialises the mutating tools per path. The model batches tool calls, and
   // both write_file and edit_file read the file before writing it back, so
   // without this two calls on one path race and the loser's edit vanishes.
-  const withFileLock = createKeyedLock();
+  // Supplied by the session when more than one belt can write — see
+  // ToolConfig.fileLock.
+  const withFileLock = config.fileLock ?? createKeyedLock();
 
   const read_file = buildReadFile(workspaceRoot, maxFileBytes, readFiles, dedupeCache);
   const list_dir = buildListDir(workspaceRoot);

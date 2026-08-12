@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createFileTools, createReadOnlyFileTools } from './file-tools.js';
+import { createKeyedLock } from '../primitives/keyed-lock.js';
 import type { ToolConfig, ApprovalRequest } from '../types.js';
 
 function tempRoot(): string {
@@ -334,6 +335,32 @@ test('parallel write_file and edit_file on one file do not interleave', async ()
   assert.match(edited, /not found/,
     'the edit ran after the overwrite, so "original" is gone — a stale read would have found it');
   assert.equal(readFileSync(join(root, 'target.txt'), 'utf8'), 'replaced\n');
+});
+
+test('an injected lock serialises two belts writing one file', async () => {
+  const root = tempRoot();
+  writeFileSync(join(root, 'shared.txt'), 'alpha\nbeta\n');
+  // What two agents get: a belt each, sharing the session's read tracking and
+  // its lock. Without the shared lock each belt queues only against itself, so
+  // both edits read the same original and the second write drops the first.
+  const readFiles = new Map<string, string>();
+  const fileLock = createKeyedLock();
+  const beltA = Object.fromEntries(
+    createFileTools(makeConfig({ workspaceRoot: root, readFiles, fileLock })).map((t) => [t.name, t]),
+  );
+  const beltB = Object.fromEntries(
+    createFileTools(makeConfig({ workspaceRoot: root, readFiles, fileLock })).map((t) => [t.name, t]),
+  );
+  await beltA.read_file.execute('a', 'b', { path: 'shared.txt' }, 'id');
+
+  const results = await Promise.all([
+    beltA.edit_file.execute('a', 'b', { path: 'shared.txt', oldString: 'alpha', newString: 'ALPHA' }, 'i1'),
+    beltB.edit_file.execute('a', 'b', { path: 'shared.txt', oldString: 'beta', newString: 'BETA' }, 'i2'),
+  ]);
+
+  for (const result of results) assert.match(result, /Edited/);
+  assert.equal(readFileSync(join(root, 'shared.txt'), 'utf8'), 'ALPHA\nBETA\n',
+    'both edits must survive — a per-belt lock loses whichever wrote first');
 });
 
 test('edit_file replaces a unique occurrence', async () => {

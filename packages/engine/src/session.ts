@@ -9,6 +9,7 @@ import {
   createAskTool,
   createDedupeCache,
   createBackgroundJobs,
+  createKeyedLock,
   summariseJob,
   formatJobOutput,
 } from '@agentionai/marshall-tools';
@@ -85,6 +86,16 @@ export class Session {
    * Path to the content hash the model last saw — see ToolConfig.readFiles.
    */
   private readonly readFiles = new Map<string, string>();
+  /**
+   * Serialises writes per path across every belt in the session.
+   *
+   * Held here for the same reason as `readFiles`, and for one the belt cannot
+   * solve at all: a lock owned by a factory only orders the calls made through
+   * that one belt. Sub-agents get their own belts, so a factory-owned lock would
+   * leave two agents writing one file completely unserialised — the exact case
+   * the lock exists to prevent. See ToolConfig.fileLock.
+   */
+  private readonly fileLock = createKeyedLock();
   /** Every agent's token spend, coder and sub-agents alike. */
   private readonly usage = createUsageTally(() => this.prices);
   /** Model prices, once a client that knows any has handed them over. */
@@ -186,6 +197,7 @@ export class Session {
       jobs: this.jobs,
       usage: this.usage,
       readFiles: this.readFiles,
+      fileLock: this.fileLock,
       dedupeCache: this.dedupeCache,
       maskingPlugin: this.maskingPlugin,
       mcp: this.mcp,
