@@ -10,7 +10,7 @@ import {
   createJobTools,
   createAskTool,
 } from '@agentionai/marshall-tools';
-import type { ToolConfig, DedupeCache, BackgroundJobs, ApprovalFn } from '@agentionai/marshall-tools';
+import type { ToolConfig, DedupeCache, BackgroundJobs, ApprovalFn, KeyedLock } from '@agentionai/marshall-tools';
 import {
   createAgent,
   CONTEXT_AGENT_PROMPT,
@@ -68,6 +68,8 @@ export interface ToolBeltDeps {
   usage: UsageTally;
   /** Session-scoped read tracking — see ToolConfig.readFiles. */
   readFiles: Map<string, string>;
+  /** Session-scoped per-path write lock — see ToolConfig.fileLock. */
+  fileLock: KeyedLock;
   dedupeCache: DedupeCache;
   maskingPlugin: ToolResultMaskingPlugin;
   mcp: McpRegistry;
@@ -199,6 +201,11 @@ export class ToolBelt {
       // Session-scoped, so a file read in one turn is still editable in the
       // next — the belt around it is rebuilt every turn, this is not.
       readFiles: this.deps.readFiles,
+      // Session-scoped for a second reason on top of that one: every belt that
+      // can write has to queue on the *same* lock or it serialises only against
+      // itself. Today that is one belt per turn; it stops being true the moment
+      // a spawned agent gets write tools.
+      fileLock: this.deps.fileLock,
       // Withholding the registry is what removes `background` from run_shell's
       // schema — the factory keys the option off its presence, so light mode
       // does not need the shell tool to know it exists.

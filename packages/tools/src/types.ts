@@ -1,4 +1,5 @@
 import type { BackgroundJobs } from './primitives/background.js';
+import type { KeyedLock } from './primitives/keyed-lock.js';
 
 export type ApprovalDecision = 'approve' | 'deny' | 'always';
 
@@ -168,6 +169,17 @@ export interface ToolConfig {
    * silently discarding whatever landed in between.
    */
   readFiles?: Map<string, string>;
+  /**
+   * Serialises the mutating file tools per path.
+   *
+   * Injected for the same reason as `readFiles`, and one step further: a lock
+   * owned by the factory only serialises calls made through *one belt*. That is
+   * enough while a single agent does the writing, but two agents each get their
+   * own belt, so each would take its own private lock and serialise against
+   * nothing — which is precisely the case the lock exists for. Absent means a
+   * per-belt lock, which is what the tests and single-writer belts want.
+   */
+  fileLock?: KeyedLock;
   /**
    * Registry for backgrounded shell commands. Absent means `run_shell` has no
    * `background` option and the job tools don't exist.
