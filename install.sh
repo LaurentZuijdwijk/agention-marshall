@@ -1043,110 +1043,122 @@ draw_install_progress() {
   printf '\r\033[K  %s%s%s %s %s%s%s %s' "$orange" "$frame" "$reset" "$bar" "$bold" "$title" "$reset" "$label"
 }
 
+# The block-letter MARSHALL wordmark from apps/cli/src/view/Banner.tsx. Revealed
+# with the same left-to-right wipe + shimmer pass, painted in the brand
+# gradient (violet→cyan). Wide below 65 columns; compact (two rows) otherwise.
+readonly MR_LOGO_REVEAL_FRAMES=16
+readonly MR_LOGO_SHIMMER_FRAMES=12
+MR_LOGO_WIDE='███╗   ███╗ █████╗ ██████╗ ███████╗██╗  ██╗ █████╗ ██╗     ██╗
+████╗ ████║██╔══██╗██╔══██╗██╔════╝██║  ██║██╔══██╗██║     ██║
+██╔████╔██║███████║██████╔╝███████╗███████║███████║██║     ██║
+██║╚██╔╝██║██╔══██║██╔══██╗╚════██║██╔══██║██╔══██║██║     ██║
+██║ ╚═╝ ██║██║  ██║██║  ██║███████║██║  ██║██║  ██║███████╗███████╗
+╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚══════╝'
+MR_LOGO_COMPACT='█▀▄▀█ ▄▀█ █▀█ █▀ █ █ ▄▀█ █   █
+█ ▀ █ █▀█ █▀▄ ▄█ █▀█ █▀█ █▄▄ █▄▄'
+
 mr_logo_animation() {
   if [ ! -t 1 ] || [ "${TERM:-}" = "dumb" ]; then
     print_static_logo
     return
   fi
 
+  # Brand gradient violet→cyan as 256-colour bands, when the terminal can show 256.
+  gradient=0
+  if [ -n "${COLORTERM:-}" ]; then
+    case "$COLORTERM" in truecolor|24bit) gradient=1 ;; esac
+  elif case "$TERM" in *256color*) true ;; *) false ;; esac; then
+    gradient=1
+  fi
+
+  cols=$(tput cols 2>/dev/null || printf 80)
+  if [ "$cols" -ge 65 ]; then
+    rows="$MR_LOGO_WIDE"
+    width=63
+  else
+    rows="$MR_LOGO_COMPACT"
+    width=29
+  fi
+
   esc="${MR_ESC}["
   reset="${MR_ESC}[0m"
   hide="${esc}?25l"
   show="${esc}?25h"
-  clear="${esc}H"
 
   trap 'printf "%s%s\n" "$reset" "$show"; trap - INT TERM; exit 130' INT TERM
   printf '%s%s' "$hide" "${esc}2J${esc}H"
 
-  # Assemble the M top to bottom, then blink the floor.
-  row=0
-  while [ "$row" -le 8 ]; do
-    draw_mr_logo_frame "$clear" "$reset" "$row" 0
-    sleep 0.05
-    row=$((row + 1))
+  total=$((MR_LOGO_REVEAL_FRAMES + MR_LOGO_SHIMMER_FRAMES))
+  frame=0
+  while [ "$frame" -lt "$total" ]; do
+    if [ "$frame" -lt "$MR_LOGO_REVEAL_FRAMES" ]; then
+      shown=$(( (frame + 1) * width / MR_LOGO_REVEAL_FRAMES ))
+      sweep=$shown
+    else
+      shown=$width
+      f=$((frame - MR_LOGO_REVEAL_FRAMES))
+      sweep=$(( width * 2 / 10 + width * 11 * f / (10 * MR_LOGO_SHIMMER_FRAMES) ))
+      if [ "$sweep" -ge "$width" ]; then
+        sweep=-1
+      fi
+    fi
+    draw_mr_wordmark_frame "$rows" "$shown" "$sweep" "$gradient" "$width"
+    sleep 0.045
+    frame=$((frame + 1))
   done
-
-  draw_mr_logo_frame "$clear" "$reset" 9 0; sleep 0.25
-  blink=0
-  while [ "$blink" -lt 3 ]; do
-    draw_mr_logo_frame "$clear" "$reset" 9 1; sleep 0.12
-    draw_mr_logo_frame "$clear" "$reset" 9 0; sleep 0.12
-    blink=$((blink + 1))
-  done
-  sleep 0.25
 
   printf '%s%s\n' "$reset" "$show"
   trap - INT TERM
 }
 
-draw_mr_logo_frame() {
-  clear="$1"; reset="$2"; reveal="$3"; flash="$4"
+draw_mr_wordmark_frame() {
+  rows="$1"; shown="$2"; sweep="$3"; gradient="$4"; width="$5"
 
-  left=0
-  top=0
+  reset="${MR_ESC}[0m"
+  b0="${MR_ESC}[38;5;99m"
+  b1="${MR_ESC}[38;5;105m"
+  b2="${MR_ESC}[38;5;111m"
+  b3="${MR_ESC}[38;5;117m"
+  b4="${MR_ESC}[38;5;123m"
+  b5="${MR_ESC}[38;5;51m"
 
-  panel_cell="${reset}  "
-  cyan_cell="${MR_ESC}[36m██"
-  orange_cell="${MR_ESC}[33m██"
+  printf '%s' "$rows" | while IFS= read -r row; do
+    line=""
+    col=0
+    while [ -n "$row" ]; do
+      # Take one character: a leading space is 1 byte, every block glyph is 3.
+      case "$row" in
+        ' '*) char=' '; row=${row# } ;;
+        *) char=${row%"${row#???}"}; row=${row#???} ;;
+      esac
 
-  pad=$(repeat_space "$left")
-  frame="$clear"
-  i=0
-  while [ "$i" -lt "$top" ]; do frame="${frame}\n"; i=$((i + 1)); done
-
-  y=0
-  while [ "$y" -le 8 ]; do
-    frame="${frame}${pad}"
-    x=1
-    while [ "$x" -le 8 ]; do
-      if [ "$flash" = 1 ] && is_floor_cell "$y" "$x"; then
-        cell="$orange_cell"
-      elif [ "$reveal" -ge "$y" ] && is_m_cell "$y" "$x"; then
-        cell="$cyan_cell"
+      if [ "$col" -ge "$shown" ]; then
+        cell=" "
+      elif [ "$sweep" -ge 0 ] && [ "$col" -eq "$sweep" ]; then
+        cell="${MR_ESC}[1;97m${char}"
+      elif [ "$gradient" = 1 ]; then
+        band=$((col * 6 / width))
+        case "$band" in
+          0) cell="${b0}${char}" ;;
+          1) cell="${b1}${char}" ;;
+          2) cell="${b2}${char}" ;;
+          3) cell="${b3}${char}" ;;
+          4) cell="${b4}${char}" ;;
+          *) cell="${b5}${char}" ;;
+        esac
       else
-        cell="$panel_cell"
+        cell="${MR_ESC}[36m${char}"
       fi
-      frame="${frame}${cell}"
-      x=$((x + 1))
+
+      line="${line}${cell}"
+      col=$((col + 1))
     done
-    frame="${frame}${reset}\n"
-    y=$((y + 1))
+    printf '%s%s\n' "$line" "$reset"
   done
-  printf '%b' "$frame" 2>/dev/null || true
-}
-
-is_m_cell() {
-  y="$1"; x="$2"
-  case "$y,$x" in
-    0,1|0,2|0,7|0,8|1,1|1,2|1,3|1,6|1,7|1,8|2,1|2,2|2,4|2,5|2,7|2,8|3,1|3,2|3,4|3,5|3,7|3,8|4,1|4,4|4,5|4,8|5,1|5,4|5,5|5,8|6,1|6,4|6,5|6,8|7,1|7,4|7,5|7,8|8,1|8,4|8,5|8,8)
-      return 0 ;;
-  esac
-  return 1
-}
-
-is_floor_cell() {
-  y="$1"; x="$2"
-  case "$y,$x" in
-    8,2|8,3|8,6|8,7) return 0 ;;
-  esac
-  return 1
-}
-
-repeat_space() {
-  count="$1"; out=""
-  while [ "$count" -gt 0 ]; do out=" $out"; count=$((count - 1)); done
-  printf '%s' "$out"
 }
 
 print_static_logo() {
-  cat <<'EOF'
-
-   ██    ██
-   ██ ██ ██
-   ██  ██ ██
-   ██    ██
-
-EOF
+  printf '\n%s\n' "$MR_LOGO_COMPACT"
 }
 
 mr_installer_main "$@"
