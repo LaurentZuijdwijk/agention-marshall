@@ -5,7 +5,7 @@ import type { RuntimeMode, SettingsScope } from './services/settings.js';
 // `/runtime` rather than `/mode`: a command name that is a strict prefix of
 // another one ("/mode" of "/model") makes tab completion actively wrong — the
 // complete, valid command silently grows into a different one.
-export const SLASH_COMMANDS = ['/clear', '/cwd', '/exit', '/goal', '/help', '/jobs', '/login', '/mcp', '/memory', '/model', '/plan', '/review', '/runtime', '/safety', '/stream', '/tokens', '/update', '/version'] as const;
+export const SLASH_COMMANDS = ['/agents', '/clear', '/cwd', '/exit', '/goal', '/help', '/jobs', '/login', '/mcp', '/memory', '/model', '/plan', '/review', '/runtime', '/safety', '/stream', '/tokens', '/update', '/version'] as const;
 
 /** Which tier `/model` is about to change. `both` is the first-run chain. */
 export type ModelTarget = 'both' | 'deep' | 'fast' | 'off';
@@ -59,6 +59,10 @@ export type SlashCommandResult =
   | { type: 'safety'; level?: SafetyLevelWord }
   /** `/jobs` lists; `/jobs kill <id>` (or `kill all`) stops. */
   | { type: 'jobs'; kill?: string }
+  /** `/agents` lists; `/agents stop <id>` (or `stop all`) stops. Deliberately
+   *  the same shape as `/jobs`: both answer "what did you start, and make it
+   *  stop", and one idiom is easier to remember under pressure than two. */
+  | { type: 'agents'; stop?: string }
   /** `/mcp` lists; `add` opens the wizard; `remove`/`reconnect` name a server.
    *  One member per action rather than a combined `'list' | 'add'`, so that
    *  ruling those out actually narrows to the member carrying `server`. */
@@ -94,6 +98,7 @@ export const SUBCOMMANDS: Record<string, readonly SubcommandWord[]> = {
   '/runtime': [{ word: 'default' }, { word: 'light' }, { word: 'agentic' }],
   '/safety': [{ word: 'default' }, { word: 'yolo' }, { word: 'agentic' }],
   '/jobs': [{ word: 'kill', operand: '<id>' }],
+  '/agents': [{ word: 'stop', operand: '<id>' }],
   '/mcp': [{ word: 'add' }, { word: 'remove', operand: '<name>' }, { word: 'reconnect', operand: '<name>' }],
 };
 
@@ -215,6 +220,14 @@ export function resolveSlashCommand(input: string): SlashCommandResult {
       }
       return { type: 'jobs', kill: id };
     }
+    case '/agents': {
+      if (!args) return { type: 'agents' };
+      const [verb, id] = args.split(/\s+/);
+      if (verb !== 'stop' || !id) {
+        return { type: 'usage', message: `usage: /agents [stop <id>|stop all] — got "${args}"` };
+      }
+      return { type: 'agents', stop: id };
+    }
   }
 }
 
@@ -228,6 +241,8 @@ export const HELP = `commands:
   /plan <task>       — get a plan before making changes (used as context for your next task)
   /goal <task>       — clarify what "done" looks like before making changes (used as context for your next task)
   /review [notes]    — get a second opinion on the current workspace state
+  /agents            — list the agents the model has spawned this session
+  /agents stop <id>  — stop one agent, or "stop all" for every running one
   /safety            — show the current tool-call safety level and what each does
   /safety yolo       — no approval gate at all (dangerous)
   /safety default    — you approve every state-changing tool call (the default)

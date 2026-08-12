@@ -1,7 +1,9 @@
 export type {
   Provider, AgentProfile, EngineConfig, ResolvedAuth, Tier, Role, ModelTiers,
-  SafetyLevel, SafetyAgentKind, SafetyAgentConfig,
+  SafetyLevel, SafetyAgentKind, SafetyAgentConfig, SwarmRole, RuntimeMode,
 } from './config.js';
+export type { AgentJob, AgentJobs, AgentJobStatus, AgentToolset } from './agent-jobs.js';
+export { summariseAgentJob } from './agent-jobs.js';
 export {
   PROVIDER_DEFAULTS, resolveApiKey, resolveAuth, resolveModel,
   DEFAULT_ROLE_TIERS, resolveTierProfile, resolveRoleProfile, tierForRole, isDelegated,
@@ -17,7 +19,7 @@ export {
   formatContext, formatParams, formatBytes, formatPrice,
 } from './models.js';
 export { Session } from './session.js';
-export type { Pricing, PriceBook, TokenCount, UsageTotals, RoleUsage, UsageReport, UsageTally, Throughput } from './usage.js';
+export type { Pricing, PriceBook, TokenCount, UsageTotals, RoleUsage, UsageReport, UsageTally, UsageRole, Throughput } from './usage.js';
 export { createUsageTally, throughputOf, pricingFor, rate, formatTokens, formatCost, formatRate } from './usage.js';
 export { McpRegistry } from './mcp.js';
 export type { McpServerConfig, McpServerState, McpStatus } from './mcp.js';

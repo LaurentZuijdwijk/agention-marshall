@@ -7,7 +7,9 @@
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import type { AgentProfile, McpServerState, SafetyLevel, SafetyAgentConfig, UsageReport } from '@agentionai/marshall-engine';
+import type {
+  AgentProfile, AgentJob, McpServerState, SafetyLevel, SafetyAgentConfig, UsageReport,
+} from '@agentionai/marshall-engine';
 import { formatUsageReport } from './format.js';
 import type { BackgroundJob } from '@agentionai/marshall-tools';
 import type { Approvals } from './hooks/useApprovals.js';
@@ -40,8 +42,16 @@ export interface CommandSession {
   mcpState(): McpServerState[];
   removeMcpServer(name: string): Promise<boolean>;
   reconnectMcpServer(name: string): Promise<McpServerState | null>;
+  agents: {
+    list(): AgentJob[];
+    activity(id: string): string[];
+    kill(id: string): boolean;
+    killAll(): void;
+  };
   readonly light: boolean;
   setLight(light: boolean): void;
+  readonly runtime: RuntimeMode;
+  setRuntime(mode: RuntimeMode): void;
   readonly safetyLevel: SafetyLevel;
   setSafetyLevel(level: SafetyLevel): void;
   setSafetyAgent(agent: SafetyAgentConfig | undefined): void;
@@ -82,6 +92,27 @@ function describeJob(job: BackgroundJob): string {
     ? `running ${elapsed.toFixed(0)}s`
     : `${job.status} (${job.exitCode ?? '?'}) after ${elapsed.toFixed(0)}s`;
   return `${job.id}  ${state}  ${job.command}`;
+}
+
+/**
+ * One line per spawned agent.
+ *
+ * The brief is what the user approved, so it is what identifies the agent here —
+ * an id and a status alone would make "stop the one restyling the header" a
+ * guess. Truncated because a brief is a paragraph, and this is a list.
+ */
+function describeAgent(job: AgentJob, latest?: string): string {
+  const elapsed = ((job.endedAt ?? Date.now()) - job.startedAt) / 1000;
+  const state = job.status === 'running'
+    ? `running ${elapsed.toFixed(0)}s`
+    : `${job.status} after ${elapsed.toFixed(0)}s`;
+  const brief = job.brief.replace(/\s+/g, ' ').trim();
+  const short = brief.length > 60 ? `${brief.slice(0, 59)}…` : brief;
+  const head = `${job.id}  ${state}  ${job.tier}/${job.toolset}  ${short}`;
+  // The last thing it did, for a running agent only. Elapsed time alone cannot
+  // tell thinking from wedged, which is the one question worth asking of an
+  // agent that has been going for ten minutes.
+  return job.status === 'running' && latest ? `${head}\n    last: ${latest}` : head;
 }
 
 /** One block per server: what it is, then what it actually gave us. The tool
@@ -160,6 +191,42 @@ export function runSlashCommand(input: string, deps: CommandDeps): void {
       transcript.push('info', all.length === 0
         ? 'no background jobs in this session'
         : all.map(describeJob).join('\n'));
+      return;
+    }
+
+    case 'agents': {
+      if (!session) {
+        transcript.push('error', 'no model chosen yet — finish setup first');
+        return;
+      }
+      const agents = session.agents;
+
+      if (command.stop === 'all') {
+        const running = agents.list().filter(a => a.status === 'running').length;
+        agents.killAll();
+        transcript.push('info', running > 0
+          ? `stopped ${running} agent${running === 1 ? '' : 's'}`
+          : 'no agents are running');
+        return;
+      }
+
+      if (command.stop) {
+        transcript.push('info', agents.kill(command.stop)
+          ? `stopped ${command.stop}`
+          : `${command.stop} is not a running agent`);
+        return;
+      }
+
+      const all = agents.list();
+      if (all.length === 0) {
+        // Says why rather than just "none": on the default runtime there is no
+        // amount of waiting that would have produced one.
+        transcript.push('info', session.runtime === 'agentic'
+          ? 'no agents have been spawned in this session'
+          : 'no agents — the model can only spawn them on /runtime agentic');
+        return;
+      }
+      transcript.push('info', all.map(a => describeAgent(a, agents.activity(a.id).at(-1))).join('\n'));
       return;
     }
 
@@ -266,33 +333,32 @@ export function runSlashCommand(input: string, deps: CommandDeps): void {
         transcript.push('error', 'no model chosen yet — finish setup first');
         return;
       }
-      const current: RuntimeMode = session.light ? 'light' : 'default';
+      const current: RuntimeMode = session.runtime;
       if (!command.mode) {
         transcript.push('info', [
           `runtime: ${current}`,
           '  default — the full tool belt',
           '  light   — lean tool belt for small models: no scratchpad, background jobs',
           '            or sub-agents, and ~1100 fewer tokens per request',
-          '  agentic — coming soon',
+          '  agentic — the full belt plus spawn_agent: the model can put agents to',
+          '            work in the background. Costs more, and asks more of you',
           'add --global to save a mode for every workspace',
         ].join('\n'));
         return;
       }
-      if (command.mode === 'agentic') {
-        // Nothing is saved either: pinning a mode the engine cannot honour would
-        // leave the file describing a session that never existed.
-        transcript.push('info', 'agentic runtime is not available yet');
-        return;
-      }
-      const light = command.mode === 'light';
-      session.setLight(light);
+      session.setRuntime(command.mode);
       deps.onRuntimeModeChange?.(command.mode, command.scope);
       // Says what actually changed rather than just the name: a model that can
-      // no longer background a test run should not be a surprise mid-task.
+      // no longer background a test run should not be a surprise mid-task, and
+      // neither should one that has just been handed a way to spend money.
+      const described = {
+        light: 'runtime: light — no scratchpad, background jobs or sub-agents.',
+        default: 'runtime: default — the full tool belt.',
+        agentic: 'runtime: agentic — the model can now spawn background agents. '
+          + 'Each spawn asks your approval first; /agents shows what is running.',
+      }[command.mode];
       transcript.push('info', [
-        light
-          ? 'runtime: light — no scratchpad, background jobs or sub-agents.'
-          : 'runtime: default — the full tool belt is back.',
+        described,
         `Takes effect on your next message, and is saved ${
           command.scope === 'global' ? 'for every workspace' : 'for this workspace'}.`,
       ].join('\n'));

@@ -60,6 +60,12 @@ export interface TranscriptPort {
  * Pure: same events in, same port calls out. Exported separately from the hook
  * so tests can drive it directly.
  */
+/** The opening of a multi-line value, for a row that has one line to give it. */
+function firstLine(text: string, max: number): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+}
+
 export function createEngineClient(port: TranscriptPort): ClientInterface {
   /** Commit pending reasoning as its own row, in front of whatever follows. */
   const commitReasoning = () => {
@@ -120,6 +126,24 @@ export function createEngineClient(port: TranscriptPort): ClientInterface {
             title: event.id,
             failed,
             note: `${outcome}  ${G.bullet}  ${(event.durationMs / 1000).toFixed(1)}s` +
+              (event.resuming ? `  ${G.bullet}  picking it up` : ''),
+          });
+          break;
+        }
+
+        case 'agent-done': {
+          commitStep();
+          // The brief, not a summary of what it did: it is what the user
+          // approved, and the report itself goes to the model rather than here.
+          //
+          // One line of it, though. A brief is written for an agent to work
+          // from, so it runs to paragraphs — dropped whole into a single-line
+          // row it wraps, and the fixed columns beside it get squeezed until
+          // "agent1" renders as "agen" above a stray "1".
+          port.push('spawn', firstLine(event.brief, 72), {
+            title: event.id,
+            failed: event.status === 'failed',
+            note: `${event.tier}  ${G.bullet}  ${(event.durationMs / 1000).toFixed(1)}s` +
               (event.resuming ? `  ${G.bullet}  picking it up` : ''),
           });
           break;

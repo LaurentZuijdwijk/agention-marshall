@@ -74,6 +74,26 @@ export type OutputEvent =
       durationMs: number;
       resuming: boolean;
     }
+  /**
+   * A spawned agent finished on its own. The second event that can arrive with
+   * no turn running, and for the same reason as `job-done`: the parent started
+   * something that outlives the reply which started it.
+   *
+   * Carries the `brief` rather than a summary of the work, because the brief is
+   * what the user approved at the spawn gate — a client that shows what finished
+   * should show the thing that was consented to, not a paraphrase of it.
+   */
+  | {
+      type: 'agent-done';
+      id: string;
+      brief: string;
+      tier: 'deep' | 'fast';
+      /** `provider/model` it ran on. */
+      model: string;
+      status: 'done' | 'failed' | 'timed-out';
+      durationMs: number;
+      resuming: boolean;
+    }
   | { type: 'token'; text: string }
   | { type: 'reasoning'; text: string }
   /** Prose the model produced *before* the tool calls of the same step — the

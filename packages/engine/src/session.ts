@@ -20,6 +20,8 @@ import { CompressionManager } from './session-compression.js';
 import { createSessionEvents } from './session-events.js';
 import type { SessionEvents } from './session-events.js';
 import { ToolBelt } from './session-tools.js';
+import { createAgentJobs, summariseAgentJob, DEFAULT_AGENT_TIMEOUT_MS } from './agent-jobs.js';
+import type { AgentJob, AgentJobs } from './agent-jobs.js';
 import { McpRegistry } from './mcp.js';
 import type { McpServerConfig, McpServerState } from './mcp.js';
 import {
@@ -36,7 +38,9 @@ import { checkAttachments, buildInput } from './images.js';
 import type { ImageAttachment } from './images.js';
 import { describeAgentError, providerErrorDiagnostics, isBadRequestError, isContextLengthError } from './errors.js';
 import { resolveRoleProfile, resolveModel, routingSummary, resolveSearchProfile } from './config.js';
-import type { EngineConfig, AgentProfile, Role, SafetyLevel, SafetyAgentConfig } from './config.js';
+import type {
+  EngineConfig, AgentProfile, Role, SafetyLevel, SafetyAgentConfig, RuntimeMode,
+} from './config.js';
 import { createUsageTally, throughputOf } from './usage.js';
 import type { PriceBook, UsageReport } from './usage.js';
 import type { ClientInterface } from './types.js';
@@ -71,6 +75,41 @@ const AUTO_RESUME_INSTRUCTION =
   'The background job above finished while you were idle. Continue the work it was part of: ' +
   'if it failed, diagnose and fix it; if it succeeded and more remains, carry on. ' +
   'If nothing further is needed, say so in one short sentence and stop.';
+
+/**
+ * The same wake-up, for an agent rather than a command.
+ *
+ * Worth its own wording rather than reusing the one above, which tells the model
+ * to diagnose and fix what failed. That is right for a command, whose failure is
+ * a broken build; it is wrong for an agent, whose report is a claim to weigh.
+ * Applied to a readonly review agent, the shell wording turns "here is what I
+ * found" into an instruction to go and repair something.
+ */
+const AGENT_RESUME_INSTRUCTION =
+  'An agent you started has finished, and its report is above. Treat it as a claim rather than ' +
+  'as fact: verify the parts your next step depends on. If it reported itself blocked, say so ' +
+  'plainly rather than quietly working around it. If more of the task remains, carry on; if ' +
+  'nothing further is needed, say so in one short sentence and stop.';
+
+/** Both at once — rare, but it must not be told only half of what woke it. */
+const MIXED_RESUME_INSTRUCTION =
+  'A background job and an agent you started have both finished while you were idle; both are ' +
+  'reported above. Verify what the agent claims, diagnose what the job failed at, and carry on ' +
+  'with the work they were part of. If nothing further is needed, say so in one short sentence ' +
+  'and stop.';
+
+/** A queued report, and what produced it — the kind picks the wake-up wording. */
+interface PendingReport {
+  kind: 'job' | 'agent';
+  text: string;
+}
+
+function resumeInstructionFor(reports: readonly PendingReport[]): string {
+  const agents = reports.some(r => r.kind === 'agent');
+  const jobs = reports.some(r => r.kind === 'job');
+  if (agents && jobs) return MIXED_RESUME_INSTRUCTION;
+  return agents ? AGENT_RESUME_INSTRUCTION : AUTO_RESUME_INSTRUCTION;
+}
 
 export class Session {
   private readonly history: History;
@@ -129,6 +168,15 @@ export class Session {
    */
   private readonly jobs: BackgroundJobs;
   /**
+   * Spawned agents, owned at *session* scope for the same reason as `jobs`.
+   *
+   * The parent agent decides what to start and when to stop it; the user can
+   * intervene through `/agents`. Neither is tied to the turn that spawned them,
+   * because an agent worth delegating to is usually one that outlasts the reply
+   * asking for it.
+   */
+  private readonly agentJobs: AgentJobs;
+  /**
    * Finished jobs waiting to be told to the model.
    *
    * A queue rather than a direct `history.addText`, because a job can finish at
@@ -137,7 +185,7 @@ export class Session {
    * conversation that Anthropic rejects outright. Flushed only at the top of a
    * turn, which is always a safe boundary.
    */
-  private readonly pendingJobReports: string[] = [];
+  private readonly pendingJobReports: PendingReport[] = [];
   /** Turns still allowed to start unattended. Refilled by every user turn. */
   private autoResumeBudget: number;
   private disposed = false;
@@ -178,6 +226,7 @@ export class Session {
     this.events = createSessionEvents({ client: this.client, getConfig, log });
 
     this.jobs = createBackgroundJobs({ onExit: (job) => this.onJobExit(job) });
+    this.agentJobs = createAgentJobs({ onDone: (job) => this.onAgentDone(job) });
     this.autoResumeBudget = config.autoResumeBudget ?? DEFAULT_AUTO_RESUME_BUDGET;
 
     this.mcp = new McpRegistry(config.mcpServers);
@@ -195,6 +244,7 @@ export class Session {
       events: this.events,
       approval: this.approvals.approve,
       jobs: this.jobs,
+      agentJobs: this.agentJobs,
       usage: this.usage,
       readFiles: this.readFiles,
       fileLock: this.fileLock,
@@ -250,10 +300,32 @@ export class Session {
    * turn would leave a history describing tools that come and go.
    */
   setLight(light: boolean): void {
-    if (this.light === light) return;
-    this.config = { ...this.config, light };
+    this.setRuntime(light ? 'light' : 'default');
+  }
+
+  get runtime(): RuntimeMode {
+    if (this.config.light) return 'light';
+    return this.config.swarm ? 'agentic' : 'default';
+  }
+
+  /**
+   * Move between the three postures, keeping the conversation.
+   *
+   * Set as a pair rather than toggled independently, which is what makes
+   * "light and agentic at once" unrepresentable rather than merely unlikely:
+   * every mode states both flags, so leaving one behind is not possible.
+   *
+   * Agents already running are deliberately left alone. Turning the swarm off
+   * means "stop starting new ones", not "abandon the work in flight" — the user
+   * has `/agents stop` for that, and killing someone's half-finished refactor as
+   * a side effect of a settings change would be a poor way to learn the
+   * difference.
+   */
+  setRuntime(mode: RuntimeMode): void {
+    if (this.runtime === mode) return;
+    this.config = { ...this.config, light: mode === 'light', swarm: mode === 'agentic' };
     this.toolBelt.rebuildRoleTools();
-    this.log(`LIGHT ${light ? 'on' : 'off'}`);
+    this.log(`RUNTIME ${mode}`);
   }
 
   get safetyLevel(): SafetyLevel {
@@ -452,7 +524,7 @@ export class Session {
       `${(durationMs / 1000).toFixed(1)}s ${JSON.stringify(job.command.slice(0, 200))}`,
     );
 
-    this.pendingJobReports.push(this.formatJobReport(job));
+    this.pendingJobReports.push({ kind: 'job', text: this.formatJobReport(job) });
 
     // Announced before any turn starts, so the client can say what is about to
     // happen rather than print a completion and be surprised by a turn starting
@@ -468,6 +540,56 @@ export class Session {
     });
 
     this.maybeResume();
+  }
+
+  /**
+   * A spawned agent finished by itself. Same path as a shell job: queue what it
+   * said, tell the client, wake the parent if nothing is already running.
+   *
+   * Deliberately the *same* path rather than a parallel one. A finished agent
+   * and a finished command are the same event as far as the conversation is
+   * concerned — something the parent started has come back with something to
+   * say — and `pendingJobReports` already solves the hard part, which is that
+   * either can land between a `tool_use` and its `tool_result`, where injecting
+   * a message produces a conversation the provider rejects.
+   */
+  private onAgentDone(job: AgentJob): void {
+    if (this.disposed) return;
+
+    const durationMs = (job.endedAt ?? Date.now()) - job.startedAt;
+    this.log(
+      `SWARM ${job.id} ${job.status} ${(durationMs / 1000).toFixed(1)}s ${job.tier} ${job.label} ` +
+      (job.error ?? `${(job.result ?? '').length} chars`),
+    );
+
+    this.pendingJobReports.push({ kind: 'agent', text: this.formatAgentReport(job) });
+
+    this.client.onOutput({
+      type: 'agent-done',
+      id: job.id,
+      brief: job.brief,
+      tier: job.tier,
+      model: job.label,
+      status: job.status === 'timed-out' ? 'timed-out' : job.status === 'done' ? 'done' : 'failed',
+      durationMs,
+      resuming: this.autoResumeAllowed(),
+    });
+
+    this.maybeResume();
+  }
+
+  private formatAgentReport(job: AgentJob): string {
+    // `read`, so a parent that already polled `agent_output` does not pay for
+    // the whole report twice — the same rule as a background command's output.
+    const report = this.agentJobs.read(job.id);
+    const body = job.status === 'timed-out'
+      ? `It ran past its ${Math.round(DEFAULT_AGENT_TIMEOUT_MS / 60_000)}-minute limit and was stopped, `
+        + 'so its work is unfinished. Decide whether to do it yourself, narrow the brief and try '
+        + 'again, or leave it.'
+      : job.error
+      ? `It failed: ${job.error}`
+      : report ?? '(it produced no report)';
+    return `[Agent finished]\n${summariseAgentJob(job)}\n\n${body}`;
   }
 
   private formatJobReport(job: BackgroundJob): string {
@@ -506,7 +628,7 @@ export class Session {
     if (this.controller) return;
     if (!this.autoResumeAllowed()) return;
     this.autoResumeBudget -= 1;
-    void this.run(AUTO_RESUME_INSTRUCTION, [], { auto: true });
+    void this.run(resumeInstructionFor(this.pendingJobReports), [], { auto: true });
   }
 
   /**
@@ -518,6 +640,17 @@ export class Session {
    */
   get backgroundJobs(): BackgroundJobs {
     return this.jobs;
+  }
+
+  /**
+   * The agents spawned this session.
+   *
+   * Exposed for the same reason as `backgroundJobs`: `/agents` lists what is
+   * running and stops it, and that has to work while a turn is in flight — which
+   * is exactly when the user is most likely to want it.
+   */
+  get agents(): AgentJobs {
+    return this.agentJobs;
   }
 
   // ── MCP ─────────────────────────────────────────────────────────────────────
@@ -573,12 +706,14 @@ export class Session {
     this.client.onOutput({ type: 'mcp-state', servers: this.mcp.state() });
   }
 
-  /** Stop every background job and close every MCP connection. The processes
-   *  are detached and the sockets are open, so a session that goes away without
-   *  this leaves both running with nobody reading them. */
+  /** Stop every background job and spawned agent, and close every MCP
+   *  connection. The processes are detached, the agents are mid-turn and the
+   *  sockets are open, so a session that goes away without this leaves all three
+   *  running with nobody reading them. */
   dispose(): void {
     this.disposed = true;
     this.jobs.killAll();
+    this.agentJobs.killAll();
     void this.mcp.disconnect().catch(() => {});
   }
 
@@ -642,7 +777,7 @@ export class Session {
     // Every finished job is reported exactly once, at the front of the next
     // turn — whether that turn was started by the user or by the job itself.
     const jobReports = this.pendingJobReports.splice(0);
-    const jobBlock = jobReports.length ? `${jobReports.join('\n\n')}\n\n` : '';
+    const jobBlock = jobReports.length ? `${jobReports.map(r => r.text).join('\n\n')}\n\n` : '';
 
     const effectiveTask = jobBlock + (steering
       ? `[Previous task was interrupted: "${steering}"]\n\nNew direction: ${task}`
@@ -961,6 +1096,11 @@ export class Session {
     // by this.
     const running = this.jobs.list().filter(j => j.status === 'running').length;
     this.jobs.killAll();
+    // Spawned agents go for the same reason, and more urgently: a shell job left
+    // running only prints, while an agent left running keeps *writing files* on
+    // behalf of a conversation that no longer exists.
+    const agents = this.agentJobs.list().filter(j => j.status === 'running').length;
+    this.agentJobs.killAll();
     this.pendingJobReports.length = 0;
 
     const notesDir = join(this.config.workspaceRoot, '.marshall', 'notes');
@@ -976,6 +1116,7 @@ export class Session {
     const extras = [
       ...(notesCleared > 0 ? [`${notesCleared} scratch note${notesCleared === 1 ? '' : 's'}`] : []),
       ...(running > 0 ? [`${running} background job${running === 1 ? '' : 's'}`] : []),
+      ...(agents > 0 ? [`${agents} agent${agents === 1 ? '' : 's'}`] : []),
     ];
     const base = 'history, dedupe cache, always-approved list';
     return extras.length > 0

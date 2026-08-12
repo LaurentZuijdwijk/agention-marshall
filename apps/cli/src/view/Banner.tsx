@@ -158,6 +158,12 @@ function Meta({ meta, dim, showKeys = true }: { meta: HeaderMeta; dim?: boolean;
         {label('dir')}
         <Text color={dim ? C.faint : C.muted}>{meta.dir}</Text>
       </Box>
+      {meta.runtime && (
+        <Box>
+          {label('runtime')}
+          <Text color={dim ? C.faint : C.muted}>{meta.runtime}</Text>
+        </Box>
+      )}
       {meta.safety && (
         <Box>
           {label('safety')}
@@ -168,12 +174,6 @@ function Meta({ meta, dim, showKeys = true }: { meta: HeaderMeta; dim?: boolean;
         <Box>
           {label('version')}
           <Text color={dim ? C.faint : C.muted}>v{meta.version}</Text>
-        </Box>
-      )}
-      {meta.runtime && (
-        <Box>
-          {label('runtime')}
-          <Text color={dim ? C.faint : C.muted}>{meta.runtime}</Text>
         </Box>
       )}
       {(meta.webSearch === false || meta.github) && (

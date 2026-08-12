@@ -253,6 +253,9 @@ export function App({
       enableGitHub, enableWebSearch, maxTokens, savedHosts, savedKeys, mcpServers,
       client, SessionCtor,
       light: settings.runtime === 'light',
+      // Both derived from the one saved mode, so a session cannot come up
+      // lean and swarming at once.
+      swarm: settings.runtime === 'agentic',
       safetyLevel: settings.safetyLevel,
       safetyAgent: settings.safetyAgent
         ? toSafetyAgentConfig(settings.safetyAgent, { mainProfile: agentProfile, savedKeys })

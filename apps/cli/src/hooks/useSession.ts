@@ -41,6 +41,7 @@ export interface UseSessionOptions {
   enableWebSearch?: boolean;
   maxTokens?: number;
   light?: boolean;
+  swarm?: boolean;
   safetyLevel?: SafetyLevel;
   safetyAgent?: SafetyAgentConfig;
   savedHosts?: Record<string, string | undefined>;
@@ -57,7 +58,7 @@ export function useSession(options: UseSessionOptions): SessionController {
   const {
     workspaceRoot, agentProfile, fastProfile: initialFast,
     contextAgentProfile, plannerAgentProfile, reviewerAgentProfile,
-    enableGitHub, enableWebSearch, maxTokens, light,
+    enableGitHub, enableWebSearch, maxTokens, light, swarm,
     client, onProfilesChanged, SessionCtor = Session, safetyLevel, safetyAgent,
   } = options;
 
@@ -77,7 +78,7 @@ export function useSession(options: UseSessionOptions): SessionController {
     new SessionCtor({
       agent: deep,
       models: { deep, fast },
-      workspaceRoot, enableGitHub, enableWebSearch, maxTokens, light,
+      workspaceRoot, enableGitHub, enableWebSearch, maxTokens, light, swarm,
       mcpServers: options.mcpServers,
       ...(safetyLevel ? { safetyLevel } : {}),
       ...(safetyAgent ? { safetyAgent } : {}),

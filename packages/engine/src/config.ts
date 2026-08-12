@@ -35,6 +35,27 @@ export type Tier = 'deep' | 'fast';
 
 export type Role = 'coder' | 'planner' | 'reviewer' | 'context' | 'search' | 'summarizer';
 
+/**
+ * A spawned agent, named by the tier its parent chose for it.
+ *
+ * Deliberately *not* a `Role`. A role is something the user configures a model
+ * for, and every one of them maps to a tier through `DEFAULT_ROLE_TIERS`. A
+ * spawned agent has neither property: its tier is picked per spawn by the parent
+ * agent, so there is no default to state and nothing for `/model` to offer. What
+ * it does need is a name — the approval gate uses it to tell two live agents
+ * apart, and the usage tally to say what the swarm cost.
+ */
+export type SwarmRole = `swarm:${Tier}`;
+
+/**
+ * The three postures the belt can take, as one value rather than two booleans.
+ *
+ * `light` and `swarm` are mutually exclusive — a belt trimmed for a small model
+ * is the last place to add agent spawning — and a pair of booleans is a shape
+ * that can express that contradiction. This cannot.
+ */
+export type RuntimeMode = 'default' | 'light' | 'agentic';
+
 export interface ModelTiers {
   /** The strong model. Falls back to `EngineConfig.agent`. */
   deep?: AgentProfile;
@@ -130,6 +151,15 @@ export interface EngineConfig {
    * and no more.
    */
   light?: boolean;
+  /**
+   * Let the agent spawn background agents of its own — `/runtime agentic`.
+   *
+   * Adds `spawn_agent` and the `agent_*` tools to the coder's belt, and nothing
+   * else: what a spawned agent gets is decided per spawn, not here. Off by
+   * default because it multiplies both cost and approval volume, and neither is
+   * a surprise anyone should get by accident.
+   */
+  swarm?: boolean;
   /** Whether the agent gets Anthropic's server-side web search tool.
    *  Requires the main agent to be claude, or a searchAgent to be configured. */
   enableWebSearch?: boolean;

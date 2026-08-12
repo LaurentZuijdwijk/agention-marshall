@@ -36,10 +36,12 @@ import type { SavedConfig } from './config-store.js';
 /**
  * The tool belt this session runs with.
  *
- * `agentic` is parsed and stored but not yet implemented — the `/runtime`
- * handler says so rather than silently doing nothing.
+ * Re-exported from the engine rather than restated here: this is persisted to
+ * disk and handed straight to `Session.setRuntime`, so a second definition is a
+ * second thing to keep in step with the first.
  */
-export type RuntimeMode = 'default' | 'light' | 'agentic';
+import type { RuntimeMode } from '@agentionai/marshall-engine';
+export type { RuntimeMode };
 
 const RUNTIME_MODES: readonly RuntimeMode[] = ['default', 'light', 'agentic'];
 

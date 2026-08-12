@@ -51,6 +51,25 @@ export function fitSafetyReason(
 }
 
 /**
+ * A nested agent's tool arguments, cut to whatever the rest of the row leaves.
+ *
+ * Same arithmetic as `fitSafetyReason`, and the same failure it prevents — but
+ * these rows are worse when they wrap, because the fixed part of the row is
+ * *before* the content. A long shell command squeezes the columns to its left
+ * until the tool name itself breaks, which is how `run_shell` under `agent2`
+ * renders as "Run" above a stray "shell".
+ */
+export function fitToolContent(
+  content: string,
+  { parent, title, columns }: { parent: string; title: string; columns: number },
+): string {
+  // gutter + parent + space + glyph + space + title + the two spaces before content
+  const fixed = GUTTER_COLS + parent.length + 1 + 2 + title.length + 2;
+  const room = columns - fixed;
+  return room <= 0 ? '' : truncate(content, room);
+}
+
+/**
  * Who made this call, in front of the tool it called.
  *
  * Only rendered when someone other than the coder made it: /plan and /review run
@@ -103,7 +122,16 @@ export function MessageRow({ msg, columns = process.stdout.columns ?? 80 }: {
           <Text color={C.faint}>{G.gutter}   </Text>
           <Text color={C.faint}>{msg.parent} </Text>
           <Text color={C.tool} dimColor>{G.tool} {msg.title}</Text>
-          {msg.content !== '' && <Text color={C.faint}>  {msg.content}</Text>}
+          {msg.content !== '' && (
+            <Text color={C.faint}>
+              {'  '}
+              {fitToolContent(msg.content, {
+                parent: msg.parent,
+                title: msg.title ?? '',
+                columns,
+              })}
+            </Text>
+          )}
         </Box>
       ) : (
         <Box marginTop={1}>
@@ -181,6 +209,20 @@ export function MessageRow({ msg, columns = process.stdout.columns ?? 80 }: {
         <Box marginTop={1}>
           <Text color={msg.failed ? C.error : C.ok}>{msg.failed ? G.no : G.ok} </Text>
           <Text color={C.tool}>background </Text>
+          <Text color={C.text}>{msg.title}</Text>
+          <Text color={C.muted}>  {msg.content}</Text>
+          {msg.note && <Text color={C.faint}>  {G.bullet}  {msg.note}</Text>}
+        </Box>
+      );
+
+    // A spawned agent finished. Same shape as `job` and for the same reason —
+    // it can land with no turn running — but named for what it is: a background
+    // command prints, while an agent has been changing the workspace.
+    case 'spawn':
+      return (
+        <Box marginTop={1}>
+          <Text color={msg.failed ? C.error : C.ok}>{msg.failed ? G.no : G.ok} </Text>
+          <Text color={C.tool}>agent </Text>
           <Text color={C.text}>{msg.title}</Text>
           <Text color={C.muted}>  {msg.content}</Text>
           {msg.note && <Text color={C.faint}>  {G.bullet}  {msg.note}</Text>}

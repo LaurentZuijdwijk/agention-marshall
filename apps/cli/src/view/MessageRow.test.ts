@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { fitSafetyReason, judgeLabel } from './MessageRow.js';
+import { fitSafetyReason, fitToolContent, judgeLabel } from './MessageRow.js';
 
 // A safety row is commentary on the tool call directly above it, and says so by
 // sitting under the same gutter. Wrapping breaks that: ink puts the
@@ -60,4 +60,27 @@ test('a row with no caller gives that space back to the reason', () => {
 test('a terminal too narrow for anything yields no reason rather than a negative width', () => {
   const fitted = fitSafetyReason('some reason', { judge: JUDGE, caller: 'coder', columns: 10 });
   assert.equal(fitted, '');
+});
+
+// ── fitToolContent ────────────────────────────────────────────────────────────
+
+test('a nested tool row leaves the label columns intact', () => {
+  // The real one from a spawned agent, which broke the row.
+  const command = 'cd packages/engine && find ../../node_modules/@agentionai/agents -name "*.d.ts" | head -50';
+  const columns = 80;
+  const fitted = fitToolContent(command, { parent: 'agent2', title: 'run_shell', columns });
+
+  const rendered = '    ' + 'agent2' + ' ' + '● ' + 'run_shell' + '  ' + fitted;
+  assert.ok(rendered.length <= columns,
+    `the whole row must fit in ${columns} columns, got ${rendered.length}`);
+  assert.ok(fitted.length > 0, 'an 80-column terminal has room for some of the command');
+});
+
+test('a short command is left alone', () => {
+  const fitted = fitToolContent('npm test', { parent: 'agent1', title: 'run_shell', columns: 120 });
+  assert.equal(fitted, 'npm test');
+});
+
+test('a row with no room drops the content rather than showing a bare ellipsis', () => {
+  assert.equal(fitToolContent('anything', { parent: 'agent12', title: 'run_shell', columns: 20 }), '');
 });

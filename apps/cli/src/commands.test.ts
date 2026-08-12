@@ -5,7 +5,9 @@ import type { CommandDeps, CommandSession } from './commands.js';
 import type { Transcript } from './hooks/useTranscript.js';
 import type { Mode } from './mode.js';
 import type { Message } from './view/message.js';
-import type { AgentProfile, McpServerState, SafetyLevel, SafetyAgentConfig, UsageReport } from '@agentionai/marshall-engine';
+import type {
+  AgentProfile, AgentJob, McpServerState, RuntimeMode, SafetyLevel, SafetyAgentConfig, UsageReport,
+} from '@agentionai/marshall-engine';
 import type { BackgroundJob } from '@agentionai/marshall-tools';
 
 // ── fakes ─────────────────────────────────────────────────────────────────────
@@ -30,7 +32,13 @@ function fakeTranscript() {
 
 const PROFILE: AgentProfile = { provider: 'claude', model: 'claude-sonnet-4-6' };
 
-function setup(overrides: Partial<CommandDeps> & { jobs?: BackgroundJob[]; servers?: McpServerState[] } = {}) {
+function setup(overrides: Partial<CommandDeps> & {
+  jobs?: BackgroundJob[];
+  servers?: McpServerState[];
+  agents?: AgentJob[];
+  activity?: Record<string, string[]>;
+  runtime?: RuntimeMode;
+} = {}) {
   const t = fakeTranscript();
   const modes: Mode[] = [];
   const calls = {
@@ -48,6 +56,9 @@ function setup(overrides: Partial<CommandDeps> & { jobs?: BackgroundJob[]; serve
     mcpReconnected: [] as string[],
     mcpChanged: 0,
     light: [] as boolean[],
+    runtime: [] as RuntimeMode[],
+    agentStopped: [] as string[],
+    agentsStoppedAll: 0,
     runtimeMode: [] as Array<[string, string]>,
     safetyLevel: [] as SafetyLevel[],
     safetyAgent: [] as Array<SafetyAgentConfig | undefined>,
@@ -56,6 +67,7 @@ function setup(overrides: Partial<CommandDeps> & { jobs?: BackgroundJob[]; serve
 
   const jobs = overrides.jobs ?? [];
   const servers = overrides.servers ?? [];
+  const agents = overrides.agents ?? [];
   const usage: UsageReport = {
     turn: { inputTokens: 10, outputTokens: 20 },
     session: { inputTokens: 100, outputTokens: 200, costUsd: 0.0421 },
@@ -65,6 +77,7 @@ function setup(overrides: Partial<CommandDeps> & { jobs?: BackgroundJob[]; serve
     ],
   };
   let light = false;
+  let runtime: RuntimeMode = overrides.runtime ?? 'default';
   let safetyLevel: SafetyLevel = 2;
 
   const session: CommandSession = {
@@ -87,8 +100,16 @@ function setup(overrides: Partial<CommandDeps> & { jobs?: BackgroundJob[]; serve
       calls.mcpReconnected.push(name);
       return servers.find(s => s.name === name) ?? null;
     },
+    agents: {
+      list: () => agents,
+      activity: (id) => overrides.activity?.[id] ?? [],
+      kill: (id) => { calls.agentStopped.push(id); return agents.some(a => a.id === id && a.status === 'running'); },
+      killAll: () => { calls.agentsStoppedAll++; },
+    },
     get light() { return light; },
     setLight: (next) => { light = next; calls.light.push(next); },
+    get runtime() { return runtime; },
+    setRuntime: (next) => { runtime = next; calls.runtime.push(next); },
     get safetyLevel() { return safetyLevel; },
     setSafetyLevel: (next) => { safetyLevel = next; calls.safetyLevel.push(next); },
     setSafetyAgent: (agent) => { calls.safetyAgent.push(agent); },
@@ -276,6 +297,109 @@ describe('runSlashCommand', () => {
   });
 });
 
+describe('/agents', () => {
+  const agent = (over: Partial<AgentJob> = {}): AgentJob => ({
+    id: 'agent1',
+    brief: 'restyle the header in packages/ui',
+    tier: 'fast',
+    toolset: 'edit',
+    label: 'openrouter/some-model',
+    startedAt: Date.now() - 5000,
+    status: 'running',
+    ...over,
+  });
+
+  it('points at the runtime when the model could not have spawned anything', () => {
+    const { deps, pushed } = setup();
+    runSlashCommand('/agents', deps);
+    assert.equal(pushed[0].role, 'info');
+    // "none" alone would leave the user waiting for something that cannot
+    // happen on this runtime.
+    assert.match(pushed[0].content, /runtime agentic/);
+  });
+
+  it('says none, without the hint, once the swarm is on', () => {
+    const { deps, pushed } = setup({ runtime: 'agentic' });
+    runSlashCommand('/agents', deps);
+    assert.match(pushed[0].content, /no agents have been spawned/);
+    assert.doesNotMatch(pushed[0].content, /runtime agentic/);
+  });
+
+  it('lists each agent by the brief it was approved for', () => {
+    const { deps, pushed } = setup({
+      runtime: 'agentic',
+      agents: [agent(), agent({ id: 'agent2', tier: 'deep', status: 'done', endedAt: Date.now() })],
+    });
+    runSlashCommand('/agents', deps);
+    assert.match(pushed[0].content, /agent1.*running.*fast\/edit.*restyle the header/s);
+    assert.match(pushed[0].content, /agent2.*done.*deep/s);
+  });
+
+  it('truncates a brief that is a paragraph', () => {
+    const { deps, pushed } = setup({
+      runtime: 'agentic',
+      agents: [agent({ brief: 'x'.repeat(200) })],
+    });
+    runSlashCommand('/agents', deps);
+    const line = pushed[0].content.split('\n')[0];
+    assert.ok(line.length < 120, `a list row should stay a row, got ${line.length} chars`);
+    assert.match(line, /…/);
+  });
+
+  it('shows what a running agent last did, since elapsed time alone cannot', () => {
+    const { deps, pushed } = setup({
+      runtime: 'agentic',
+      agents: [agent()],
+      activity: { agent1: ['list_dir', 'read_file', 'search'] },
+    });
+    runSlashCommand('/agents', deps);
+    assert.match(pushed[0].content, /last: search/);
+  });
+
+  it('does not claim a last action for an agent that has stopped', () => {
+    const { deps, pushed } = setup({
+      runtime: 'agentic',
+      agents: [agent({ status: 'done', endedAt: Date.now() })],
+      activity: { agent1: ['read_file'] },
+    });
+    runSlashCommand('/agents', deps);
+    assert.doesNotMatch(pushed[0].content, /last:/);
+  });
+
+  it('stops one agent by id', () => {
+    const { deps, calls, pushed } = setup({ runtime: 'agentic', agents: [agent()] });
+    runSlashCommand('/agents stop agent1', deps);
+    assert.deepEqual(calls.agentStopped, ['agent1']);
+    assert.match(pushed[0].content, /stopped agent1/);
+  });
+
+  it('reports an id that is not running rather than claiming success', () => {
+    const { deps, pushed } = setup({
+      runtime: 'agentic',
+      agents: [agent({ status: 'done', endedAt: Date.now() })],
+    });
+    runSlashCommand('/agents stop agent1', deps);
+    assert.match(pushed[0].content, /not a running agent/);
+  });
+
+  it('stops everything on "stop all" and counts what it stopped', () => {
+    const { deps, calls, pushed } = setup({
+      runtime: 'agentic',
+      agents: [agent(), agent({ id: 'agent2' })],
+    });
+    runSlashCommand('/agents stop all', deps);
+    assert.equal(calls.agentsStoppedAll, 1);
+    assert.match(pushed[0].content, /stopped 2 agents/);
+  });
+
+  it('rejects a verb it does not have with usage', () => {
+    const { deps, pushed } = setup({ runtime: 'agentic' });
+    runSlashCommand('/agents kill agent1', deps);
+    assert.equal(pushed[0].role, 'error');
+    assert.match(pushed[0].content, /usage: \/agents/);
+  });
+});
+
 describe('/jobs', () => {
   const job = (over: Partial<BackgroundJob> = {}): BackgroundJob => ({
     id: 'job1',
@@ -427,7 +551,7 @@ describe('/runtime', () => {
   it('turns the lean belt on and says which tools just went away', () => {
     const { deps, pushed, calls } = setup();
     runSlashCommand('/runtime light', deps);
-    assert.deepEqual(calls.light, [true]);
+    assert.deepEqual(calls.runtime, ['light']);
     assert.equal(pushed[0].role, 'info');
     // The saving is the reason to use it, and the missing tools are the cost —
     // a bare "light mode on" leaves the user to discover the cost mid-task.
@@ -440,7 +564,7 @@ describe('/runtime', () => {
     const { deps, calls } = setup();
     runSlashCommand('/runtime light', deps);
     runSlashCommand('/runtime default', deps);
-    assert.deepEqual(calls.light, [true, false]);
+    assert.deepEqual(calls.runtime, ['light', 'default']);
   });
 
   it('reports the current mode without changing it', () => {
@@ -448,7 +572,7 @@ describe('/runtime', () => {
     runSlashCommand('/runtime', deps);
     assert.equal(pushed[0].role, 'info');
     assert.match(pushed[0].content, /runtime: default/);
-    assert.deepEqual(calls.light, [], 'a bare /runtime only informs');
+    assert.deepEqual(calls.runtime, [], 'a bare /runtime only informs');
     assert.deepEqual(calls.runtimeMode, [], 'and saves nothing');
   });
 
@@ -465,13 +589,16 @@ describe('/runtime', () => {
     assert.match(pushed[0].content, /every workspace/);
   });
 
-  it('refuses agentic without saving a mode the engine cannot honour', () => {
+  it('turns the swarm on, and says what that costs the user', () => {
     const { deps, pushed, calls } = setup();
     runSlashCommand('/runtime agentic', deps);
+    assert.deepEqual(calls.runtime, ['agentic']);
     assert.equal(pushed[0].role, 'info');
-    assert.match(pushed[0].content, /not available yet/);
-    assert.deepEqual(calls.light, []);
-    assert.deepEqual(calls.runtimeMode, [], 'nothing is written for a mode that does not exist');
+    // Handing a model the ability to start other models is worth one sentence
+    // about what it means, and one about how to see what it started.
+    assert.match(pushed[0].content, /spawn|agents/i);
+    assert.match(pushed[0].content, /approval/i);
+    assert.deepEqual(calls.runtimeMode, [['agentic', 'project']], 'and it is saved like any other mode');
   });
 
   it('rejects an unknown mode with usage', () => {

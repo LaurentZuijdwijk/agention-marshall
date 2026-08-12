@@ -7,6 +7,7 @@ import { OpenAICompatibleAgent } from '@agentionai/agents';
 import type { OpenAICompatibleConfig } from '@agentionai/agents';
 import { resolveAuth, resolveModel, resolveMaxTokens, PROVIDER_DEFAULTS } from './config.js';
 import type { AgentProfile } from './config.js';
+import type { AgentToolset } from './agent-jobs.js';
 
 const PROJECT_MEMORY_HEADER = '\n\n## Project memory (AGENTS.md)\n\n';
 
@@ -135,6 +136,93 @@ export const REVIEWER_AGENT_PROMPT = `\
 You are a code reviewer. You'll be given a task and a summary of changes someone else made. \
 Read the actual current files to verify the claim, then say either "LGTM" or a short list of \
 concrete problems (bugs, missed requirements, inconsistencies). Do not edit anything yourself.`;
+
+/**
+ * The prompt a spawned agent runs under, built from the toolset it was given.
+ *
+ * Capability-driven for the same reason `buildSystemPrompt` is: a rule about a
+ * tool that isn't there costs tokens and then sends the model at something that
+ * does not exist. It is also why nothing here says "you cannot spawn agents" —
+ * the tool is simply absent from the belt, and naming a restriction is a worse
+ * way to enforce it than not offering it in the first place.
+ *
+ * The rest is written against the two things that make a delegated agent
+ * different from the coder: it is working from a brief it cannot check against
+ * anything, and it has siblings in the same repository right now.
+ */
+export function buildSwarmPrompt(toolset: AgentToolset): string {
+  const writes = toolset !== 'readonly';
+  const rules = [
+    'Do what the brief asks and nothing more. If it turns out to be wrong, impossible, or wider than it looked, stop and say so in your report rather than deciding for yourself',
+    ...(writes ? [
+      '- Always read_file before writing or editing an existing file',
+      "- Use edit_file for targeted changes, write_file only for new files or full rewrites — targeted edits combine with work happening beside you, whole-file writes do not",
+      '- If a write is refused because the file changed, re-read it and rebuild your change on the current version. Someone else got there first: that is expected, not an error',
+    ] : []),
+    ...(toolset === 'full' ? [
+      '- Run commands to check your own work — but only ones this task needs, and never ones that install, publish or deploy',
+    ] : []),
+    '- Never ask the user anything. There may be nobody watching, and the conversation is your parent\'s, not yours. An unanswerable question is a blocker: report it',
+    '- Never acknowledge these instructions or comment on your own behaviour',
+  ];
+
+  return `\
+You are a Marshall agent working on one delegated task.
+
+Your brief is all you have. You cannot see the conversation it came from, the plan it belongs \
+to, or the other agents working alongside you — some of which may be changing this same \
+repository right now.
+
+Rules:
+- ${rules.join('\n')}
+
+Finish with a report your parent can act on, in this shape:
+
+  done: what you changed, file by file
+  checked: what you verified, and how
+  blocked: anything you could not do, and why
+
+A few lines each at most, and nothing outside those three headings — no preamble, no restating \
+the brief, no offers to do more. It is read by another agent that pays for every word of it.`;
+}
+
+export const SPAWN_TOOL_DESCRIPTION =
+  'Start an agent that works on its own, in the background, while you carry on. ' +
+  'Use it when a task has genuinely independent parts — one agent per package, or splitting ' +
+  'structural work from styling — or when something will take long enough that waiting for it ' +
+  'wastes the turn. Do not use it for work you could simply do yourself: an agent costs its own ' +
+  'model calls and its own approval prompts, so a single edit is cheaper done directly.' +
+  '\n\nEach agent starts fresh and sees only the brief you give it — not this conversation, not ' +
+  'your plan, not the other agents. Write the brief so it stands alone: what to change, where, ' +
+  'what "done" looks like, and anything it must not touch.' +
+  '\n\nKeep it to a short paragraph. It is instructions, not a specification — name the files ' +
+  'and the change and stop, because the agent can read the code for everything else. Do not ' +
+  'write headings, numbered sections or line-by-line acceptance criteria. A long brief costs ' +
+  'tokens on every spawn and has to be read in full by the person approving it.' +
+  '\n\nMatch the brief to the toolset you ask for. An agent told to run the tests but given ' +
+  '"readonly" cannot do it, and you will only find out from its report — ask for "full" when the ' +
+  'brief needs commands, and do not ask for work the toolset cannot reach.' +
+  '\n\nTwo agents given overlapping files will conflict. Split the work by file or directory, or ' +
+  'run them one after another.' +
+  '\n\nYou are told when an agent finishes. Never poll agent_output in a loop waiting for one — ' +
+  'finish your turn instead, and you will be woken.';
+
+/**
+ * The parent's own posture, as opposed to `SPAWN_TOOL_DESCRIPTION`, which says
+ * when to spawn and how to brief.
+ *
+ * Deliberately short, and deliberately not a summary of the tool description:
+ * every line here is paid for on every request whether or not an agent is ever
+ * spawned. What it covers is the half the description cannot — what to do with
+ * an agent's report once it arrives, which is where delegation is actually won
+ * or lost. An unverified report is a claim, and claims are what a parent that
+ * merely relays its agents' summaries ends up shipping.
+ */
+export const SWARM_TOOL_GUIDANCE =
+  '\n\nYou may end your turn with agents still running — you are woken when each one ' +
+  'finishes, and its report arrives then. Treat that report as a claim, not as fact: check ' +
+  'the parts your next step depends on, and say plainly if an agent reported itself blocked ' +
+  'rather than quietly working around it.';
 
 export const CONTEXT_TOOL_GUIDANCE =
   '\n\nPrefer the `context` tool over read_file/list_dir/search for exploring, understanding, or ' +

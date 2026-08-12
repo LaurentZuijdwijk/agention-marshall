@@ -208,6 +208,29 @@ describe('turn completion', () => {
     assert.equal(h.calls.at(-1), 'turnEnded:interrupted');
   });
 
+  it('keeps a finished agent on one row, however long its brief was', () => {
+    const h = harness();
+    h.send({
+      type: 'agent-done',
+      id: 'agent1',
+      // What a real brief looks like: written for an agent to work from.
+      brief: 'Review the session-compression feature in this repository and report findings.\n\n'
+        + '## What to review\n'.repeat(40),
+      tier: 'deep',
+      model: 'openrouter/some-model',
+      status: 'done',
+      durationMs: 755_500,
+      resuming: true,
+    });
+    const row = h.pushed.at(-1);
+    assert.equal(row?.role, 'spawn');
+    assert.equal(row?.extra?.title, 'agent1');
+    // Long enough to identify, short enough that the columns beside it survive.
+    assert.ok((row?.content.length ?? 0) <= 72, `got ${row?.content.length} chars`);
+    assert.doesNotMatch(row?.content ?? '', /\n/);
+    assert.match(row?.content ?? '', /^Review the session-compression/);
+  });
+
   it('a full context window that could not be compressed says so', () => {
     const h = harness();
     h.send({ type: 'context-full', compressed: false });

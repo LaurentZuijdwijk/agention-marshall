@@ -1,5 +1,5 @@
-import { History, webSearchTool } from '@agentionai/agents/core';
-import type { BuiltInTool, Tool } from '@agentionai/agents/core';
+import { History, webSearchTool, Tool, ToolResultEvent } from '@agentionai/agents/core';
+import type { BuiltInTool, ToolInputSchema } from '@agentionai/agents/core';
 import type { ToolResultMaskingPlugin } from '@agentionai/agents/history/plugins';
 import {
   createFileTools,
@@ -9,8 +9,12 @@ import {
   createGitHubTools,
   createJobTools,
   createAskTool,
+  createDedupeCache,
+  withApproval,
 } from '@agentionai/marshall-tools';
-import type { ToolConfig, DedupeCache, BackgroundJobs, ApprovalFn, KeyedLock } from '@agentionai/marshall-tools';
+import type {
+  ToolConfig, ToolSpec, DedupeCache, BackgroundJobs, ApprovalFn, KeyedLock,
+} from '@agentionai/marshall-tools';
 import {
   createAgent,
   CONTEXT_AGENT_PROMPT,
@@ -20,11 +24,18 @@ import {
   CONTEXT_TOOL_GUIDANCE,
   PLANNER_TOOL_GUIDANCE,
   REVIEWER_TOOL_GUIDANCE,
+  SWARM_TOOL_GUIDANCE,
+  SPAWN_TOOL_DESCRIPTION,
+  buildSwarmPrompt,
 } from './agent-factory.js';
 import { agentTool } from './agent-tool.js';
+import { summariseAgentJob } from './agent-jobs.js';
+import type { AgentJobs, AgentToolset } from './agent-jobs.js';
 import { McpRegistry } from './mcp.js';
-import { resolveRoleProfile, resolveModel, contextToolEnabled, resolveSearchProfile } from './config.js';
-import type { EngineConfig, AgentProfile, Role } from './config.js';
+import {
+  resolveRoleProfile, resolveModel, contextToolEnabled, resolveSearchProfile, resolveTierProfile,
+} from './config.js';
+import type { EngineConfig, AgentProfile, Role, SwarmRole, Tier } from './config.js';
 import type { UsageTally } from './usage.js';
 import type { SessionEvents } from './session-events.js';
 import type { ClientInterface } from './types.js';
@@ -39,6 +50,27 @@ import type { ClientInterface } from './types.js';
  * and caller identity. Getting those two confused is how a tool outlives the
  * signal it was supposed to be cancelled by.
  */
+
+/** Same shape as the one in `job-tools.ts`, for the same reason: the ungated
+ *  read/stop tools are all schema and no ceremony. */
+function tool(spec: {
+  name: string;
+  description: string;
+  properties: Record<string, unknown>;
+  required: string[];
+  execute: (input: Record<string, unknown>) => Promise<string>;
+}): Tool<string> {
+  return new Tool<string>({
+    name: spec.name,
+    description: spec.description,
+    inputSchema: {
+      type: 'object',
+      properties: spec.properties,
+      required: spec.required,
+    } as unknown as ToolInputSchema,
+    execute: spec.execute,
+  });
+}
 
 /** The four model-bound sub-agent tools, once they have settled. */
 export interface RoleTools {
@@ -64,6 +96,8 @@ export interface ToolBeltDeps {
   events: SessionEvents;
   approval: ApprovalFn;
   jobs: BackgroundJobs;
+  /** Session-scoped registry of spawned agents — see agent-jobs.ts. */
+  agentJobs: AgentJobs;
   /** Where each delegated call's token spend is recorded. */
   usage: UsageTally;
   /** Session-scoped read tracking — see ToolConfig.readFiles. */
@@ -218,6 +252,9 @@ export class ToolBelt {
       ...(light ? [] : createJobTools(toolConfig)),
       ...(light ? [] : createScratchTools(toolConfig)),
       ...(config.enableGitHub ? createGitHubTools(toolConfig) : []),
+      // Light mode is single-agent by definition, so spawning is out there for
+      // the same reason the sub-agent tools are.
+      ...(config.swarm && !light ? this.swarmTools(toolConfig) : []),
       ...(context ? [context] : []),
       ...(search ? [search] : []),
       ...(planner ? [planner] : []),
@@ -235,12 +272,268 @@ export class ToolBelt {
 
     const extraInstructions = [
       context ? CONTEXT_TOOL_GUIDANCE : '',
+      config.swarm && !light ? SWARM_TOOL_GUIDANCE : '',
       planner ? PLANNER_TOOL_GUIDANCE : '',
       reviewer ? REVIEWER_TOOL_GUIDANCE : '',
       this.deps.client.askUser ? '\n\nUse ask_user for genuine ambiguity that blocks progress, not for confirmation.\n' : '',
     ].join('');
 
     return { tools, extraInstructions };
+  }
+
+  // ── swarm ───────────────────────────────────────────────────────────────────
+
+  /**
+   * `spawn_agent` and the three tools for living with what it started.
+   *
+   * Only `spawn_agent` is gated, and that is the whole design: consent is given
+   * once, to a brief, and every action the agent then takes is judged against
+   * that brief rather than against the user's turn instruction. Which makes the
+   * gate load-bearing in a way the others are not — an ungated spawn would let
+   * an agent write its own scope and then be judged against it.
+   *
+   * The other three follow `createJobTools`' reasoning exactly: reading is
+   * inert, and stopping something is inside the blast radius the user accepted
+   * when they let it start. Making an agent ask permission to clean up after
+   * itself mostly teaches it not to bother.
+   */
+  private swarmTools(parent: ToolConfig): Tool<unknown>[] {
+    const jobs = this.deps.agentJobs;
+
+    const spawn: ToolSpec = {
+      name: 'spawn_agent',
+      description: SPAWN_TOOL_DESCRIPTION,
+      inputSchema: {
+        type: 'object',
+        properties: {
+          brief: {
+            type: 'string',
+            description:
+              'Self-contained instructions: what to change, where, what "done" looks like, and ' +
+              'anything it must not touch. The agent sees nothing else — not this conversation, ' +
+              'not your plan, not the other agents.',
+          },
+          tier: {
+            type: 'string',
+            enum: ['fast', 'deep'],
+            description:
+              'fast for mechanical or fully-specified work; deep for work needing judgement. ' +
+              'Fast agents are cheaper and quicker, so prefer them when the brief leaves little open.',
+          },
+          toolset: {
+            type: 'string',
+            enum: ['readonly', 'edit', 'full'],
+            description:
+              'readonly to investigate, edit to change files, full to also run commands. Ask for ' +
+              'the least the brief needs: the user approves this, and a smaller ask is approved faster.',
+          },
+        },
+        required: ['brief', 'tier', 'toolset'],
+      },
+      execute: async ({ brief, tier, toolset }) => {
+        const job = jobs.start({
+          brief: String(brief),
+          tier: tier as Tier,
+          toolset: toolset as AgentToolset,
+          label: this.swarmLabel(tier as Tier),
+          run: ({ id, signal }) => this.runSpawnedAgent({
+            id, signal, brief: String(brief), tier: tier as Tier, toolset: toolset as AgentToolset,
+          }),
+        });
+        this.deps.log(`SWARM ${job.id} START ${job.tier} ${job.toolset} ${job.label} ${JSON.stringify(job.brief.slice(0, 200))}`);
+        return (
+          `Started ${job.id} on the ${job.tier} tier (${job.label}), toolset "${job.toolset}". ` +
+          `It is running now — carry on, and you will be told when it finishes.`
+        );
+      },
+    };
+
+    return [
+      withApproval(
+        spawn,
+        parent.approval,
+        (input) => ({
+          toolName: 'spawn_agent',
+          description: `Start a ${String(input.tier)} agent (${String(input.toolset)}) — ${this.swarmLabel(input.tier as Tier)}`,
+          // The brief *is* the consent question. Shown whole and unabridged:
+          // this is the one prompt where truncating the detail would hide the
+          // very thing being agreed to, since everything the agent later does
+          // is measured against these words.
+          detail: String(input.brief),
+        }),
+        parent.signal,
+        parent.caller,
+        parent.taskContext,
+      ),
+
+      tool({
+        name: 'agent_list',
+        description: 'List the agents spawned this session, with their status and how long they have run.',
+        properties: {},
+        required: [],
+        execute: async () => {
+          const all = jobs.list();
+          if (all.length === 0) return 'No agents have been spawned in this session.';
+          return all.map(summariseAgentJob).join('\n');
+        },
+      }),
+
+      tool({
+        name: 'agent_output',
+        description:
+          'Read an agent\'s report. Returns its status, and its final report once it has finished — ' +
+          'each report only once, since you are also told it directly. Use this to check on an agent ' +
+          'mid-run; you do not need it to learn that one finished.',
+        properties: {
+          agent_id: { type: 'string', description: 'The id returned by spawn_agent, e.g. "agent1"' },
+        },
+        required: ['agent_id'],
+        execute: async ({ agent_id }) => this.describeAgent(String(agent_id)),
+      }),
+
+      tool({
+        name: 'agent_kill',
+        description:
+          'Stop a running agent. Use it when its work has been made obsolete by a later change, or ' +
+          'when it is doing something the brief did not ask for.',
+        properties: {
+          agent_id: { type: 'string', description: 'The id returned by spawn_agent, e.g. "agent1"' },
+        },
+        required: ['agent_id'],
+        execute: async ({ agent_id }) => {
+          const id = String(agent_id);
+          const job = jobs.get(id);
+          if (!job) return this.unknownAgent(id);
+          if (!jobs.kill(id)) return `${id} had already ${job.status === 'done' ? 'finished' : job.status}.`;
+          this.deps.log(`SWARM ${id} KILLED by parent`);
+          return `Stopped ${id}.`;
+        },
+      }),
+    ];
+  }
+
+  /** `provider/model` for a tier, as the approval panel and the log name it. */
+  private swarmLabel(tier: Tier): string {
+    const profile = resolveTierProfile(this.deps.getConfig(), tier);
+    return `${profile.provider}/${resolveModel(profile)}`;
+  }
+
+  private unknownAgent(id: string): string {
+    const known = this.deps.agentJobs.list().map(j => j.id);
+    return known.length
+      ? `No agent "${id}". Known agents: ${known.join(', ')}.`
+      : `No agent "${id}" — nothing has been spawned in this session.`;
+  }
+
+  private describeAgent(id: string): string {
+    const jobs = this.deps.agentJobs;
+    const job = jobs.get(id);
+    if (!job) return this.unknownAgent(id);
+
+    const parts = [summariseAgentJob(job)];
+    const report = jobs.read(id);
+    if (report) {
+      parts.push(report);
+    } else if (job.status === 'running') {
+      const activity = jobs.activity(id);
+      parts.push(activity.length
+        ? `Working. Recently:\n${activity.map(line => `  ${line}`).join('\n')}`
+        : 'Working. Nothing to report yet.');
+    } else if (job.error) {
+      parts.push(`Failed: ${job.error}`);
+    } else {
+      parts.push('Its report has already been delivered to you.');
+    }
+    return parts.join('\n\n');
+  }
+
+  /**
+   * One spawned agent, from construction to final report.
+   *
+   * The belt it gets is deliberately not `forTurn`'s. Three things differ, and
+   * each is a correctness point rather than a preference:
+   *
+   * - **Its own `readFiles`.** Shared, agent B could overwrite a file only agent
+   *   A had read, and "read it first" would stop meaning anything per agent.
+   *   Nothing is lost by separating them, because the staleness check compares
+   *   against *disk*: B's write is still refused if A got there in between.
+   * - **Its own dedupe cache.** Shared, `read_file` would answer "unchanged
+   *   since last read" to an agent that has never read the file, and hand it a
+   *   line count instead of the contents.
+   * - **The session `fileLock`.** The one thing that must be shared, or two
+   *   agents editing one file serialise against nothing.
+   *
+   * It also gets no `jobs` (a background command outliving the agent that
+   * started it has no owner) and no `ask_user` (there may be nobody watching,
+   * and the conversation belongs to the parent). `spawn_agent` is absent too,
+   * which is what bounds depth — structurally, with nothing to police.
+   */
+  private async runSpawnedAgent(opts: {
+    id: string;
+    signal: AbortSignal;
+    brief: string;
+    tier: Tier;
+    toolset: AgentToolset;
+  }): Promise<string> {
+    const config = this.deps.getConfig();
+    const profile = resolveTierProfile(config, opts.tier);
+    const role: SwarmRole = `swarm:${opts.tier}`;
+    const label = `${profile.provider}/${resolveModel(profile)}`;
+
+    const toolConfig: ToolConfig = {
+      workspaceRoot: config.workspaceRoot,
+      approval: this.deps.approval,
+      signal: opts.signal,
+      commandPolicy: config.commandPolicy,
+      limits: config.limits,
+      // `id` is what separates two live agents at the gate — without it they are
+      // one actor, and approving one agent's write approves the other's.
+      caller: { role, model: label, id: `${role}#${opts.id}` },
+      // The brief, not the user's turn instruction. A delegated action is in
+      // scope if it serves the brief it was given, and the brief is what the
+      // user approved at the spawn gate.
+      taskContext: opts.brief,
+      readFiles: new Map(),
+      fileLock: this.deps.fileLock,
+    };
+
+    const tools = this.spawnedTools(toolConfig, opts.toolset);
+    const agent = await createAgent(profile, tools, new History(), {
+      maxTokens: config.maxTokens,
+      systemPrompt: buildSwarmPrompt(opts.toolset),
+      name: opts.id,
+    });
+    this.deps.events.attachSubAgentListeners(agent, tools, opts.id);
+    for (const t of tools) {
+      t.on(ToolResultEvent.RESULT, (event: InstanceType<typeof ToolResultEvent>) => {
+        this.deps.agentJobs.note(opts.id, event.target.name);
+      });
+    }
+
+    try {
+      return await agent.execute(opts.brief, { signal: opts.signal });
+    } finally {
+      // In `finally` so a cancelled or failed agent is still billed. One that
+      // burned its context and died is exactly the one worth seeing on the bill.
+      const usage = agent.lastTokenUsage;
+      if (usage) {
+        this.deps.usage.record(`${opts.id}@${this.subagentSeq++}`, { role, profile }, {
+          inputTokens: usage.input_tokens,
+          outputTokens: usage.output_tokens,
+        });
+      }
+    }
+  }
+
+  /** The belt a spawned agent gets, by the toolset its parent asked for. */
+  private spawnedTools(config: ToolConfig, toolset: AgentToolset): Tool<unknown>[] {
+    if (toolset === 'readonly') {
+      return createReadOnlyFileTools(config.workspaceRoot, config.limits);
+    }
+    return [
+      ...createFileTools(config, createDedupeCache()),
+      ...(toolset === 'full' ? [createShellTool(config)] : []),
+    ];
   }
 
   /**
