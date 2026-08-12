@@ -1,0 +1,2 @@
+# Keep source files reviewable as text, regardless of platform or legacy blob state.
+packages/engine/src/usage.ts text diff eol=lf
