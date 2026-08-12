@@ -497,8 +497,8 @@
       </div>
       <div class="card">
         <div class="glyph" style="color:var(--tool)" aria-hidden="true">⊞</div>
-        <h4>Mix local and paid, per role</h4>
-        <p><b>deep</b> and <b>fast</b> are full profiles — each with its own provider, host and key, so they can be different vendors. Put a frontier model on <b>deep</b> (planning, coding, review) and a local one on <b>fast</b> (reading files, searching, summarising history): the bulk of the tokens never leaves your machine or hits your bill, and you pay only for the reasoning. Or run both local, on two different servers. <code>/model deep</code>, <code>/model fast</code>, <code>/model off</code>.</p>
+        <h4>Combine fast and deep, per role</h4>
+        <p>Run a <b>deep</b> and a <b>fast</b> model together and decide which one you want where. Each is a full profile with its own provider, host and key, so they can be different vendors. Put a frontier model on <b>deep</b> (planning, coding, review) and a local one on <b>fast</b> (reading files, searching, summarising history): the bulk of the tokens never leaves your machine or hits your bill, and you pay only for the reasoning. Or run both local, on two different servers. <code>/model deep</code>, <code>/model fast</code>, <code>/model off</code>.</p>
       </div>
     </div>
   </div>
@@ -551,6 +551,16 @@
         <div class="glyph" style="color:var(--ok)" aria-hidden="true">✓</div>
         <h4>Approval for every mutation</h4>
         <p><code>write_file</code>, <code>edit_file</code> and <code>run_shell</code> render their diff or command before they run. Approve once, always-allow for the session, or deny — <code>esc</code> denies everything pending.</p>
+      </div>
+      <div class="card">
+        <div class="glyph" style="color:var(--user)" aria-hidden="true">◈</div>
+        <h4>Agentic safety, when you want it</h4>
+        <p>Safety is a dial, not a fixed gate. <b>yolo</b> runs every tool call with no approval (sandbox/CI only), <b>default</b> makes you approve every state change, and <b>agentic</b> adds a judge model that reviews each call first — a clear "safe" verdict skips you, an "unsafe" one still asks, with the model's reasoning attached.</p>
+      </div>
+      <div class="card">
+        <div class="glyph" style="color:var(--code)" aria-hidden="true">⚙</div>
+        <h4>Fully configurable, two dials</h4>
+        <p>Neither the tool belt nor the gate is baked in. <code>/runtime</code> <b>light</b> | <b>default</b> | <b>agentic</b> picks runtime weight — from a lean no-sub-agent profile for small models up to <code>spawn_agent</code> for background agents. <code>/safety</code> <b>yolo</b> | <b>default</b> | <b>agentic</b> sets the approval gate. Both persist per workspace or <code>--global</code>.</p>
       </div>
       <div class="card">
         <div class="glyph" style="color:var(--tool)" aria-hidden="true">◆</div>
@@ -617,9 +627,11 @@
   <div class="wrap">
     <h2>commands</h2>
     <h3>Small surface, <span class="grad">muscle memory</span></h3>
-    <p class="lede">Eleven slash commands and three keys. <code>/help</code> prints the lot.</p>
+    <p class="lede">The essentials and the two dials that tune them — <code>/help</code> prints the lot.</p>
     <div class="cmds">
-      <div class="row"><span class="k">/model</span><span class="d">pick deep + fast models; the wizard lists OpenRouter's live catalogue or probes local servers for what's actually loaded</span></div>
+      <div class="row"><span class="k">/model</span><span class="d">combine a deep and a fast model — you pick which one you want where; the wizard lists OpenRouter's live catalogue or probes local servers for what's actually loaded</span></div>
+      <div class="row"><span class="k">/runtime &lt;mode&gt;</span><span class="d">set the tool belt: <code>light</code> (lean, no sub-agents), <code>default</code> (full), <code>agentic</code> (full + spawn background agents)</span></div>
+      <div class="row"><span class="k">/safety &lt;level&gt;</span><span class="d">set the approval gate: <code>yolo</code> (none, sandbox only), <code>default</code> (approve every change), <code>agentic</code> (judge model reviews first)</span></div>
       <div class="row"><span class="k">/plan &lt;task&gt;</span><span class="d">get a plan before touching code — carried as context into your next task</span></div>
       <div class="row"><span class="k">/review [notes]</span><span class="d">second opinion on the current workspace state</span></div>
       <div class="row"><span class="k">/memory</span><span class="d">view <code>AGENTS.md</code>, the project memory loaded at session start</span></div>
