@@ -1043,11 +1043,9 @@ draw_install_progress() {
   printf '\r\033[K  %s%s%s %s %s%s%s %s' "$orange" "$frame" "$reset" "$bar" "$bold" "$title" "$reset" "$label"
 }
 
-# The block-letter MARSHALL wordmark from apps/cli/src/view/Banner.tsx. Revealed
-# with the same left-to-right wipe + shimmer pass, painted in the brand
-# gradient (violet→cyan). Wide below 65 columns; compact (two rows) otherwise.
-readonly MR_LOGO_REVEAL_FRAMES=16
-readonly MR_LOGO_SHIMMER_FRAMES=12
+# The block-letter MARSHALL wordmark from apps/cli/src/view/Banner.tsx, painted
+# in the brand gradient (violet→cyan). Wide below 65 columns; compact (two rows)
+# otherwise. Just a static banner — no animation.
 MR_LOGO_WIDE='███╗   ███╗ █████╗ ██████╗ ███████╗██╗  ██╗ █████╗ ██╗     ██╗
 ████╗ ████║██╔══██╗██╔══██╗██╔════╝██║  ██║██╔══██╗██║     ██║
 ██╔████╔██║███████║██████╔╝███████╗███████║███████║██║     ██║
@@ -1063,14 +1061,6 @@ mr_logo_animation() {
     return
   fi
 
-  # Brand gradient violet→cyan as 256-colour bands, when the terminal can show 256.
-  gradient=0
-  if [ -n "${COLORTERM:-}" ]; then
-    case "$COLORTERM" in truecolor|24bit) gradient=1 ;; esac
-  elif case "$TERM" in *256color*) true ;; *) false ;; esac; then
-    gradient=1
-  fi
-
   cols=$(tput cols 2>/dev/null || printf 80)
   if [ "$cols" -ge 65 ]; then
     rows="$MR_LOGO_WIDE"
@@ -1080,48 +1070,23 @@ mr_logo_animation() {
     width=29
   fi
 
-  esc="${MR_ESC}["
-  reset="${MR_ESC}[0m"
-  hide="${esc}?25l"
-  show="${esc}?25h"
+  # Brand gradient violet→cyan as 256-colour bands, when the terminal can show 256.
+  gradient=0
+  if [ -n "${COLORTERM:-}" ]; then
+    case "$COLORTERM" in truecolor|24bit) gradient=1 ;; esac
+  elif case "$TERM" in *256color*) true ;; *) false ;; esac; then
+    gradient=1
+  fi
 
-  trap 'printf "%s%s\n" "$reset" "$show"; trap - INT TERM; exit 130' INT TERM
-  printf '%s%s' "$hide" "${esc}2J${esc}H"
-
-  total=$((MR_LOGO_REVEAL_FRAMES + MR_LOGO_SHIMMER_FRAMES))
-  frame=0
-  while [ "$frame" -lt "$total" ]; do
-    if [ "$frame" -lt "$MR_LOGO_REVEAL_FRAMES" ]; then
-      shown=$(( (frame + 1) * width / MR_LOGO_REVEAL_FRAMES ))
-      sweep=$shown
-    else
-      shown=$width
-      f=$((frame - MR_LOGO_REVEAL_FRAMES))
-      sweep=$(( width * 2 / 10 + width * 11 * f / (10 * MR_LOGO_SHIMMER_FRAMES) ))
-      if [ "$sweep" -ge "$width" ]; then
-        sweep=-1
-      fi
-    fi
-    draw_mr_wordmark_frame "$rows" "$shown" "$sweep" "$gradient" "$width"
-    sleep 0.045
-    frame=$((frame + 1))
-  done
-
-  printf '%s%s\n' "$reset" "$show"
-  trap - INT TERM
-}
-
-draw_mr_wordmark_frame() {
-  rows="$1"; shown="$2"; sweep="$3"; gradient="$4"; width="$5"
-
-  reset="${MR_ESC}[0m"
   b0="${MR_ESC}[38;5;99m"
   b1="${MR_ESC}[38;5;105m"
   b2="${MR_ESC}[38;5;111m"
   b3="${MR_ESC}[38;5;117m"
   b4="${MR_ESC}[38;5;123m"
   b5="${MR_ESC}[38;5;51m"
+  reset="${MR_ESC}[0m"
 
+  printf '\n'
   printf '%s' "$rows" | while IFS= read -r row; do
     line=""
     col=0
@@ -1132,29 +1097,25 @@ draw_mr_wordmark_frame() {
         *) char=${row%"${row#???}"}; row=${row#???} ;;
       esac
 
-      if [ "$col" -ge "$shown" ]; then
-        cell=" "
-      elif [ "$sweep" -ge 0 ] && [ "$col" -eq "$sweep" ]; then
-        cell="${MR_ESC}[1;97m${char}"
-      elif [ "$gradient" = 1 ]; then
+      if [ "$gradient" = 1 ]; then
         band=$((col * 6 / width))
         case "$band" in
-          0) cell="${b0}${char}" ;;
-          1) cell="${b1}${char}" ;;
-          2) cell="${b2}${char}" ;;
-          3) cell="${b3}${char}" ;;
-          4) cell="${b4}${char}" ;;
-          *) cell="${b5}${char}" ;;
+          0) line="${line}${b0}${char}" ;;
+          1) line="${line}${b1}${char}" ;;
+          2) line="${line}${b2}${char}" ;;
+          3) line="${line}${b3}${char}" ;;
+          4) line="${line}${b4}${char}" ;;
+          *) line="${line}${b5}${char}" ;;
         esac
       else
-        cell="${MR_ESC}[36m${char}"
+        line="${line}${MR_ESC}[36m${char}"
       fi
 
-      line="${line}${cell}"
       col=$((col + 1))
     done
     printf '%s%s\n' "$line" "$reset"
   done
+  printf '\n'
 }
 
 print_static_logo() {
