@@ -4,6 +4,7 @@ import { MaxTokensExceededError } from '@agentionai/agents/core';
 import type { ApprovalRequest } from '@agentionai/marshall-tools';
 import {
   buildSafetyContext, parseSafetyVerdict, runSafetyJudge, createSafetyAgentDecider, describeJudgeFailure,
+  stripFence,
   DEFAULT_SAFETY_MAX_TOKENS,
 } from './safety-agent.js';
 import { startFakeProvider } from './testing/fake-provider.js';
@@ -55,6 +56,25 @@ test('buildSafetyContext defaults input to an empty object', () => {
 
 test('parseSafetyVerdict: chat-judge JSON approve', () => {
   assert.equal(parseSafetyVerdict('{"decision": "approve", "reason": "routine edit"}'), 'approve');
+});
+
+test('parseSafetyVerdict: a fenced verdict is read as JSON, not as keywords', () => {
+  // What deepseek and gemma actually send, despite the prompt asking for bare
+  // JSON. Unfenced this parses; fenced it used to fall through to the keyword
+  // scan, which reads the reason prose too — so this approval, whose reason
+  // contains "block", came back as a denial.
+  const fenced = '```json\n{"decision": "approve", "reason": "reading a file does not block anything"}\n```';
+  assert.equal(parseSafetyVerdict(fenced), 'approve');
+});
+
+test('parseSafetyVerdict: a fenced denial is still a denial', () => {
+  const fenced = '```\n{"decision": "deny", "reason": "deletes the credentials file"}\n```';
+  assert.equal(parseSafetyVerdict(fenced), 'deny');
+});
+
+test('stripFence leaves unfenced text alone', () => {
+  assert.equal(stripFence('  {"decision": "approve"}  '), '{"decision": "approve"}');
+  assert.equal(stripFence('User Safety: safe'), 'User Safety: safe');
 });
 
 test('parseSafetyVerdict: chat-judge JSON deny', () => {

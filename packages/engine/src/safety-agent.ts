@@ -304,14 +304,30 @@ function verdictFromPlainLines(text: string): ApprovalDecision | 'defer' | null 
  * unparseable response is a reason to ask the human, not to block
  * automatically.
  */
+/**
+ * The JSON inside a markdown fence, or the text unchanged.
+ *
+ * The judge prompt asks for "strict JSON only, no prose, no markdown fences",
+ * and small local models routinely answer with a fenced block anyway. Worth
+ * handling rather than lecturing: without this the JSON never parses, the
+ * decision falls through to the keyword scan, and that scan reads the *reason
+ * prose* as well as the verdict — so an approval whose reason says "this does
+ * not block anything" is read as a denial. The structured answer is right
+ * there; it just has three backticks in front of it.
+ */
+export function stripFence(raw: string): string {
+  const fenced = /^\s*```(?:json|JSON)?\s*\n([\s\S]*?)\n?\s*```\s*$/.exec(raw.trim());
+  return fenced ? fenced[1].trim() : raw.trim();
+}
+
 export function parseSafetyVerdict(raw: string): ApprovalDecision | 'defer' {
-  const trimmed = raw.trim();
+  const trimmed = stripFence(raw);
 
   try {
     const parsed = verdictFromObject(JSON.parse(trimmed));
     if (parsed) return parsed;
   } catch {
-    // Not JSON (or a model that wrapped it in prose/fences) — fall through.
+    // Not JSON even unfenced — fall through to the plain-line and keyword shapes.
   }
 
   const plainLines = verdictFromPlainLines(trimmed);
@@ -417,7 +433,7 @@ function truncate(text: string, max = MAX_REASON_LENGTH): string {
  */
 function summarizeReason(raw: string): string {
   try {
-    const parsed = JSON.parse(raw.trim()) as unknown;
+    const parsed = JSON.parse(stripFence(raw)) as unknown;
     if (parsed && typeof parsed === 'object') {
       const rec = parsed as Record<string, unknown>;
       if (typeof rec.reason === 'string' && rec.reason.trim()) return truncate(rec.reason);
