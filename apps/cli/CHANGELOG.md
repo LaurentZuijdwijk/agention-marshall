@@ -1,5 +1,24 @@
 # @agentionai/marshall-cli
 
+## 0.16.0
+
+### Minor Changes
+
+- 97586e5: Bump `@agentionai/agents` to `1.7.0-beta.0`.
+
+  The new beta includes the `AgentJobs` registry and `spawn_agent`
+  tool support that the swarm feature depends on. The CLI version is
+  bumped to `0.15.0` to reflect the new `/agents` command and the
+  runtime/safety settings persistence.
+
+### Patch Changes
+
+- Updated dependencies [97586e5]
+- Updated dependencies [60362c9]
+- Updated dependencies [5dad6d5]
+  - @agentionai/marshall-engine@0.13.4
+  - @agentionai/marshall-tools@0.6.2
+
 ## 0.15.0
 
 ### Minor Changes
