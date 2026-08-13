@@ -1,5 +1,11 @@
 # @agentionai/marshall-engine
 
+## 0.15.1
+
+### Patch Changes
+
+- Republish the named OpenAI-compatible provider support in a patch release.
+
 ## 0.15.0
 
 ### Minor Changes

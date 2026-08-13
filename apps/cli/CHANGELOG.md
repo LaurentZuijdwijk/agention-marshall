@@ -1,5 +1,13 @@
 # @agentionai/marshall-cli
 
+## 0.18.1
+
+### Patch Changes
+
+- Republish the named OpenAI-compatible provider support in a patch release.
+- Updated dependencies
+  - @agentionai/marshall-engine@0.15.1
+
 ## 0.18.0
 
 ### Minor Changes
