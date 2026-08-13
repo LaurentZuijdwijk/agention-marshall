@@ -1,5 +1,65 @@
 # @agentionai/marshall-engine
 
+## 0.14.0
+
+### Minor Changes
+
+- 888f2d1: Spawn background agents on `/runtime agentic`.
+
+  Adds a session-scoped `AgentJobs` registry alongside `BackgroundJobs`, and the
+  `spawn_agent` / `agent_list` / `agent_output` / `agent_kill` tool belt behind the
+  new agentic runtime mode. Only `spawn_agent` is gated: consent is given once to a
+  brief, and every action the agent takes is judged against that brief.
+
+  Each spawned agent gets its own `readFiles` map and dedupe cache but shares the
+  session `fileLock`, so two agents editing one file still serialise. It gets no
+  jobs, no `ask_user` and no `spawn_agent`, which is what bounds depth.
+
+  `RuntimeMode` replaces the `light` boolean as a single value, so light and
+  agentic cannot be set at once. `/agents` lists and stops what is running; a
+  finished agent wakes the parent through the same `pendingJobReports` path as a
+  shell job, with its own resume wording.
+
+  The engine now exports the `AgentJob`, `AgentJobs`, `AgentJobStatus`,
+  `AgentToolset`, `SwarmRole` and `RuntimeMode` types plus `summariseAgentJob`.
+  Spawned agents carry no default time ceiling — one runs until it finishes or is
+  `agent_kill`ed — but a per-`spawn_agent` stop can be imposed via the new
+  `agentTimeoutMs` config option.
+
+### Patch Changes
+
+- 888f2d1: Narrow what compression folds instead of folding the whole overflow into one summary.
+
+  `middleCompressionPlugin` replaces the flat library summariser. It keeps the
+  first conversational turn and a short tail of the newest turns verbatim, and
+  summarises only a contiguous middle window that fits in bounded steps. When the
+  window already contains a prior summary, that summary is extended in place
+  (picking up its `coversRange`) rather than discarded and rebuilt. Reducing
+  stops as soon as a step makes no token progress, so the summariser never spins
+  re-emitting what is already there.
+
+  The result is smaller, cheaper summary prompts (each step folds ~3k tokens, well
+  under a local model's context window) and an older context that keeps more real
+  turns than a single all-or-nothing summary.
+
+- 5dad6d5: Hoist the per-path write lock to session scope, so every tool belt that can
+  write queues on the same one.
+
+  `createFileTools` owned its lock, which orders only the calls made through that
+  one belt. That was enough while a single agent did the writing: the belt is
+  rebuilt each turn, but only one exists at a time. It stops holding as soon as a
+  second belt can write, because each belt takes its own private lock and the two
+  serialise against nothing — which is exactly the read-modify-write race the lock
+  was built to prevent, back where it started and now invisible.
+
+  `ToolConfig.fileLock` is injected the same way `readFiles` already is, and for a
+  reason of the same shape: the lifetime belongs to the session, not the belt.
+  Absent, the factory still makes its own, which is what the tests and any
+  single-writer belt want.
+
+- Updated dependencies [5dad6d5]
+  - @agentionai/marshall-tools@0.6.3
+
 ## 0.13.4
 
 ### Patch Changes
