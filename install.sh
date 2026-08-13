@@ -54,32 +54,15 @@ mr_logo() {
   reset="${MR_ESC}[0m"
 
   printf '\n'
-  printf '%s' "$rows" | while IFS= read -r row; do
-    line=""
-    col=0
-    while [ -n "$row" ]; do
-      # Take one character: a leading space is 1 byte, every block glyph is 3.
-      case "$row" in
-        ' '*) char=' '; row=${row# } ;;
-        *)    char=${row%"${row#???}"}; row=${row#???} ;;
-      esac
-      if [ "$gradient" = 1 ]; then
-        band=$((col * 6 / width))
-        case "$band" in
-          0) line="${line}${b0}${char}" ;;
-          1) line="${line}${b1}${char}" ;;
-          2) line="${line}${b2}${char}" ;;
-          3) line="${line}${b3}${char}" ;;
-          4) line="${line}${b4}${char}" ;;
-          *) line="${line}${b5}${char}" ;;
-        esac
-      else
-        line="${line}${MR_ESC}[36m${char}"
-      fi
-      col=$((col + 1))
-    done
-    printf '%s%s\n' "$line" "$reset"
-  done
+  # Do not parse the UTF-8 logo one character at a time. macOS /bin/sh treats
+  # the block glyphs differently from Linux shells, which can make a pattern
+  # such as ??? match nothing and leave the loop spinning forever.
+  if [ "$gradient" = 1 ]; then
+    logo_color="$b2"
+  else
+    logo_color="${MR_ESC}[36m"
+  fi
+  printf '%s%s%s\n' "$logo_color" "$rows" "$reset"
   printf '\n'
 }
 
@@ -321,7 +304,7 @@ install_node_standalone() {
   printf 'Resolving Node.js binary for %s-%s\n' "$node_platform" "$node_arch"
   curl -fsSL "$node_dist_base/SHASUMS256.txt" -o "$node_tmp_dir/SHASUMS256.txt"
 
-  node_file=$(awk -v suffix="-$node_platform-$node_arch.tar.xz" '
+  node_file=$(awk -v suffix="-$node_platform-$node_arch.tar.gz" '
     index($2, "node-v") == 1 && length($2) >= length(suffix) && substr($2, length($2) - length(suffix) + 1) == suffix { print $2; exit }
   ' "$node_tmp_dir/SHASUMS256.txt")
 
@@ -331,16 +314,15 @@ install_node_standalone() {
     return 1
   fi
 
-  printf 'Downloading Node.js %s\n' "${node_file%.tar.xz}"
+  printf 'Downloading Node.js %s\n' "${node_file%.tar.gz}"
   curl -fsSL "$node_dist_base/$node_file" -o "$node_tmp_dir/$node_file"
 
   verify_node_standalone_download "$node_tmp_dir" "$node_file"
-  ensure_node_standalone_extract_tools "$node_platform"
 
-  node_dir="$node_base_dir/${node_file%.tar.xz}"
+  node_dir="$node_base_dir/${node_file%.tar.gz}"
   rm -rf "$node_dir"
   printf 'Extracting Node.js to %s\n' "$node_dir"
-  tar -xf "$node_tmp_dir/$node_file" -C "$node_base_dir"
+  tar -xzf "$node_tmp_dir/$node_file" -C "$node_base_dir"
   rm -f "$node_base_dir/current"
   ln -s "$node_dir" "$node_base_dir/current"
   rm -rf "$node_tmp_dir"
@@ -362,7 +344,7 @@ verify_node_standalone_download() {
 
 ensure_node_standalone_extract_tools() {
   extract_platform="$1"
-  # xz is needed for .tar.xz on both Linux and macOS when not already present
+  # Kept for compatibility with callers that may need to extract an xz archive.
   if ! command -v xz >/dev/null 2>&1; then
     printf 'xz is required to extract the Node.js archive.\n'
     case "$extract_platform" in
