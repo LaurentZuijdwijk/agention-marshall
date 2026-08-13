@@ -11,43 +11,91 @@ MR_CR=$(printf '\r')
 MR_ETX=$(printf '\003')
 readonly MR_PACKAGE MR_CMD MR_REQUIRED_NODE_MAJOR MR_ESC MR_CR MR_ETX
 
+# The block-letter MARSHALL wordmark, painted in the brand gradient (violet→cyan).
+# Wide below 65 columns; compact (two rows) otherwise. Static banner only.
+MR_LOGO_WIDE='███╗   ███╗ █████╗ ██████╗ ███████╗██╗  ██╗ █████╗ ██╗     ██╗
+████╗ ████║██╔══██╗██╔══██╗██╔════╝██║  ██║██╔══██╗██║     ██║
+██╔████╔██║███████║██████╔╝███████╗███████║███████║██║     ██║
+██║╚██╔╝██║██╔══██║██╔══██╗╚════██║██╔══██║██╔══██║██║     ██║
+██║ ╚═╝ ██║██║  ██║██║  ██║███████║██║  ██║██║  ██║███████╗███████╗
+╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚══════╝'
+MR_LOGO_COMPACT='█▀▄▀█ ▄▀█ █▀█ █▀ █ █ ▄▀█ █   █
+█ ▀ █ █▀█ █▀▄ ▄█ █▀█ █▀█ █▄▄ █▄▄'
+
+mr_logo() {
+  if [ ! -t 1 ] || [ "${TERM:-}" = "dumb" ]; then
+    printf '\n%s\n\n' "$MR_LOGO_COMPACT"
+    return
+  fi
+
+  cols=$(tput cols 2>/dev/null || printf 80)
+  if [ "$cols" -ge 65 ]; then
+    rows="$MR_LOGO_WIDE"
+    width=63
+  else
+    rows="$MR_LOGO_COMPACT"
+    width=29
+  fi
+
+  # Brand gradient violet→cyan as 256-colour bands when the terminal supports it.
+  gradient=0
+  if [ -n "${COLORTERM:-}" ]; then
+    case "$COLORTERM" in truecolor|24bit) gradient=1 ;; esac
+  elif case "$TERM" in *256color*) true ;; *) false ;; esac; then
+    gradient=1
+  fi
+
+  b0="${MR_ESC}[38;5;99m"
+  b1="${MR_ESC}[38;5;105m"
+  b2="${MR_ESC}[38;5;111m"
+  b3="${MR_ESC}[38;5;117m"
+  b4="${MR_ESC}[38;5;123m"
+  b5="${MR_ESC}[38;5;51m"
+  reset="${MR_ESC}[0m"
+
+  printf '\n'
+  printf '%s' "$rows" | while IFS= read -r row; do
+    line=""
+    col=0
+    while [ -n "$row" ]; do
+      # Take one character: a leading space is 1 byte, every block glyph is 3.
+      case "$row" in
+        ' '*) char=' '; row=${row# } ;;
+        *)    char=${row%"${row#???}"}; row=${row#???} ;;
+      esac
+      if [ "$gradient" = 1 ]; then
+        band=$((col * 6 / width))
+        case "$band" in
+          0) line="${line}${b0}${char}" ;;
+          1) line="${line}${b1}${char}" ;;
+          2) line="${line}${b2}${char}" ;;
+          3) line="${line}${b3}${char}" ;;
+          4) line="${line}${b4}${char}" ;;
+          *) line="${line}${b5}${char}" ;;
+        esac
+      else
+        line="${line}${MR_ESC}[36m${char}"
+      fi
+      col=$((col + 1))
+    done
+    printf '%s%s\n' "$line" "$reset"
+  done
+  printf '\n'
+}
+
 mr_installer_main() {
   set -eu
 
-  check_file="${TMPDIR:-/tmp}/marshall-installer-checks.$$"
-  run_preflight_checks >"$check_file" &
-  check_pid=$!
+  mr_logo
+  printf '\033[1m Marshall Installer\033[0m\n'
+  printf '\033[2m A coding agent that does not pretend to be your keyboard\033[0m\n\n'
 
-  mr_logo_animation
-
-  if wait "$check_pid"; then
-    check_status=0
-  else
-    check_status=$?
-  fi
-
-  printf '\033[1m  Marshall Installer\033[0m\n\033[2m  A coding agent that does not pretend to be your keyboard\033[0m\n\n'
-  if [ "$check_status" -eq 0 ]; then
-    cat "$check_file"
-  fi
-  rm -f "$check_file"
-
-  if [ "$check_status" -ne 0 ]; then
+  if ! run_preflight_checks; then
     if ! install_node_npm_interactive; then
-      exit "$check_status"
+      exit 1
     fi
-
-    check_file="${TMPDIR:-/tmp}/marshall-installer-checks.$$"
-    if run_preflight_checks >"$check_file"; then
-      check_status=0
-    else
-      check_status=$?
-    fi
-    cat "$check_file"
-    rm -f "$check_file"
-
-    if [ "$check_status" -ne 0 ]; then
-      exit "$check_status"
+    if ! run_preflight_checks; then
+      exit 1
     fi
   fi
 
@@ -63,6 +111,7 @@ mr_installer_main() {
   export MR_NPM_UNINSTALL_PREFIX
 
   choose_mr_action "$MR_EXISTING_PATH"
+
   case "$MR_INSTALL_ACTION" in
     uninstall)
       uninstall_mr_package
@@ -75,11 +124,13 @@ mr_installer_main() {
   esac
 
   install_mr_package
+
   if [ "$MR_INSTALL_ACTION" = reinstall ]; then
     printf '\nMarshall was reinstalled successfully.\n'
   else
     printf '\nMarshall was installed successfully.\n'
   fi
+
   if installed_mr_is_first_on_path; then
     printf '\nRun it with: marshall\n'
     if [ "${MR_NODE_INSTALLED_STANDALONE:-0}" = 1 ]; then
@@ -113,16 +164,16 @@ run_preflight_checks() {
   if [ "$status" -ne 0 ]; then
     printf '\n'
   fi
-
   return "$status"
 }
 
 install_node_npm_interactive() {
   method=$(detect_node_install_method)
+
   case "$method" in
-    homebrew) label="Homebrew" ;;
-    apt) label="apt" ;;
-    apk) label="apk" ;;
+    homebrew)   label="Homebrew" ;;
+    apt)        label="apt" ;;
+    apk)        label="apk" ;;
     standalone) label="standalone Node.js" ;;
   esac
 
@@ -130,16 +181,19 @@ install_node_npm_interactive() {
     printf 'No terminal detected; install Node.js 22 or newer and npm, then run this installer again.\n'
     return 1
   fi
-  exec 3<>/dev/tty
 
+  exec 3<>/dev/tty
   printf 'Marshall needs Node.js 22 or newer and npm. Install them now with %s? [Y/n] ' "$label" >&3
   if ! IFS= read -r answer <&3; then
     answer=
   fi
   exec 3>&-
+
   case "$answer" in
-    n|N|no|NO) printf '\nInstall Node.js 22 or newer and npm, then run this installer again.\n'; return 1 ;;
-    *) ;;
+    n|N|no|NO)
+      printf '\nInstall Node.js 22 or newer and npm, then run this installer again.\n'
+      return 1
+      ;;
   esac
 
   install_node_npm "$method" "$label"
@@ -186,78 +240,41 @@ node_version_string_is_new_enough() {
     *) return 1 ;;
   esac
   version="${version%%[!0-9.]*}"
-  version_ifs=${IFS- }
+  version_ifs=${IFS-}
   IFS=.
   set -- $version
   IFS=$version_ifs
   major="${1:-}"
   case "$major" in ''|*[!0-9]*) return 1 ;; esac
-
   [ "$major" -ge "$MR_REQUIRED_NODE_MAJOR" ]
 }
 
 install_node_npm() {
-  method="$1"; label="$2"
+  method="$1"
+  label="$2"
 
-  if [ -t 1 ] && [ "${TERM:-}" != "dumb" ]; then
-    install_node_npm_with_progress "$method" "$label"
-  else
-    printf '\nInstalling Node.js and npm with %s...\n\n' "$label"
-    run_node_install_method "$method"
-    printf '\nNode.js and npm are installed.\n'
-  fi
+  printf '\nInstalling Node.js and npm with %s...\n\n' "$label"
+  run_node_install_method "$method"
+  printf '\nNode.js and npm are installed.\n'
 
   if [ "$method" = standalone ]; then
     load_standalone_node
     MR_NODE_INSTALLED_STANDALONE=1
   fi
+
+  # Make sure the new binaries are visible in this shell
+  if [ "$method" = homebrew ] && command -v brew >/dev/null 2>&1; then
+    eval "$(brew shellenv 2>/dev/null)" || true
+  fi
   hash -r
   printf '\n'
 }
 
-install_node_npm_with_progress() {
-  method="$1"; label="$2"
-  log_file="${TMPDIR:-/tmp}/marshall-installer-node.$$"
-  rm -f "$log_file"
-  : >"$log_file"
-
-  run_node_install_method "$method" >"$log_file" 2>&1 &
-  install_pid=$!
-
-  printf '\033[?25l'
-  animate_node_install "$log_file" "$label" &
-  progress_pid=$!
-  trap 'kill "$install_pid" 2>/dev/null || true; finish_install_progress "$progress_pid"; exit 130' INT TERM
-
-  if wait "$install_pid"; then
-    status=0
-  else
-    status=$?
-  fi
-
-  finish_install_progress "$progress_pid"
-  trap - INT TERM
-
-  if [ "$status" -ne 0 ]; then
-    printf '\033[31mNode.js installation failed.\033[0m\n\n'
-    cat "$log_file"
-    rm -f "$log_file"
-    return "$status"
-  fi
-
-  rm -f "$log_file"
-  if terminal_supports_unicode; then
-    printf '  \033[32m✓\033[0m Node.js and npm install complete\n'
-  else
-    printf '  \033[32mok\033[0m Node.js and npm install complete\n'
-  fi
-}
-
 run_node_install_method() {
   case "$1" in
-    homebrew) install_node_with_homebrew ;;
-    apt) install_node_with_apt ;;
-    apk) install_node_with_apk ;;
+    homebrew)   install_node_with_homebrew ;;
+    apt)        install_node_with_apt ;;
+    apk)        install_node_with_apk ;;
     standalone) install_node_standalone ;;
   esac
 }
@@ -294,18 +311,20 @@ install_node_standalone() {
     printf 'Unsupported CPU architecture for automatic Node.js install: %s\n' "$(uname -m)"
     return 1
   }
+
   node_dist_base="https://nodejs.org/dist/latest-v22.x"
   node_base_dir=$(node_standalone_base_dir)
   node_tmp_dir="${TMPDIR:-/tmp}/marshall-node.$$"
-
   rm -rf "$node_tmp_dir"
   mkdir -p "$node_tmp_dir" "$node_base_dir"
 
   printf 'Resolving Node.js binary for %s-%s\n' "$node_platform" "$node_arch"
   curl -fsSL "$node_dist_base/SHASUMS256.txt" -o "$node_tmp_dir/SHASUMS256.txt"
+
   node_file=$(awk -v suffix="-$node_platform-$node_arch.tar.xz" '
     index($2, "node-v") == 1 && length($2) >= length(suffix) && substr($2, length($2) - length(suffix) + 1) == suffix { print $2; exit }
   ' "$node_tmp_dir/SHASUMS256.txt")
+
   if [ -z "$node_file" ]; then
     printf 'No Node.js binary is available for %s-%s.\n' "$node_platform" "$node_arch"
     rm -rf "$node_tmp_dir"
@@ -314,6 +333,7 @@ install_node_standalone() {
 
   printf 'Downloading Node.js %s\n' "${node_file%.tar.xz}"
   curl -fsSL "$node_dist_base/$node_file" -o "$node_tmp_dir/$node_file"
+
   verify_node_standalone_download "$node_tmp_dir" "$node_file"
   ensure_node_standalone_extract_tools "$node_platform"
 
@@ -331,7 +351,6 @@ verify_node_standalone_download() {
   checksum_dir="$1"
   checksum_file_name="$2"
   awk -v file="$checksum_file_name" '$2 == file { print }' "$checksum_dir/SHASUMS256.txt" > "$checksum_dir/SHASUMS256.selected"
-
   if command -v sha256sum >/dev/null 2>&1; then
     printf 'Verifying Node.js download\n'
     (cd "$checksum_dir" && sha256sum -c SHASUMS256.selected)
@@ -343,19 +362,35 @@ verify_node_standalone_download() {
 
 ensure_node_standalone_extract_tools() {
   extract_platform="$1"
-
-  if [ "$extract_platform" = linux ] && ! command -v xz >/dev/null 2>&1; then
-    printf 'Installing xz-utils for Node.js archive extraction\n'
-    print_sudo_note
-    if command -v apt-get >/dev/null 2>&1; then
-      run_with_sudo apt-get update
-      run_with_sudo apt-get install -y xz-utils
-    elif command -v apk >/dev/null 2>&1; then
-      run_with_sudo apk add --update-cache xz
-    else
-      printf 'xz is required to extract Node.js. Install xz and run this installer again.\n'
-      return 1
-    fi
+  # xz is needed for .tar.xz on both Linux and macOS when not already present
+  if ! command -v xz >/dev/null 2>&1; then
+    printf 'xz is required to extract the Node.js archive.\n'
+    case "$extract_platform" in
+      linux)
+        print_sudo_note
+        if command -v apt-get >/dev/null 2>&1; then
+          run_with_sudo apt-get update
+          run_with_sudo apt-get install -y xz-utils
+        elif command -v apk >/dev/null 2>&1; then
+          run_with_sudo apk add --update-cache xz
+        else
+          printf 'Install xz and run this installer again.\n'
+          return 1
+        fi
+        ;;
+      darwin)
+        if command -v brew >/dev/null 2>&1; then
+          brew install xz
+        else
+          printf 'Install xz (e.g. via Homebrew: brew install xz) and run this installer again.\n'
+          return 1
+        fi
+        ;;
+      *)
+        printf 'Install xz and run this installer again.\n'
+        return 1
+        ;;
+    esac
   fi
 }
 
@@ -376,18 +411,18 @@ node_standalone_base_dir() {
 detect_node_binary_platform() {
   case "$(uname -s)" in
     Darwin) printf 'darwin' ;;
-    Linux) printf 'linux' ;;
+    Linux)  printf 'linux' ;;
     *) return 1 ;;
   esac
 }
 
 detect_node_binary_arch() {
   case "$(uname -m)" in
-    x86_64|amd64) printf 'x64' ;;
+    x86_64|amd64)  printf 'x64' ;;
     arm64|aarch64) printf 'arm64' ;;
-    armv7l) printf 'armv7l' ;;
-    ppc64le) printf 'ppc64le' ;;
-    s390x) printf 's390x' ;;
+    armv7l)        printf 'armv7l' ;;
+    ppc64le)       printf 'ppc64le' ;;
+    s390x)         printf 's390x' ;;
     *) return 1 ;;
   esac
 }
@@ -411,12 +446,10 @@ select_npm_install_prefix() {
   if [ -n "$npm_prefix" ] && npm_prefix_supports_global_install "$npm_prefix"; then
     return 0
   fi
-
   if existing_global_mr_blocks_user_local_install "$npm_prefix"; then
     print_existing_global_mr_not_writable_message "$npm_prefix"
     return 1
   fi
-
   printf '%s/.local' "$HOME"
 }
 
@@ -428,7 +461,6 @@ select_npm_uninstall_prefix() {
   if [ -n "$npm_prefix" ] && [ "$existing_mr_path" = "$npm_prefix/bin/$MR_CMD" ]; then
     return 0
   fi
-
   if [ -n "${MR_NPM_INSTALL_PREFIX:-}" ] && [ "$existing_mr_path" = "$MR_NPM_INSTALL_PREFIX/bin/$MR_CMD" ]; then
     printf '%s' "$MR_NPM_INSTALL_PREFIX"
     return 0
@@ -452,14 +484,12 @@ npm_prefix_supports_global_install() {
 existing_global_mr_blocks_user_local_install() {
   npm_prefix="$1"
   [ -n "$npm_prefix" ] || return 1
-
   [ -e "$npm_prefix/bin/$MR_CMD" ]
 }
 
 print_existing_global_mr_not_writable_message() {
   npm_prefix="$1"
   existing_mr_path="$npm_prefix/bin/$MR_CMD"
-
   printf "npm's global directory is not writable: %s\n" "$npm_prefix" >&2
   printf 'Marshall is already installed at: %s\n\n' "$existing_mr_path" >&2
   printf 'Installing another copy under %s/.local could leave your shell using the old global marshall, so this installer stopped.\n\n' "$HOME" >&2
@@ -479,7 +509,6 @@ path_is_writable_or_creatable() {
     fi
     check_path="$parent"
   done
-
   [ -d "$check_path" ] && [ -w "$check_path" ]
 }
 
@@ -504,7 +533,6 @@ mr_installed_path() {
 installed_mr_is_first_on_path() {
   installed_mr_path=$(mr_installed_path)
   [ -n "$installed_mr_path" ] || return 1
-
   active_mr_path=$(command -v "$MR_CMD" 2>/dev/null) || return 1
   [ "$active_mr_path" = "$installed_mr_path" ]
 }
@@ -513,7 +541,7 @@ shell_config_file() {
   current_shell=$(basename "${SHELL:-sh}")
   case "$current_shell" in
     fish) printf '%s/.config/fish/config.fish' "$HOME" ;;
-    zsh) printf '%s/.zshrc' "${ZDOTDIR:-$HOME}" ;;
+    zsh)  printf '%s/.zshrc' "${ZDOTDIR:-$HOME}" ;;
     bash)
       if [ -f "$HOME/.bashrc" ]; then
         printf '%s/.bashrc' "$HOME"
@@ -533,17 +561,15 @@ path_update_command() {
   else
     bin_expr="$bin_dir"
   fi
-
   case "$current_shell" in
     fish) printf 'fish_add_path "%s"' "$bin_expr" ;;
-    *) printf 'export PATH="%s:$PATH"' "$bin_expr" ;;
+    *)    printf 'export PATH="%s:$PATH"' "$bin_expr" ;;
   esac
 }
 
 config_file_mentions_path() {
   config_file="$1"
   command="$2"
-
   [ -f "$config_file" ] || return 1
   grep -Fxq "$command" "$config_file"
 }
@@ -553,10 +579,8 @@ prompt_add_path_to_profile() {
   if ! ( : <>/dev/tty ) 2>/dev/null; then
     return 1
   fi
-
   config_file=$(shell_config_file)
   command=$(path_update_command "$bin_dir")
-
   if config_file_mentions_path "$config_file" "$command"; then
     printf 'A PATH update for %s already exists in %s.\n' "$bin_dir" "$config_file"
     return 0
@@ -568,9 +592,9 @@ prompt_add_path_to_profile() {
     answer=
   fi
   exec 3>&-
+
   case "$answer" in
     n|N|no|NO) return 1 ;;
-    *) ;;
   esac
 
   mkdir -p "${config_file%/*}"
@@ -587,7 +611,6 @@ print_mr_not_on_path_message() {
   if [ -n "$active_mr_path" ]; then
     printf 'Your shell currently resolves marshall to: %s\n' "$active_mr_path"
   fi
-
   if [ -n "$mr_bin_dir" ]; then
     prompt_add_path_to_profile "$mr_bin_dir" || true
     command=$(path_update_command "$mr_bin_dir")
@@ -617,22 +640,18 @@ choose_mr_action() {
   fi
 
   exec 3<>/dev/tty
-  trap 'exec 3>&-; trap - INT TERM; exit 130' INT TERM
   print_mr_action_menu "$existing_mr_path" >&3
 
   while :; do
-    key=$(read_tty_key)
+    printf 'Choose [y/u/n]: ' >&3
+    if ! IFS= read -r key <&3; then
+      key=
+    fi
+    # take only the first character
+    key=$(printf '%s' "$key" | cut -c1)
 
     case "$key" in
-      ""|" "|"$MR_CR")
-        if [ -n "$existing_mr_path" ]; then
-          MR_INSTALL_ACTION=reinstall
-        else
-          MR_INSTALL_ACTION=install
-        fi
-        break
-        ;;
-      y|Y)
+      ""|" "|"$MR_CR"|y|Y)
         if [ -n "$existing_mr_path" ]; then
           MR_INSTALL_ACTION=reinstall
         else
@@ -646,43 +665,25 @@ choose_mr_action() {
           break
         fi
         ;;
-      "$MR_ETX")
-        exit 130
-        ;;
       n|N|"$MR_ESC")
         MR_INSTALL_ACTION=none
         break
         ;;
+      *)
+        printf 'Please choose one of the listed keys.\n' >&3
+        ;;
     esac
-
-    printf 'Please choose one of the listed keys.\n' >&3
   done
 
   print_mr_action_selection "$MR_INSTALL_ACTION" >&3
   exec 3>&-
-  trap - INT TERM
 }
 
 print_mr_action_menu() {
   existing_mr_path="$1"
 
-  reset=
-  dim=
-  bold=
-  cyan=
-  green=
-  red=
-  if [ -t 1 ] && [ "${TERM:-}" != "dumb" ]; then
-    reset="${MR_ESC}[0m"
-    dim="${MR_ESC}[2m"
-    bold="${MR_ESC}[1m"
-    cyan="${MR_ESC}[36m"
-    green="${MR_ESC}[32m"
-    red="${MR_ESC}[31m"
-  fi
-
   if [ -n "$existing_mr_path" ]; then
-    printf '%sMarshall is already installed at:%s\n\n' "$bold" "$reset"
+    printf 'Marshall is already installed at:\n\n'
     printf '  %s\n\n' "$existing_mr_path"
   fi
 
@@ -691,63 +692,34 @@ print_mr_action_menu() {
   fi
 
   if [ -n "$existing_mr_path" ]; then
-    printf '%sReinstall command:%s\n\n  ' "$bold" "$reset"
+    printf 'Reinstall command:\n\n  npm install -g %s\n\n' "$MR_PACKAGE"
   else
-    printf '%sInstall command:%s\n\n  ' "$bold" "$reset"
+    printf 'Install command:\n\n  npm install -g %s\n\n' "$MR_PACKAGE"
   fi
-  printf 'npm install -g %s' "$MR_PACKAGE"
-  printf '\n\n'
 
-  printf '%sChoose an action:%s\n\n' "$bold" "$reset"
+  printf 'Choose an action:\n\n'
   if [ -n "$existing_mr_path" ]; then
-    printf '  %s%-4s%s %sReinstall Marshall%s %s(default)%s\n' "$cyan" 'y' "$reset" "$green" "$reset" "$dim" "$reset"
-    printf '  %s%-4s%s %sUninstall Marshall%s\n' "$cyan" 'u' "$reset" "$red" "$reset"
+    printf '  y    Reinstall Marshall (default)\n'
+    printf '  u    Uninstall Marshall\n'
   else
-    printf '  %s%-4s%s %sInstall Marshall%s %s(default)%s\n' "$cyan" 'y' "$reset" "$green" "$reset" "$dim" "$reset"
+    printf '  y    Install Marshall (default)\n'
   fi
-  printf '  %s%-4s%s %sDo nothing%s\n' "$cyan" 'n' "$reset" "$dim" "$reset"
+  printf '  n    Do nothing\n\n'
 }
 
 print_mr_action_selection() {
   case "$1" in
-    install) message="Will install Marshall." ;;
+    install)   message="Will install Marshall." ;;
     reinstall) message="Will reinstall Marshall." ;;
     uninstall) message="Will uninstall Marshall." ;;
-    none) message="Chose to do nothing. Exiting." ;;
+    none)      message="Chose to do nothing. Exiting." ;;
   esac
   printf '\n%s\n\n' "$message"
 }
 
-restore_tty_state() {
-  tty_state="$1"
-  [ -n "$tty_state" ] || return 0
-  stty "$tty_state" < /dev/tty 2>/dev/null || true
-}
-
-read_tty_key() {
-  old_tty_state=$(stty -g < /dev/tty 2>/dev/null || true)
-  trap 'restore_tty_state "$old_tty_state"; trap - INT TERM; exit 130' INT TERM
-  stty -icanon -echo min 1 time 0 < /dev/tty 2>/dev/null || true
-  if ! key=$(dd bs=1 count=1 2>/dev/null < /dev/tty); then
-    key=
-  fi
-  restore_tty_state "$old_tty_state"
-  trap - INT TERM
-  printf '%s' "$key"
-}
-
 install_mr_package() {
-  if [ -t 1 ] && [ "${TERM:-}" != "dumb" ]; then
-    install_mr_package_with_progress
-  else
-    printf 'Installing Marshall...\n\n'
-    run_mr_install error
-  fi
-}
-
-run_mr_install() {
-  npm_loglevel="$1"
-  run_npm_install_mr "$npm_loglevel"
+  printf 'Installing Marshall...\n\n'
+  run_npm_install_mr error
 }
 
 run_npm_install_mr() {
@@ -766,11 +738,9 @@ uninstall_mr_package() {
     printf 'Nothing was removed.\n' >&2
     return 1
   fi
-
   printf 'Uninstalling Marshall...\n\n'
   run_npm_uninstall_mr error
   hash -r
-
   if [ -e "$MR_EXISTING_PATH" ] || [ -L "$MR_EXISTING_PATH" ]; then
     printf '\nnpm uninstall finished, but marshall is still present at:\n\n  %s\n' "$MR_EXISTING_PATH" >&2
     return 1
@@ -792,334 +762,6 @@ run_npm_uninstall_mr() {
   else
     npm uninstall -g --no-fund --no-audit "--loglevel=$npm_loglevel" --progress=false "$MR_PACKAGE"
   fi
-}
-
-install_mr_package_with_progress() {
-  log_file="${TMPDIR:-/tmp}/marshall-installer-npm.$$"
-  rm -f "$log_file"
-  : >"$log_file"
-
-  run_mr_install verbose >"$log_file" 2>&1 &
-  npm_pid=$!
-
-  printf '\033[?25l'
-  animate_npm_install "$log_file" &
-  progress_pid=$!
-  trap 'kill "$npm_pid" 2>/dev/null || true; finish_install_progress "$progress_pid"; exit 130' INT TERM
-
-  if wait "$npm_pid"; then
-    status=0
-  else
-    status=$?
-  fi
-
-  finish_install_progress "$progress_pid"
-  trap - INT TERM
-
-  if [ "$status" -ne 0 ]; then
-    printf '\033[31mInstallation failed.\033[0m\n\n'
-    cat "$log_file"
-    rm -f "$log_file"
-    return "$status"
-  fi
-
-  rm -f "$log_file"
-  if terminal_supports_unicode; then
-    printf '  \033[32m✓\033[0m install complete\n'
-  else
-    printf '  \033[32mok\033[0m install complete\n'
-  fi
-}
-
-finish_install_progress() {
-  progress_pid="$1"
-
-  kill "$progress_pid" 2>/dev/null || true
-  wait "$progress_pid" 2>/dev/null || true
-  printf '\r\033[K\033[?25h'
-}
-
-terminal_supports_unicode() {
-  locale="${LC_ALL:-${LC_CTYPE:-${LANG:-}}}"
-
-  case "$locale" in
-    *UTF-8*|*utf-8*|*UTF8*|*utf8*) return 0 ;;
-  esac
-
-  case "${TERM_PROGRAM:-}" in
-    Apple_Terminal|iTerm.app|vscode|WezTerm) return 0 ;;
-  esac
-
-  return 1
-}
-
-spinner_frame() {
-  frame_step="$1"
-  frame_count="$2"
-
-  if [ "$frame_count" -eq 10 ]; then
-    case $((frame_step % 10)) in
-      0) printf '⠋' ;;
-      1) printf '⠙' ;;
-      2) printf '⠹' ;;
-      3) printf '⠸' ;;
-      4) printf '⠼' ;;
-      5) printf '⠴' ;;
-      6) printf '⠦' ;;
-      7) printf '⠧' ;;
-      8) printf '⠇' ;;
-      *) printf '⠏' ;;
-    esac
-  else
-    case $((frame_step % 4)) in
-      0) printf '-' ;;
-      1) printf '\' ;;
-      2) printf '|' ;;
-      *) printf '/' ;;
-    esac
-  fi
-}
-
-animate_npm_install() {
-  log_file="$1"
-
-  if terminal_supports_unicode; then
-    full="█"
-    empty="░"
-    frame_count=10
-  else
-    full="#"
-    empty="-"
-    frame_count=4
-  fi
-
-  step=0
-  label="starting npm install"
-  while :; do
-    frame=$(spinner_frame "$step" "$frame_count")
-    if [ $((step % 5)) -eq 0 ]; then
-      label=$(npm_install_progress_label "$log_file" "$label")
-    fi
-    draw_install_progress "$step" "$frame" "$label" "$full" "$empty"
-    step=$((step + 1))
-    sleep 0.08
-  done
-}
-
-animate_node_install() {
-  log_file="$1"
-  method_label="$2"
-
-  if terminal_supports_unicode; then
-    full="█"
-    empty="░"
-    frame_count=10
-  else
-    full="#"
-    empty="-"
-    frame_count=4
-  fi
-
-  step=0
-  label="starting ${method_label} install"
-  while :; do
-    frame=$(spinner_frame "$step" "$frame_count")
-    if [ $((step % 5)) -eq 0 ]; then
-      label=$(node_install_progress_label "$log_file" "$label")
-    fi
-    draw_install_progress "$step" "$frame" "$label" "$full" "$empty" "Installing Node.js"
-    step=$((step + 1))
-    sleep 0.08
-  done
-}
-
-node_install_progress_label() {
-  log_file="$1"
-  label="$2"
-
-  while IFS= read -r line; do
-    line=${line##*"$MR_CR"}
-    case "$line" in
-      "") ;;
-      Resolving\ Node.js*) label="resolving Node.js binary" ;;
-      Downloading\ Node.js*) label="$line" ;;
-      Verifying\ Node.js*) label="verifying download" ;;
-      Installing\ xz-utils*) label="installing xz-utils" ;;
-      Extracting\ Node.js*) label="extracting Node.js" ;;
-      Node.js\ installed*) label="Node.js installed" ;;
-      Hit:*|Get:*|Ign:*) label="updating package lists" ;;
-      Reading\ package\ lists*) label="reading package lists" ;;
-      Building\ dependency\ tree*) label="resolving dependencies" ;;
-      The\ following\ NEW\ packages*) label="installing dependencies" ;;
-      Need\ to\ get*|Fetched\ *) label="$line" ;;
-      Selecting\ previously\ unselected\ package*) label="selecting packages" ;;
-      Preparing\ to\ unpack*) label="preparing packages" ;;
-      Unpacking\ *|Setting\ up\ *) label="$line" ;;
-      fetch\ *) label="fetching packages" ;;
-      *Installing\ nodejs*) label="$line" ;;
-      OK:\ *) label="$line" ;;
-      ==\>\ Downloading*) label="downloading packages" ;;
-      ==\>\ Installing*|==\>\ Upgrading*) label="$line" ;;
-      ==\>\ Pouring*) label="installing package" ;;
-      *already\ installed*) label="$line" ;;
-    esac
-  done < "$log_file"
-
-  if [ "${#label}" -gt 64 ]; then
-    label=$(printf '%.61s...' "$label")
-  fi
-  printf '%s' "$label"
-}
-
-npm_install_progress_label() {
-  log_file="$1"
-  label="$2"
-
-  while IFS= read -r line; do
-    line=${line%"$MR_CR"}
-    case "$line" in
-      npm\ verbose\ title\ npm\ install*)
-        label="resolving packages"
-        ;;
-      npm\ http\ fetch\ GET\ *https://registry.npmjs.org/*.tgz*)
-        label="fetching tarballs"
-        ;;
-      npm\ http\ fetch\ GET\ *https://registry.npmjs.org/*)
-        label="fetching package metadata"
-        ;;
-      npm\ info\ run\ *)
-        rest=${line#npm info run }
-        package=${rest%% *}
-        rest=${rest#* }
-        script=${rest%% *}
-        package=${package%@*}
-        case "$line" in
-          *\{\ code:*) label="finished ${script} for ${package}" ;;
-          *) label="running ${script} for ${package}" ;;
-        esac
-        ;;
-      changed\ *|added\ *|removed\ *|updated\ *|up\ to\ date\ *)
-        label="$line"
-        ;;
-    esac
-  done < "$log_file"
-
-  printf '%s' "$label"
-}
-
-draw_install_progress() {
-  step="$1"; frame="$2"; label="$3"; full="$4"; empty="$5"; title="${6:-Installing Marshall}"
-
-  reset="${MR_ESC}[0m"
-  dim="${MR_ESC}[2m"
-  cyan="${MR_ESC}[36m"
-  red="${MR_ESC}[31m"
-  green="${MR_ESC}[32m"
-  orange="${MR_ESC}[33m"
-  bold="${MR_ESC}[1m"
-
-  width=28
-  trail=8
-  head=$((step % (width + trail)))
-  bar=""
-
-  i=0
-  while [ "$i" -lt "$width" ]; do
-    age=$((head - i))
-    if [ "$age" -ge 0 ] && [ "$age" -lt "$trail" ]; then
-      case "$age" in
-        0|1) cell="${green}${full}${reset}" ;;
-        2|3) cell="${cyan}${full}${reset}" ;;
-        4|5) cell="${red}${full}${reset}" ;;
-        *) cell="${orange}${full}${reset}" ;;
-      esac
-    else
-      cell="${dim}${empty}${reset}"
-    fi
-    bar="${bar}${cell}"
-    i=$((i + 1))
-  done
-
-  printf '\r\033[K  %s%s%s %s %s%s%s %s' "$orange" "$frame" "$reset" "$bar" "$bold" "$title" "$reset" "$label"
-}
-
-# The block-letter MARSHALL wordmark from apps/cli/src/view/Banner.tsx, painted
-# in the brand gradient (violet→cyan). Wide below 65 columns; compact (two rows)
-# otherwise. Just a static banner — no animation.
-MR_LOGO_WIDE='███╗   ███╗ █████╗ ██████╗ ███████╗██╗  ██╗ █████╗ ██╗     ██╗
-████╗ ████║██╔══██╗██╔══██╗██╔════╝██║  ██║██╔══██╗██║     ██║
-██╔████╔██║███████║██████╔╝███████╗███████║███████║██║     ██║
-██║╚██╔╝██║██╔══██║██╔══██╗╚════██║██╔══██║██╔══██║██║     ██║
-██║ ╚═╝ ██║██║  ██║██║  ██║███████║██║  ██║██║  ██║███████╗███████╗
-╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚══════╝'
-MR_LOGO_COMPACT='█▀▄▀█ ▄▀█ █▀█ █▀ █ █ ▄▀█ █   █
-█ ▀ █ █▀█ █▀▄ ▄█ █▀█ █▀█ █▄▄ █▄▄'
-
-mr_logo_animation() {
-  if [ ! -t 1 ] || [ "${TERM:-}" = "dumb" ]; then
-    print_static_logo
-    return
-  fi
-
-  cols=$(tput cols 2>/dev/null || printf 80)
-  if [ "$cols" -ge 65 ]; then
-    rows="$MR_LOGO_WIDE"
-    width=63
-  else
-    rows="$MR_LOGO_COMPACT"
-    width=29
-  fi
-
-  # Brand gradient violet→cyan as 256-colour bands, when the terminal can show 256.
-  gradient=0
-  if [ -n "${COLORTERM:-}" ]; then
-    case "$COLORTERM" in truecolor|24bit) gradient=1 ;; esac
-  elif case "$TERM" in *256color*) true ;; *) false ;; esac; then
-    gradient=1
-  fi
-
-  b0="${MR_ESC}[38;5;99m"
-  b1="${MR_ESC}[38;5;105m"
-  b2="${MR_ESC}[38;5;111m"
-  b3="${MR_ESC}[38;5;117m"
-  b4="${MR_ESC}[38;5;123m"
-  b5="${MR_ESC}[38;5;51m"
-  reset="${MR_ESC}[0m"
-
-  printf '\n'
-  printf '%s' "$rows" | while IFS= read -r row; do
-    line=""
-    col=0
-    while [ -n "$row" ]; do
-      # Take one character: a leading space is 1 byte, every block glyph is 3.
-      case "$row" in
-        ' '*) char=' '; row=${row# } ;;
-        *) char=${row%"${row#???}"}; row=${row#???} ;;
-      esac
-
-      if [ "$gradient" = 1 ]; then
-        band=$((col * 6 / width))
-        case "$band" in
-          0) line="${line}${b0}${char}" ;;
-          1) line="${line}${b1}${char}" ;;
-          2) line="${line}${b2}${char}" ;;
-          3) line="${line}${b3}${char}" ;;
-          4) line="${line}${b4}${char}" ;;
-          *) line="${line}${b5}${char}" ;;
-        esac
-      else
-        line="${line}${MR_ESC}[36m${char}"
-      fi
-
-      col=$((col + 1))
-    done
-    printf '%s%s\n' "$line" "$reset"
-  done
-  printf '\n'
-}
-
-print_static_logo() {
-  printf '\n%s\n' "$MR_LOGO_COMPACT"
 }
 
 mr_installer_main "$@"
