@@ -1,6 +1,7 @@
 import { History } from '@agentionai/agents/core';
 import type { BaseAgent } from '@agentionai/agents/core';
-import { compressionPlugin } from '@agentionai/agents/history/plugins';
+import { isTextContent, isToolResultContent, isToolUseContent } from '@agentionai/agents/core';
+import type { HistoryPlugin, ReducibleEntry } from '@agentionai/agents/core';
 import { createAgent } from './agent-factory.js';
 import { resolveRoleProfile, resolveModel } from './config.js';
 import type { EngineConfig } from './config.js';
@@ -47,10 +48,18 @@ const CONTEXT_ERROR_MARGIN = 1_024;
  * Compression is already a lossy operation. Do not send raw tool transcripts
  * back through the model: a single file/search result can be larger than the
  * local model's entire context window and makes every bounded reduce step
- * expensive. Keep the shape of each tool result, but leave the actual details
- * retrievable from the main history/masking tool.
+ * expensive. Keep the shape of each tool result — the full details are dropped
+ * along with the source entries once reduce() replaces them with the summary.
  */
 const TOOL_PROMPT_LIMIT = 1_200;
+/**
+ * A backstop, not the working limit. `reduceToTarget` steps by
+ * `COMPRESSION_STEP_TOKENS`, so a single reduce folds ~3k tokens (~12k chars)
+ * of middle window into the prompt and never comes near this. Set low enough to
+ * bind on a normal step and it would quietly drop content the summariser was
+ * asked to preserve, which is worse than a large prompt: the step bound is what
+ * keeps the request small, and this only catches the pathological case.
+ */
 const SUMMARY_PROMPT_LIMIT = 24_000;
 
 export function compactSummaryPrompt(prompt: string): string {
@@ -61,6 +70,66 @@ export function compactSummaryPrompt(prompt: string): string {
 
   if (compacted.length <= SUMMARY_PROMPT_LIMIT) return compacted;
   return `${compacted.slice(0, SUMMARY_PROMPT_LIMIT)}\n[older compression input omitted]`;
+}
+
+function entryText(entry: ReducibleEntry): string {
+  return entry.content.map((block) => {
+    if (isTextContent(block)) return block.text;
+    if (isToolUseContent(block)) return `[tool call: ${block.name}]`;
+    if (isToolResultContent(block)) return `[tool]: ${block.content}`;
+    return '';
+  }).filter(Boolean).join(' ');
+}
+
+export function middleCompressionPlugin(execute: (prompt: string) => Promise<string>): HistoryPlugin {
+  return {
+    async reduce(entries, options) {
+      const { maxTokens } = options;
+      if (maxTokens === undefined) return entries;
+      const system = entries.filter((entry) => entry.role === 'system');
+      const nonSystem = entries.filter((entry) => entry.role !== 'system');
+      const total = entries.reduce((sum, entry) => sum + entry.__metadata.estimatedTokens, 0);
+      if (total <= maxTokens || nonSystem.length < 3) return entries;
+
+      // Preserve the first conversational entry and the newest entries. Compress
+      // only a contiguous middle window, ending before the recent tail.
+      const first = nonSystem[0];
+      const tail: ReducibleEntry[] = [];
+      let retained = system.reduce((sum, entry) => sum + entry.__metadata.estimatedTokens, 0)
+        + first.__metadata.estimatedTokens;
+      for (let i = nonSystem.length - 1; i > 0; i--) {
+        const entry = nonSystem[i];
+        if (retained + entry.__metadata.estimatedTokens > maxTokens && tail.length > 0) break;
+        tail.unshift(entry);
+        retained += entry.__metadata.estimatedTokens;
+      }
+      const middle = nonSystem.slice(1, nonSystem.length - tail.length);
+      if (middle.length === 0) return entries;
+
+      const priorSummary = middle.find((entry) => entry.__metadata.isSummary);
+      const prompt = [
+        'Produce a concise summary of this middle section of a conversation. Preserve key facts, decisions, and outcomes. Omit filler.',
+        priorSummary ? `Prior summary:\n${entryText(priorSummary)}` : '',
+        ...middle.filter((entry) => entry !== priorSummary).map((entry) => `[${entry.role}]: ${entryText(entry)}`),
+      ].filter(Boolean).join('\n\n');
+      const summaryText = await execute(compactSummaryPrompt(prompt));
+      const covered = middle.filter((entry) => entry !== priorSummary);
+      const firstCovered = priorSummary ?? covered[0];
+      const lastCovered = covered[covered.length - 1] ?? priorSummary;
+      const summary: ReducibleEntry = {
+        role: 'user',
+        content: [{ type: 'text', text: `[Earlier conversation summary: ${summaryText}]` }],
+        __metadata: {
+          date: new Date().toISOString(),
+          contentLength: summaryText.length,
+          estimatedTokens: Math.ceil(summaryText.length / 4),
+          isSummary: true,
+          coversRange: { from: firstCovered.__metadata.coversRange?.from ?? firstCovered.__metadata.date, to: lastCovered.__metadata.coversRange?.to ?? lastCovered.__metadata.date },
+        },
+      };
+      return [...system, first, summary, ...tail];
+    },
+  };
 }
 
 export class CompressionManager {
@@ -147,13 +216,11 @@ export class CompressionManager {
     // switch would stack them and compound the summary on every reduce. The
     // delegate resolves `this.summaryAgent` at call time, so a switch is a
     // field assignment.
-    this.history.use(compressionPlugin({
-      execute: (prompt: string) => {
-        const agent = this.summaryAgent;
-        if (!agent) throw new Error('no summariser is configured');
-        return agent.execute(compactSummaryPrompt(prompt));
-      },
-    } as unknown as BaseAgent<string, string>));
+    this.history.use(middleCompressionPlugin(async (prompt: string) => {
+      const agent = this.summaryAgent;
+      if (!agent) throw new Error('no summariser is configured');
+      return agent.execute(prompt);
+    }));
   }
 
   /**

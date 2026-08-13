@@ -20,7 +20,7 @@ import { CompressionManager } from './session-compression.js';
 import { createSessionEvents } from './session-events.js';
 import type { SessionEvents } from './session-events.js';
 import { ToolBelt } from './session-tools.js';
-import { createAgentJobs, summariseAgentJob, DEFAULT_AGENT_TIMEOUT_MS } from './agent-jobs.js';
+import { createAgentJobs, summariseAgentJob } from './agent-jobs.js';
 import type { AgentJob, AgentJobs } from './agent-jobs.js';
 import { McpRegistry } from './mcp.js';
 import type { McpServerConfig, McpServerState } from './mcp.js';
@@ -582,13 +582,21 @@ export class Session {
     // `read`, so a parent that already polled `agent_output` does not pay for
     // the whole report twice — the same rule as a background command's output.
     const report = this.agentJobs.read(job.id);
-    const body = job.status === 'timed-out'
-      ? `It ran past its ${Math.round(DEFAULT_AGENT_TIMEOUT_MS / 60_000)}-minute limit and was stopped, `
-        + 'so its work is unfinished. Decide whether to do it yourself, narrow the brief and try '
-        + 'again, or leave it.'
-      : job.error
-      ? `It failed: ${job.error}`
-      : report ?? '(it produced no report)';
+    let body: string;
+    if (job.status === 'timed-out') {
+      // A timeout only happens if one was configured, so the ceiling is on the
+      // config rather than a hardcoded constant.
+      const ms = this.config.agentTimeoutMs ?? 0;
+      const limit = ms >= 60_000
+        ? `${Math.round(ms / 60_000)} minutes`
+        : `${Math.round(ms / 1000)} seconds`;
+      body = `It was stopped at its configured ${limit} limit, so its work is unfinished. Decide ` +
+        'whether to do it yourself, narrow the brief and try again, or leave it.';
+    } else if (job.error) {
+      body = `It failed: ${job.error}`;
+    } else {
+      body = report ?? '(it produced no report)';
+    }
     return `[Agent finished]\n${summariseAgentJob(job)}\n\n${body}`;
   }
 

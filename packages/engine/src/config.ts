@@ -160,6 +160,16 @@ export interface EngineConfig {
    * a surprise anyone should get by accident.
    */
   swarm?: boolean;
+  /**
+   * Ceiling for a spawned background agent, in ms. Unset by default — an agent
+   * then runs until it finishes or is killed.
+   *
+   * The cost of "runs forever" is an agent's to take, so there is no default
+   * limit (a long agent is often a genuinely long build). Set this if you want
+   * a model going in circles to be stopped instead of billed another lap;
+   * `agent_kill` stops one on demand regardless.
+   */
+  agentTimeoutMs?: number;
   /** Whether the agent gets Anthropic's server-side web search tool.
    *  Requires the main agent to be claude, or a searchAgent to be configured. */
   enableWebSearch?: boolean;

@@ -335,6 +335,7 @@ export class ToolBelt {
           brief: String(brief),
           tier: tier as Tier,
           toolset: toolset as AgentToolset,
+          timeoutMs: this.deps.getConfig().agentTimeoutMs,
           label: this.swarmLabel(tier as Tier),
           run: ({ id, signal }) => this.runSpawnedAgent({
             id, signal, brief: String(brief), tier: tier as Tier, toolset: toolset as AgentToolset,

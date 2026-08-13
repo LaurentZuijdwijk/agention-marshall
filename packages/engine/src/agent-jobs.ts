@@ -44,16 +44,6 @@ const MAX_RETAINED_FINISHED = 20;
 /** Recent tool calls kept per job, so `agent_output` can say what it is doing. */
 const MAX_ACTIVITY = 12;
 
-/**
- * 15 min. An agent gets a ceiling for the same reason a background command does:
- * "runs forever" is a leak, and an agent leaks money as well as a process slot.
- *
- * Lower than the shell's 30 because the failure modes differ. A long command is
- * usually a real build; a long agent is usually a model going in circles, and
- * every lap costs another request.
- */
-export const DEFAULT_AGENT_TIMEOUT_MS = 15 * 60_000;
-
 export type AgentJobStatus = 'running' | 'done' | 'failed' | 'killed' | 'timed-out';
 
 /** How much of the tool belt a spawned agent gets. An enum rather than a list of
@@ -85,7 +75,11 @@ export interface StartAgentJobOptions {
   tier: Tier;
   toolset: AgentToolset;
   label: string;
-  /** Ceiling for this one job. Defaults to `DEFAULT_AGENT_TIMEOUT_MS`. */
+  /**
+   * Ceiling for this one job, in ms. When unset the job has no ceiling and runs
+   * until it finishes or is killed — the cost risk is the caller's, so the knob
+   * lives in the config, not here.
+   */
   timeoutMs?: number;
   /**
    * Does the work. Receives the job's own signal, which callers are expected to
@@ -130,7 +124,8 @@ interface JobRecord {
   job: AgentJob;
   controller: AbortController;
   activity: string[];
-  timer: NodeJS.Timeout;
+  /** Present only when the job was given a `timeoutMs`. */
+  timer?: NodeJS.Timeout;
   /** Cleared by `read`. Separate from `job.result` so `list` can still show that
    *  a job succeeded after its result has been consumed. */
   unread?: string;
@@ -204,14 +199,14 @@ export function createAgentJobs(options: AgentJobsOptions = {}): AgentJobs {
         job,
         controller: new AbortController(),
         activity: [],
-        timer: setTimeout(
-          () => stop(rec, 'timed-out'),
-          timeoutMs ?? DEFAULT_AGENT_TIMEOUT_MS,
-        ),
       };
-      // Nothing should be held open purely by an agent's ceiling: on quit the
-      // process must be free to exit once killAll has run.
-      rec.timer.unref?.();
+      if (timeoutMs !== undefined) {
+        rec.timer = setTimeout(() => stop(rec, 'timed-out'), timeoutMs);
+        // Nothing should be held open purely by an agent's ceiling: on quit the
+        // process must be free to exit once killAll has run. (Present only when a
+        // ceiling exists — a job without one holds nothing.)
+        rec.timer.unref?.();
+      }
       records.set(id, rec);
 
       // Not awaited: that is the whole point. The rejection path is handled

@@ -151,6 +151,18 @@ describe('createAgentJobs', () => {
     assert.equal(done.length, 1, 'a cleared timer cannot report a second ending');
   });
 
+  it('starts no ceiling when none is given — it runs until told to stop', async () => {
+    const done: AgentJob[] = [];
+    const jobs = createAgentJobs({ onDone: (job) => { done.push(job); } });
+    jobs.start(opts({ run: () => new Promise<string>(() => {}) }));
+    await new Promise(resolve => setTimeout(resolve, 30));
+
+    assert.equal(jobs.get('agent1')?.status, 'running', 'no configured ceiling must not time out');
+    assert.equal(done.length, 0, 'nothing fired onDone');
+    jobs.killAll();
+    assert.equal(jobs.get('agent1')?.status, 'killed');
+  });
+
   it('kills everything still running, and leaves the finished alone', async () => {
     const gate = deferred();
     const jobs = createAgentJobs();
