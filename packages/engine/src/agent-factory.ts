@@ -22,6 +22,13 @@ class OpenRouterAgent extends OpenAICompatibleAgent {
   }
 }
 
+/** Generic named provider configured through an OpenAI-compatible endpoint. */
+class OpenAICompatibleAgentImpl extends OpenAICompatibleAgent {
+  protected getVendorName(): string {
+    return 'OpenAI-compatible provider';
+  }
+}
+
 /**
  * App attribution for OpenRouter — the URL is the identifier the rankings and
  * per-app analytics key on, the title is only the display name, and neither
@@ -370,6 +377,15 @@ export async function createAgent(
           baseURL: routerHost,
           defaultHeaders: { ...OPENROUTER_ATTRIBUTION },
         } as OpenAICompatibleConfig, history);
+      }
+      case 'openai-compatible': {
+        const compatibleHost = profile.host ?? PROVIDER_DEFAULTS['openai-compatible'].host;
+        if (!compatibleHost) throw new Error('OpenAI-compatible provider requires a base URL');
+        return new OpenAICompatibleAgentImpl({
+          ...base,
+          baseURL: compatibleHost,
+          vendor: 'openai',
+        }, history);
       }
       default: {
         const _: never = profile.provider;

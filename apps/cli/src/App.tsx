@@ -76,6 +76,7 @@ export interface AppProps {
   /** Per-provider stored API keys, so the wizard's key step can be confirmed
    *  with a bare enter instead of retyping a secret already on disk. */
   savedKeys?: Record<string, string | undefined>;
+  customProviders?: Array<{ name: string; host?: string }>;
   /** MCP servers from the global config, connected when the session starts. */
   mcpServers?: McpServerConfig[];
   /** MCP config that resolves to nothing — surfaced at startup and by `/mcp`. */
@@ -120,6 +121,7 @@ export function App({
   settings = { runtime: 'default', safetyLevel: 2 },
   savedHosts,
   savedKeys,
+  customProviders,
   mcpServers,
   mcpWarnings,
   configWarnings,
@@ -163,10 +165,12 @@ export function App({
   // ── the header row ─────────────────────────────────────────────────────────
   const headerMeta = (deep: AgentProfile, fast?: AgentProfile): HeaderMeta => ({
     provider: deep.provider,
+    providerName: deep.name,
     model: deep.model ?? 'default',
     dir: shortenPath(workspaceRoot, homedir()),
     fastModel: fast?.model,
     fastProvider: fast?.provider,
+    fastProviderName: fast?.name,
     safety: SAFETY_LEVEL_LABELS[safetyLevel],
     version: currentVersion,
     runtime: runtimeMode,
@@ -460,10 +464,11 @@ export function App({
     model: string | null,
     host?: string,
     apiKey?: string,
+    name?: string,
   ) => {
     // provider === null is the "same as deep" row on the fast tier.
     const chosen: AgentProfile | undefined = provider && model
-      ? { ...(tier === 'deep' ? agentProfile : {}), provider, model, host, ...(apiKey ? { apiKey } : {}) }
+      ? { ...(tier === 'deep' ? agentProfile : {}), provider, model, host, ...(name ? { name } : {}), ...(apiKey ? { apiKey } : {}) }
       : undefined;
 
     if (tier === 'fast') {
@@ -610,14 +615,15 @@ export function App({
         <SetupCtor
           key={mode.tier}
           tier={mode.tier}
+          customProviders={customProviders}
           deepLabel={activeProfile.model}
           // The fast tier usually lives on the same server as deep, so seed it
           // from whichever profile is closest to what the user is about to pick.
           initial={seedProfile(mode.tier)}
           savedHosts={hosts}
           savedKeys={keys}
-          onComplete={(p: Provider | null, m: string | null, h?: string, k?: string) =>
-            handleSetupComplete(mode.tier, mode.chain, p, m, h, k)}
+          onComplete={(p: Provider | null, m: string | null, h?: string, k?: string, n?: string) =>
+            handleSetupComplete(mode.tier, mode.chain, p, m, h, k, n)}
           onExit={() => setMode({ type: 'idle' })}
         />
       </Box>

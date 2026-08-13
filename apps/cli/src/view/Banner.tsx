@@ -112,11 +112,14 @@ function Rule({ width, reveal }: { width: number; reveal: number }) {
 
 export interface HeaderMeta {
   provider: string;
+  /** User-defined display name for custom endpoints. */
+  providerName?: string;
   model: string;
   dir: string;
   /** Fast-tier model, when one is configured — absent means no tiering. */
   fastModel?: string;
   fastProvider?: string;
+  fastProviderName?: string;
   /**
    * The tool-call safety level ('yolo' | 'default' | 'agentic'), shown only
    * when it isn't 'default'. Session-only — see `/safety` — so this is the one
@@ -144,14 +147,14 @@ function Meta({ meta, dim, showKeys = true }: { meta: HeaderMeta; dim?: boolean;
         {label(meta.fastModel ? 'deep' : 'model')}
         <Text color={dim ? C.faint : C.accent}>{meta.model}</Text>
         <Text color={C.faint}>  {G.bullet}  </Text>
-        <Text color={dim ? C.faint : C.muted}>{meta.provider}</Text>
+        <Text color={dim ? C.faint : C.muted}>{meta.providerName ?? meta.provider}</Text>
       </Box>
       {meta.fastModel && (
         <Box>
           {label('fast')}
           <Text color={dim ? C.faint : C.user}>{meta.fastModel}</Text>
           <Text color={C.faint}>  {G.bullet}  </Text>
-          <Text color={dim ? C.faint : C.muted}>{meta.fastProvider}</Text>
+          <Text color={dim ? C.faint : C.muted}>{meta.fastProviderName ?? meta.fastProvider}</Text>
         </Box>
       )}
       <Box>

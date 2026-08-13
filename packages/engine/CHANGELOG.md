@@ -1,5 +1,11 @@
 # @agentionai/marshall-engine
 
+## 0.15.0
+
+### Minor Changes
+
+- Add named OpenAI-compatible providers. Custom endpoints can be saved, selected by name during setup, and shown by name in the active model banner.
+
 ## 0.14.0
 
 ### Minor Changes

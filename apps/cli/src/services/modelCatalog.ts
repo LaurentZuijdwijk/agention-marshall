@@ -17,12 +17,13 @@ import type { Provider, ModelInfo } from '@agentionai/marshall-engine';
  */
 export const PROVIDERS: Array<{ value: Provider; hint: string }> = [
   { value: 'openrouter', hint: 'OPENROUTER_API_KEY' },
-  { value: 'llamacpp',   hint: 'no key needed'      },
+  { value: 'llamacpp',   hint: 'optional API key'   },
   { value: 'ollama',     hint: 'no key needed'      },
   { value: 'claude',     hint: 'ANTHROPIC_API_KEY' },
   { value: 'openai',     hint: 'OPENAI_API_KEY'    },
   { value: 'gemini',     hint: 'GEMINI_API_KEY'     },
   { value: 'mistral',    hint: 'MISTRAL_API_KEY'    },
+  { value: 'openai-compatible', hint: 'custom OpenAI-compatible endpoint' },
 ];
 
 /** The shortlist shown when live discovery fails or the provider has none. */
@@ -34,12 +35,13 @@ export const MODEL_PRESETS: Record<Provider, string[]> = {
   ollama:     ['llama3.2', 'codellama', 'qwen2.5', 'deepseek-r1'],
   llamacpp:   [],
   openrouter: [],
+  'openai-compatible': [],
 };
 
 export function providerHasHost(provider: Provider): boolean {
   // Only local servers ask for a URL. OpenRouter has a host in its defaults
   // (https://openrouter.ai/api/v1) but it's fixed — no input needed.
-  return provider === 'ollama' || provider === 'llamacpp';
+  return provider === 'ollama' || provider === 'llamacpp' || provider === 'openai-compatible';
 }
 
 const TIMEOUT_MS = 3_000;
@@ -102,6 +104,10 @@ export function filterOpenAIModels(models: ModelInfo[]): ModelInfo[] {
  * anything absent is probed as a local server instead.
  */
 const HOSTED_CATALOGUES: Partial<Record<Provider, (key: string) => { url: string; headers: Record<string, string> }>> = {
+  'openai-compatible': key => ({
+    url: '',
+    headers: key ? { Authorization: `Bearer ${key}` } : {},
+  } as { url: string; headers: Record<string, string> }),
   openai:  key => ({ url: 'https://api.openai.com/v1/models',    headers: { Authorization: `Bearer ${key}` } }),
   mistral: key => ({ url: 'https://api.mistral.ai/v1/models',    headers: { Authorization: `Bearer ${key}` } }),
   claude:  key => ({ url: 'https://api.anthropic.com/v1/models', headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01' } }),
@@ -110,10 +116,12 @@ const HOSTED_CATALOGUES: Partial<Record<Provider, (key: string) => { url: string
 };
 
 /** Fetch a hosted provider's model catalogue, returning [] on any failure. */
-async function fetchHostedModels(provider: Provider, apiKey?: string): Promise<ModelInfo[]> {
+async function fetchHostedModels(provider: Provider, apiKey?: string, host?: string): Promise<ModelInfo[]> {
   const catalogue = HOSTED_CATALOGUES[provider];
-  if (!catalogue || !apiKey) return [];
-  const { url, headers } = catalogue(apiKey);
+  if (!catalogue || (provider !== 'openai-compatible' && !apiKey)) return [];
+  const configured = catalogue(apiKey ?? '');
+  const url = provider === 'openai-compatible' ? `${(host ?? '').replace(/\/$/, '')}/models` : configured.url;
+  const headers = configured.headers;
   try {
     const response = await fetch(url, { headers, signal: AbortSignal.timeout(TIMEOUT_MS) });
     if (!response.ok) return [];
@@ -176,7 +184,7 @@ export async function discoverModels(
   }
 
   if (HOSTED_CATALOGUES[provider]) {
-    const fetched = await fetchHostedModels(provider, apiKey);
+    const fetched = await fetchHostedModels(provider, apiKey, host);
     return fetched.length > 0
       ? { models: fetched, note: [`${fetched.length} models from ${provider}`] }
       : fallback(provider, provider);

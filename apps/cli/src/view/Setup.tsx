@@ -18,21 +18,27 @@ import { traceRender } from '../renderTrace.js';
 /** Sentinel row offered when picking the fast tier — means "don't tier at all". */
 const SAME_AS_DEEP = '(same as deep)';
 
-function ProviderSelect({ onSelect, onBack, offerSameAsDeep }: {
-  onSelect: (p: Provider | typeof SAME_AS_DEEP) => void;
+function ProviderSelect({ onSelect, onBack, offerSameAsDeep, customProviders }: {
+  onSelect: (p: Provider | typeof SAME_AS_DEEP, name?: string) => void;
   onBack: () => void;
   offerSameAsDeep?: boolean;
+  customProviders?: Array<{ name: string; host?: string }>;
 }) {
-  const rows: Array<{ value: Provider | typeof SAME_AS_DEEP; hint: string }> = offerSameAsDeep
-    ? [{ value: SAME_AS_DEEP, hint: 'no tiering — one model does everything' }, ...PROVIDERS]
-    : PROVIDERS;
+  const customRows = (customProviders ?? []).map(entry => ({
+    value: 'openai-compatible' as Provider,
+    name: entry.name,
+    hint: entry.host ?? 'custom OpenAI-compatible endpoint',
+  }));
+  const rows: Array<{ value: Provider | typeof SAME_AS_DEEP; hint: string; name?: string }> = offerSameAsDeep
+    ? [{ value: SAME_AS_DEEP, hint: 'no tiering — one model does everything' }, ...PROVIDERS, ...customRows]
+    : [...PROVIDERS, ...customRows];
 
   const [cursor, setCursor] = useState(0);
 
   useInput((_, key) => {
     if (key.upArrow)   { setCursor(c => (c - 1 + rows.length) % rows.length); return; }
     if (key.downArrow) { setCursor(c => (c + 1) % rows.length); return; }
-    if (key.return)    { onSelect(rows[cursor].value); return; }
+    if (key.return)    { onSelect(rows[cursor].value, rows[cursor].name); return; }
     if (key.escape)    { onBack(); return; }
   });
 
@@ -41,14 +47,14 @@ function ProviderSelect({ onSelect, onBack, offerSameAsDeep }: {
       {rows.map((p, i) => {
         const active = i === cursor;
         return (
-          <Box key={p.value}>
+          <Box key={`${p.value}-${p.name ?? ''}-${i}`}>
             <Box flexShrink={0}>
               <Text color={active ? C.brandTo : C.faint} bold={active}>
                 {active ? `${G.prompt} ` : '  '}
               </Text>
             </Box>
             <Box flexShrink={0}>
-              <Text color={active ? C.brandTo : C.muted} bold={active}>{p.value.padEnd(16)}</Text>
+              <Text color={active ? C.brandTo : C.muted} bold={active}>{(p.name ?? p.value).padEnd(20)}</Text>
             </Box>
             <Box flexGrow={1} minWidth={8}>
               <Text color={C.faint} wrap="truncate-end">{p.hint}</Text>
@@ -64,9 +70,10 @@ function ProviderSelect({ onSelect, onBack, offerSameAsDeep }: {
 
 type Step =
   | { name: 'provider' }
+  | { name: 'endpoint-name'; provider: Provider; host: string; apiKey?: string; endpointName?: string }
   | { name: 'host'; provider: Provider }
-  | { name: 'model'; provider: Provider; host?: string; apiKey?: string }
-  | { name: 'custom'; provider: Provider; host?: string; apiKey?: string }
+  | { name: 'model'; provider: Provider; host?: string; apiKey?: string; endpointName?: string }
+  | { name: 'custom'; provider: Provider; host?: string; apiKey?: string; endpointName?: string }
   | { name: 'key'; provider: Provider; host?: string };
 
 export interface SetupProps {
@@ -80,6 +87,7 @@ export interface SetupProps {
   /** Stored API key per provider. Presence is what lets the key step be
    *  confirmed with a bare enter instead of retyping a secret. */
   savedKeys?: Record<string, string | undefined>;
+  customProviders?: Array<{ name: string; host?: string }>;
   /**
    * Which tier is being chosen. `fast` gets a "same as deep" escape and
    * different framing — it is the delegation target, not the main model.
@@ -96,7 +104,7 @@ export interface SetupProps {
   title?: string;
   blurb?: string;
   /** `model === null` means "same as deep" — clear any fast override. */
-  onComplete: (provider: Provider | null, model: string | null, host?: string, apiKey?: string) => void;
+  onComplete: (provider: Provider | null, model: string | null, host?: string, apiKey?: string, name?: string) => void;
   /**
    * Cancel the wizard outright (ESC from the provider step). Returns to the
    * default chat screen instead of proceeding — how a `/model` was aborted.
@@ -172,10 +180,12 @@ const TIER_BLURB: Record<Tier, string> = {
   fast: 'reads files, searches and summarises for the deep model',
 };
 
-export function Setup({ initial, tier = 'deep', title, blurb, deepLabel, savedHosts, savedKeys, onComplete, onExit }: SetupProps) {
+export function Setup({ initial, tier = 'deep', title, blurb, deepLabel, savedHosts, savedKeys, customProviders, onComplete, onExit }: SetupProps) {
   const [step, setStep] = useState<Step>({ name: 'provider' });
   traceRender('Setup', `step=${step.name}`);
   const [hostInput, setHostInput] = useState('');
+  const [endpointNameInput, setEndpointNameInput] = useState('');
+  const [selectedEndpointName, setSelectedEndpointName] = useState<string | undefined>();
   const [customInput, setCustomInput] = useState('');
   const [keyInput, setKeyInput] = useState('');
 
@@ -188,10 +198,19 @@ export function Setup({ initial, tier = 'deep', title, blurb, deepLabel, savedHo
     return savedKeys?.[provider] || (envKey ? process.env[envKey] : undefined) || undefined;
   };
   const needsKey = (provider: Provider): boolean => Boolean(
-    PROVIDER_DEFAULTS[provider].envKey && !keyFor(provider),
+    (provider === 'openai-compatible' || provider === 'llamacpp')
+      || (PROVIDER_DEFAULTS[provider].envKey && !keyFor(provider)),
   );
 
+  const keyIsOptional = (provider: Provider): boolean =>
+    provider === 'openai-compatible' || provider === 'llamacpp';
+
   const enterModelStep = (provider: Provider, host?: string, apiKey?: string) => {
+    if (provider === 'openai-compatible') {
+      setEndpointNameInput('');
+      setStep({ name: 'endpoint-name', provider, host: host ?? defaultHostFor(provider), apiKey, endpointName: selectedEndpointName });
+      return;
+    }
     setStep({ name: 'model', provider, host, apiKey });
   };
 
@@ -207,10 +226,12 @@ export function Setup({ initial, tier = 'deep', title, blurb, deepLabel, savedHo
         </Box>
         <ProviderSelect
           offerSameAsDeep={tier === 'fast'}
+          customProviders={customProviders}
           onBack={onExit ?? (() => {})}
-          onSelect={(p) => {
+          onSelect={(p, selectedName) => {
             if (p === SAME_AS_DEEP) { onComplete(null, null); return; }
             if (providerHasHost(p)) {
+              setSelectedEndpointName(selectedName);
               setHostInput(defaultHostFor(p));
               setStep({ name: 'host', provider: p });
             } else {
@@ -250,8 +271,28 @@ export function Setup({ initial, tier = 'deep', title, blurb, deepLabel, savedHo
     );
   }
 
+  if (step.name === 'endpoint-name') {
+    const { provider, host, apiKey } = step;
+    return (
+      <Box flexDirection="column" gap={1}>
+        <Title step={label(`${provider}  ${G.bullet}  endpoint name`)} />
+        <BackableTextInput
+          value={endpointNameInput || step.endpointName || ''}
+          onChange={setEndpointNameInput}
+          onSubmit={(val) => {
+            const name = val.trim();
+            if (name) setStep({ name: 'model', provider, host, apiKey, endpointName: name });
+          }}
+          onBack={() => setStep({ name: 'host', provider })}
+          placeholder="e.g. LM Studio"
+        />
+        <Hint>{`enter confirms ${G.bullet} esc back`}</Hint>
+      </Box>
+    );
+  }
+
   if (step.name === 'model') {
-    const { provider, host } = step;
+    const { provider, host, endpointName } = step;
     return (
       <Box flexDirection="column" gap={1}>
         <Title step={label(`${provider}  ${G.bullet}  choose a model`)} />
@@ -261,7 +302,7 @@ export function Setup({ initial, tier = 'deep', title, blurb, deepLabel, savedHo
           apiKey={step.apiKey}
           onSelect={(val) => {
             if (val === CUSTOM) setStep({ name: 'custom', provider, host, apiKey: step.apiKey });
-            else onComplete(provider, val, host, step.apiKey);
+            else onComplete(provider, val, host, step.apiKey, endpointName);
           }}
           onBack={() => (providerHasHost(provider) ? setStep({ name: 'host', provider }) : setStep({ name: 'provider' }))}
         />
@@ -272,7 +313,7 @@ export function Setup({ initial, tier = 'deep', title, blurb, deepLabel, savedHo
 
   if (step.name === 'key') {
     const { provider, host } = step;
-    const envKey = PROVIDER_DEFAULTS[provider].envKey!;
+    const envKey = PROVIDER_DEFAULTS[provider].envKey ?? 'API key';
     const stored = keyFor(provider);
     const text = keyStepText(envKey, stored);
     return (
@@ -286,7 +327,7 @@ export function Setup({ initial, tier = 'deep', title, blurb, deepLabel, savedHo
           onChange={setKeyInput}
           onSubmit={(val) => {
             const k = resolveKeyInput(val, stored);
-            if (k) enterModelStep(provider, host, k);
+            if (k || keyIsOptional(provider)) enterModelStep(provider, host, k);
           }}
           // Only hosted providers reach the key step, and they have no host
           // step — the screen before this one is the provider select.

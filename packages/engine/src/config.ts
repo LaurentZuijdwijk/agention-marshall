@@ -3,9 +3,11 @@ import { join } from 'node:path';
 import type { Limits, CommandPolicy } from '@agentionai/marshall-tools';
 import type { McpServerConfig } from './mcp.js';
 
-export type Provider = 'claude' | 'openai' | 'gemini' | 'mistral' | 'ollama' | 'llamacpp' | 'openrouter';
+export type Provider = 'claude' | 'openai' | 'gemini' | 'mistral' | 'ollama' | 'llamacpp' | 'openrouter' | 'openai-compatible';
 
 export interface AgentProfile {
+  /** User-visible name for an OpenAI-compatible endpoint. */
+  name?: string;
   provider: Provider;
   /** Defaults to the provider's recommended model if omitted */
   model?: string;
@@ -402,6 +404,7 @@ export const CHEAP_MODELS: Partial<Record<Provider, string>> = {
   openai:  'gpt-4o-mini',
   gemini:  'gemini-2.0-flash',
   mistral: 'mistral-small-latest',
+  'openai-compatible': 'default',
 };
 
 /** Returns the cheapest model for a provider, or undefined if the provider has no meaningful cheap alternative (e.g. local servers). */
@@ -417,6 +420,7 @@ export const PROVIDER_DEFAULTS = {
   ollama:     { model: 'llama3.2',             envKey: null, host: 'http://localhost:11434' },
   llamacpp:   { model: 'default',              envKey: null, host: 'http://localhost:8080'  },
   openrouter: { model: 'anthropic/claude-sonnet-4.6', envKey: 'OPENROUTER_API_KEY' as const, host: 'https://openrouter.ai/api/v1' },
+  'openai-compatible': { model: 'default', envKey: null, host: 'http://localhost:8000/v1' },
 } as const satisfies Record<Provider, { model: string; envKey: string | null; host?: string }>;
 
 interface MarshallCredentials {

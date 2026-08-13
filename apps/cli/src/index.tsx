@@ -13,7 +13,7 @@ import { resolveProfiles, StartupError } from './startup/profiles.js';
 import { installCrashLogging } from './startup/crash-log.js';
 import { installResizeRedraw } from './view/resize.js';
 import { checkForUpdate } from './update-check.js';
-import { loadConfig, savedHosts, savedKeys, loadMcpServers, loadMcpWarnings, projectSecretWarnings } from './services/config-store.js';
+import { loadConfig, savedHosts, savedKeys, savedProviders, loadMcpServers, loadMcpWarnings, projectSecretWarnings } from './services/config-store.js';
 import { readSettings, resolveSettings, settingsWarnings } from './services/settings.js';
 
 const flags = parseCliArgs();
@@ -77,6 +77,7 @@ inkInstance = render(
     settings={settings}
     savedHosts={savedHosts(savedConfig)}
     savedKeys={savedKeys(savedConfig)}
+    customProviders={Object.values(savedProviders(savedConfig)).filter(p => p.name).map(p => ({ name: p.name!, host: p.host }))}
     mcpServers={loadMcpServers(workspaceRoot)}
     mcpWarnings={loadMcpWarnings(workspaceRoot)}
     configWarnings={configWarnings}

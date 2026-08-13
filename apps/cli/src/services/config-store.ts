@@ -40,6 +40,7 @@ export interface SavedProfile {
 
 /** Last-used connection details for one provider, kept across switches. */
 export interface SavedProviderEntry {
+  name?: string;
   provider: string;
   host?: string;
   apiKey?: string;
@@ -382,6 +383,7 @@ export function savedHosts(config: SavedConfig): Record<string, string | undefin
 /** Drop undefined/empty fields so they never land in the file as nulls. */
 function strip(profile: AgentProfile): SavedProfile {
   return {
+    ...(profile.name ? { name: profile.name } : {}),
     provider: profile.provider,
     model: profile.model,
     ...(profile.host !== undefined ? { host: profile.host } : {}),
@@ -404,6 +406,7 @@ export function upsertProvider(
   profile: AgentProfile,
 ): SavedProviderEntry[] {
   const entry: SavedProviderEntry = {
+    ...(profile.name ? { name: profile.name } : {}),
     provider: profile.provider,
     ...(profile.host !== undefined ? { host: profile.host } : {}),
     ...(profile.apiKey ? { apiKey: profile.apiKey } : {}),
