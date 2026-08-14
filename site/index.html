@@ -711,6 +711,9 @@ document.querySelectorAll('.install[data-copy]').forEach(btn => {
   const label = btn.querySelector('.copy');
   let reset;
   btn.addEventListener('click', async () => {
+    gtag('event', 'install_command_copy', {
+      command: btn.dataset.copy,
+    });
     try {
       await navigator.clipboard.writeText(btn.dataset.copy);
     } catch {
@@ -733,6 +736,12 @@ document.querySelectorAll('.install[data-copy]').forEach(btn => {
         : 'Copy install command');
       label.textContent = 'copy';
     }, 1600);
+  });
+});
+// ── outbound link clicks ─────────────────────────────────────────────────
+document.querySelectorAll('a[href^="http"]').forEach(a => {
+  a.addEventListener('click', () => {
+    gtag('event', 'outbound_click', { link_url: a.href });
   });
 });
 </script>

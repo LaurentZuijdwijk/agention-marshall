@@ -23,3 +23,10 @@ dist/
 Thumbs.db
 marketing.md
 plan.md
+menu-plan.md
+review-feedback.md
+
+# generated package and benchmark artifacts
+*.tgz
+bench/*.log
+bench/results.json
