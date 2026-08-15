@@ -214,6 +214,36 @@ test('createSafetyAgentDecider: maxOutputTokens overrides the default cap', asyn
   assert.equal(fake.requests[0].body.max_tokens, 1500);
 });
 
+test('runSafetyJudge: a plain chat model keeps the deterministic temperature 0', async (t) => {
+  const fake = await startFakeProvider({ text: '{"decision": "approve", "reason": "ok"}' });
+  t.after(() => fake.close());
+
+  await runSafetyJudge(
+    { provider: 'llamacpp', host: fake.host, model: 'nemotron-content-safety' },
+    'chat-judge',
+    buildSafetyContext(baseRequest()),
+  );
+
+  assert.equal(fake.requests[0].body.temperature, 0);
+});
+
+test('runSafetyJudge: a reasoning-family model (gpt-5/o-series) omits the unsupported temperature parameter', async (t) => {
+  const fake = await startFakeProvider({ text: '{"decision": "approve", "reason": "ok"}' });
+  t.after(() => fake.close());
+
+  // gpt-5.6-luna (any provider channel — the fake speaks the chat-completions
+  // dialect all OpenAI-compatible providers share) rejects `temperature` with a
+  // 400, so the request builder must drop it rather than send 0 and crash.
+  await runSafetyJudge(
+    { provider: 'llamacpp', host: fake.host, model: 'gpt-5.6-luna' },
+    'chat-judge',
+    buildSafetyContext(baseRequest()),
+  );
+
+  assert.equal(fake.requests[0].body.temperature, undefined);
+  assert.equal(fake.requests[0].body.max_tokens, DEFAULT_SAFETY_MAX_TOKENS); // cap unaffected
+});
+
 test('runSafetyJudge: chat-judge kind sends the rendered call and parses an approve', async (t) => {
   const fake = await startFakeProvider({ text: '{"decision": "approve", "reason": "read-only"}' });
   t.after(() => fake.close());

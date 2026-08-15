@@ -11,6 +11,17 @@ import type { AgentToolset } from './agent-jobs.js';
 
 const PROJECT_MEMORY_HEADER = '\n\n## Project memory (AGENTS.md)\n\n';
 
+/**
+ * gpt-5 / o-series models reason by default and reject sampling-control
+ * parameters: the OpenAI Responses API answers "Unsupported parameter:
+ * 'temperature' is not supported with this model", so a call that sets
+ * `temperature` (the safety judge sends 0 for determinism) 400s against them.
+ * Detect the family so those params can be omitted rather than sent and rejected.
+ */
+function isOpenAiReasoningModel(model: string): boolean {
+  return /^(gpt-5|o1|o3|o4|o5)(\b|[-/])/i.test(model);
+}
+
 /** OpenRouter uses the generic chat-completions protocol, not llama.cpp. */
 class OpenRouterAgent extends OpenAICompatibleAgent {
   constructor(config: OpenAICompatibleConfig, history: History) {
@@ -309,6 +320,15 @@ export async function createAgent(
   // Omitted entirely when the provider doesn't require it, so the model's own
   // ceiling applies instead of an arbitrary cap that truncates long answers.
   const cap = resolveMaxTokens(profile, maxTokens);
+  // Reasoning models (gpt-5 / o-series) ignore temperature — OpenAI rejects it
+  // outright ("Unsupported parameter"). The judgment is model-based, not
+  // provider-based: an `openai/gpt-5.6-luna` profile over OpenRouter hits the
+  // same wall. When the request will reason, `temperature` (e.g. the safety
+  // judge's 0) is dropped so the default applies instead of a 400; reasoning
+  // models need no determinism knob because they do not honor one.
+  const reasons =
+    (profile.provider === 'openai' && profile.reasoningEffort !== undefined) ||
+    isOpenAiReasoningModel(model);
   const base = {
     id: name.toLowerCase(),
     name,
@@ -317,7 +337,7 @@ export async function createAgent(
     model,
     tools,
     ...(cap !== undefined ? { maxTokens: cap } : {}),
-    ...(temperature !== undefined ? { temperature } : {}),
+    ...(temperature !== undefined && !reasons ? { temperature } : {}),
     ...(profile.provider === 'openai' && profile.reasoningEffort !== undefined
       ? { reasoningEffort: profile.reasoningEffort }
       : {}),
