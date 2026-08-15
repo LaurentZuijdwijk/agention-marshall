@@ -11,7 +11,17 @@ import { parseCliArgs, helpText } from './startup/args.js';
 import { resolveWorkspaceRoot, loadEnvFiles } from './startup/workspace.js';
 import { resolveProfiles, StartupError } from './startup/profiles.js';
 import { installCrashLogging } from './startup/crash-log.js';
+import { maybeRespawnForHeap } from './startup/heap-size.js';
 import { installResizeRedraw } from './view/resize.js';
+
+// Long sessions can exhaust Node's old-space heap, which is only raised by a
+// startup flag. Re-exec with --max-old-space-size when it isn't already set,
+// then hand the terminal to the child. Must be the first thing this file does.
+const heapChild = maybeRespawnForHeap();
+if (heapChild) {
+  await new Promise<void>(resolve => heapChild.on('close', resolve));
+  process.exit(0);
+}
 import { checkForUpdate } from './update-check.js';
 import { ConfigService } from './services/config-service.js';
 
