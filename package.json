@@ -11,10 +11,12 @@
     "build:all": "npm run build -w packages/tools -w packages/engine -w apps/cli",
     "pretest": "npm run build",
     "test": "npm run test --workspaces --if-present",
-    "release": "npm test && npm run build:all && changeset publish"
+    "release": "npm test && npm run build:all && changeset publish",
+    "postinstall": "cd apps/cli && patch-package --patch-dir ../../patches"
   },
   "devDependencies": {
-    "@changesets/cli": "^2.31.0"
+    "@changesets/cli": "^2.31.0",
+    "patch-package": "^8.0.1"
   },
   "dependencies": {
     "@agentionai/agents": "1.7.0-beta.0",

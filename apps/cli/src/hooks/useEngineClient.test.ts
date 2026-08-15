@@ -191,6 +191,23 @@ describe('turn completion', () => {
     assert.deepEqual(h.pushed.map(p => p.content), ['all I said']);
   });
 
+  // A response that opens with a blank line renders as an empty row above the
+  // real one in MarkdownView, which — since the assistant bullet sits beside
+  // the first row, not repeated per row — reads as the bullet sitting alone
+  // with the answer orphaned below it.
+  it('trims leading and trailing whitespace from the final answer', () => {
+    const h = harness();
+    h.send({ type: 'response', text: '\n\nHello! How can I assist you today?\n' });
+    assert.deepEqual(h.pushed.map(p => p.content), ['Hello! How can I assist you today?']);
+  });
+
+  it('trims the streamed fallback too', () => {
+    const h = harness();
+    h.send({ type: 'token', text: '\nall I said\n' });
+    h.send({ type: 'response', text: '' });
+    assert.deepEqual(h.pushed.map(p => p.content), ['all I said']);
+  });
+
   it('an interrupt keeps the partial answer that was on screen', () => {
     const h = harness({ reasoning: 'partial thought' });
     h.send({ type: 'token', text: 'half a sent' });

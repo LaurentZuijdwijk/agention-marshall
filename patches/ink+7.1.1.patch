@@ -1,0 +1,13 @@
+diff --git a/node_modules/ink/build/wrap-text.js b/node_modules/ink/build/wrap-text.js
+index 51f696c..21e30ed 100644
+--- a/node_modules/ink/build/wrap-text.js
++++ b/node_modules/ink/build/wrap-text.js
+@@ -10,7 +10,7 @@ const wrapText = (text, maxWidth, wrapType) => {
+     let wrappedText = text;
+     if (wrapType === 'wrap') {
+         wrappedText = wrapAnsi(text, maxWidth, {
+-            trim: false,
++            trim: true,
+             hard: true,
+         });
+     }

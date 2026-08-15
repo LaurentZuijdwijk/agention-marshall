@@ -61,6 +61,26 @@ independent read-modify-write functions, plus copies of their data in props,
 is what made a removed provider stay on screen and a removed MCP server come
 back on the next launch.
 
+## A patched dependency: ink's text wrap
+
+`patches/ink+7.1.1.patch` (applied by `patch-package` via the root
+`postinstall` script) fixes a real bug in `ink`'s default text wrap: it calls
+`wrap-ansi` with `trim: false`, which leaves a stray leading space on whatever
+wrapped line happens to start right after a word landed exactly on the column
+boundary — a ragged left edge on otherwise-flush prose. `wrap-ansi`'s own
+default (`trim: true`) doesn't have this problem; the patch just stops ink
+from overriding it. Regression test: `apps/cli/src/view/MarkdownView.test.ts`.
+
+The patch only reaches this monorepo's own `apps/cli/node_modules/ink` — it is
+not part of `@agentionai/marshall-cli`'s published files, so it does not fix
+the bug for someone who installs the CLI from npm rather than running it from
+this checkout. Shipping the fix to published installs would need the patch
+(or the fix) carried through the publish step; that hasn't been done.
+
+The root `postinstall` `cd`s into `apps/cli` before invoking `patch-package`
+because `ink` isn't hoisted to the repo root, and `patch-package` only looks
+for `node_modules/<name>` under whatever directory it treats as the app root.
+
 ## Release process
 
 Use Changesets for user-facing package changes. Add a changeset under `.changeset/`

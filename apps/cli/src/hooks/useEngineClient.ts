@@ -69,8 +69,8 @@ function firstLine(text: string, max: number): string {
 export function createEngineClient(port: TranscriptPort): ClientInterface {
   /** Commit pending reasoning as its own row, in front of whatever follows. */
   const commitReasoning = () => {
-    const reasoning = port.takeReasoning();
-    if (reasoning.trim()) port.push('reasoning', reasoning);
+    const reasoning = port.takeReasoning().trim();
+    if (reasoning) port.push('reasoning', reasoning);
   };
 
   /**
@@ -85,8 +85,8 @@ export function createEngineClient(port: TranscriptPort): ClientInterface {
    */
   const commitStep = () => {
     commitReasoning();
-    const text = port.takeStream();
-    if (text.trim()) port.push('assistant', text);
+    const text = port.takeStream().trim();
+    if (text) port.push('assistant', text);
   };
 
   return {
@@ -222,7 +222,8 @@ export function createEngineClient(port: TranscriptPort): ClientInterface {
           // because a provider that sends both is sending the same text twice.
           commitReasoning();
           port.takeStream();
-          if (event.text.trim()) port.push('assistant', event.text);
+          const text = event.text.trim();
+          if (text) port.push('assistant', text);
           break;
         }
 
@@ -232,8 +233,8 @@ export function createEngineClient(port: TranscriptPort): ClientInterface {
           // never both. Reasoning goes first, the order the model produced it in.
           const streamed = port.takeStream();
           commitReasoning();
-          const text = event.text.trim() ? event.text : streamed;
-          if (text.trim()) port.push('assistant', text);
+          const text = (event.text.trim() ? event.text : streamed).trim();
+          if (text) port.push('assistant', text);
           port.turnEnded('done');
           break;
         }
