@@ -1,5 +1,131 @@
 # @agentionai/marshall-cli
 
+## 0.19.1
+
+### Patch Changes
+
+- Fix `resolveProfiles` sending the wrong API key after switching the deep tier's provider (via `--provider` or `/model`): `saved.apiKey`/`saved.host` were used as a fallback regardless of whether `saved` actually described the newly chosen provider, so the old provider's key could ride along. Now guarded by the same "same provider" check `resolveFastProfile` and the `name` field already used.
+
+## 0.19.0
+
+### Minor Changes
+
+- 6785c92: Centralize config reads and writes in one `ConfigService`, fixing a removed provider or MCP
+  server reappearing after a restart.
+
+  Five independent read-modify-write functions (`saveConfig`, `saveMcpServers`,
+  `saveProjectMcpSelection`, `removeSavedProvider`, `saveSettings`) each did their own
+  read-parse-write cycle and could race each other, and the App kept its own copies of the same
+  data in props — so a write that landed on disk could leave the screen showing the old value,
+  and a removed provider or MCP server could come back on the next launch. `ConfigService` is now
+  the one owner of both config files: a single queued write path, disk as the source of truth, and
+  the UI re-renders straight off a file change instead of a stale prop.
+
+  The `/setup` settings menu moves onto the same service, replacing the previous ad-hoc
+  provider/runtime/safety flows with one place to add, remove and switch providers, and to change
+  runtime mode or the safety level.
+
+- 5082aec: Save which model a workspace uses to that workspace's project file, and the credential that
+  makes it reachable to the global file, so switching models in one project no longer changes the
+  default for every other project on the machine.
+
+  `saveProfiles` (`/model`, the setup wizard) always wrote both the model choice and its
+  credential to the global config, which applies to every workspace. `withModelSelection` now
+  writes the credential-free model choice to `.marshall/config.json`, and `withProviderCredentials`
+  writes the host and key to the global file, matching what the config layering already documented
+  as the intent but the write path never did. A saved model in the old flat, pre-tier shape still
+  loads fine, but now gets a startup note pointing at `/model` to move it onto the new split.
+
+  Fixed a related gap this surfaced: the fast tier's saved API key stopped being found once the
+  model selection no longer carried it inline, for both a same-provider and a split-provider fast
+  tier. Both now fall back to the stored provider entry the same way the host already did.
+
+- Add `/team`, for defining named agents the coder can delegate to by model and standing brief.
+  `/team add` opens a wizard (name, then provider, then model, then a toolset, then a short
+  description); `/team list` shows what is defined; `/team remove <name>` forgets one.
+
+  Saved to the project's `.marshall/config.json` as name, provider, model, an optional fixed
+  toolset and description, the same credential-free, project-scoped split `/model` already uses:
+  the agent's provider and model are a committable choice, the credential that reaches it is
+  resolved from the global config at the point the agent actually runs. Adding a name that already
+  exists replaces it rather than refusing.
+
+  The toolset step (readonly/edit/full, or "ask each time") pins what a named agent may do —
+  leaving it as "ask each time" behaves exactly as before, but fixing one means the coder is never
+  asked and can't be talked into a wider toolset than the persona should have.
+
+  A different command from the existing `/agents` (which lists the agents spawned this session) on
+  purpose: `/agent` would have been a strict prefix of `/agents`, breaking tab completion the same
+  way `/mode` would have broken `/model`.
+
+### Patch Changes
+
+- 171b18c: Format large token counts and long turn durations more compactly in the live status row.
+
+  Token counts of 10,000 or more now abbreviate to `1.5k`, `10k`, `1.5M` instead of long
+  comma-grouped digits, and a turn (or a first-token wait) running a minute or longer now shows as
+  `24m59s` or `1h05m` instead of raw seconds, both dropping trailing zero segments (`10k`, not
+  `10.0k`; `5m`, not `5m00s`). Scoped to this status row alone: the `/tokens` report and the rest
+  of the transcript keep full comma-grouped counts, where precision reads better than compactness.
+
+- 6785c92: Stop a saved endpoint's name from surviving a switch to a different, unnamed provider.
+
+  Both `--provider` at startup and a `/model` or settings-menu switch mid-session could carry a
+  previously-saved endpoint's `name` onto an unrelated provider — e.g. an `openai-compatible`
+  endpoint named "LM Studio" showing up in the header next to `llamacpp` after switching to it.
+  Because the resulting profile is what gets persisted, this also wrote the mismatched name back
+  into the saved config, so it kept reappearing on every later launch until fixed at the source.
+  Both paths now only keep a saved name when the provider it names is the one actually in use.
+
+- 6785c92: Fix removing a provider defined by the project's `.marshall/config.json` reporting success while
+  leaving it in place.
+
+  A provider entry can live in the global config, the project config, or both — the project file
+  can contribute a shared host with no key, merged field by field with anything the global file
+  holds for the same provider. Removing an endpoint only ever wrote the global file, so an entry
+  the project file actually defined survived the write untouched and reappeared on the very next
+  read, even though the settings menu had already reported it removed. Removal now reaches
+  whichever file (or both) the entry actually lives in.
+
+- 8349119: Fix two ways the assistant's transcript text could render misaligned: a stray leading space on
+  some wrapped lines, and a reply landing on the row below its bullet instead of beside it.
+
+  Ink's default text wrap calls `wrap-ansi` with `trim: false`, which leaves a stray leading space
+  on the row after a word happens to land exactly on the column width, a ragged left edge on
+  otherwise flush prose. Patched via `patch-package` (`patches/ink+7.1.1.patch`) to use
+  `wrap-ansi`'s own default (`trim: true`) instead, which does not have this problem.
+
+  Separately, a response (or reasoning block) that opened or closed with a blank line kept that
+  whitespace when it was pushed to the transcript, even though the code already checked
+  `text.trim()` before deciding whether to push at all. Since the assistant's bullet sits beside
+  the message's first rendered row, a leading blank line rendered as an empty row above the real
+  one, making the bullet look orphaned. The text pushed is now the trimmed value, not just gated
+  on it.
+
+- 6785c92: Fix a prompt silently dropped when it was typed the instant a finished background job or agent
+  woke the coder back up, and Esc doing nothing during `/plan`, `/goal` or `/review`.
+
+  `Session` used to announce a turn's `thinking` event only after that turn's setup (MCP
+  settling, compression, building the agent) finished, so a client watching the session had no way
+  to tell "about to be busy" from "already busy." A prompt submitted into that window reached
+  `run()`, hit its concurrency guard, and was reported as an error and lost rather than queued.
+  `Session` now announces a turn the moment it claims the session, and exposes a new `busy` getter
+  so a client isn't left inferring session state from the event stream. The CLI now queues a
+  prompt typed into that window instead of losing it.
+
+  Separately, `/plan`, `/goal` and `/review` never checked for an interrupt before their model
+  call and never raced the call itself against one, so pressing Esc during setup or while the
+  call was in flight did nothing — the run() path already handled both correctly, and the two
+  now share one implementation so a fix to this class of bug can't land in one and miss the
+  other.
+
+- Updated dependencies [6785c92]
+- Updated dependencies
+- Updated dependencies [6785c92]
+- Updated dependencies [6785c92]
+  - @agentionai/marshall-engine@0.16.0
+  - @agentionai/marshall-tools@0.6.4
+
 ## 0.18.1
 
 ### Patch Changes

@@ -1,5 +1,56 @@
 # @agentionai/marshall-engine
 
+## 0.16.0
+
+### Minor Changes
+
+- Let `spawn_agent` target a saved named agent by name (`agent_name`) instead of only a bare tier,
+  and optionally fix a named agent to one toolset.
+
+  `EngineConfig` gains an optional `namedAgents` list. When it's non-empty, `spawn_agent`'s tool
+  schema advertises `agent_name` alongside `tier` (exactly one expected), resolves the named
+  agent's own model and credential instead of a tier's, and carries its description into the
+  spawned agent's system prompt. When no named agents are configured, the schema is exactly what
+  it was before this existed, so a project that hasn't used the CLI's new `/team` command sees no
+  difference in what the model is offered.
+
+  A named agent can also fix its own `toolset` (`readonly`/`edit`/`full`). When set, it's
+  authoritative — a "tester" pinned to `edit` runs on `edit` even if the caller asks for `full`,
+  and the caller isn't asked for a toolset at all when spawning it. Unset, an agent behaves exactly
+  as before: the caller picks a toolset per spawn.
+
+- 6785c92: Fix a prompt silently dropped when it was typed the instant a finished background job or agent
+  woke the coder back up, and Esc doing nothing during `/plan`, `/goal` or `/review`.
+
+  `Session` used to announce a turn's `thinking` event only after that turn's setup (MCP
+  settling, compression, building the agent) finished, so a client watching the session had no way
+  to tell "about to be busy" from "already busy." A prompt submitted into that window reached
+  `run()`, hit its concurrency guard, and was reported as an error and lost rather than queued.
+  `Session` now announces a turn the moment it claims the session, and exposes a new `busy` getter
+  so a client isn't left inferring session state from the event stream. The CLI now queues a
+  prompt typed into that window instead of losing it.
+
+  Separately, `/plan`, `/goal` and `/review` never checked for an interrupt before their model
+  call and never raced the call itself against one, so pressing Esc during setup or while the
+  call was in flight did nothing — the run() path already handled both correctly, and the two
+  now share one implementation so a fix to this class of bug can't land in one and miss the
+  other.
+
+### Patch Changes
+
+- 6785c92: Stop a transient failure to build the summariser from disabling context compression for the
+  rest of the session.
+
+  `CompressionManager` set its `ready` flag before the summariser agent was actually built, so a
+  failure creating it (an unreachable model, say) left `ready` true with no working summariser
+  behind it — compression was then silently skipped for every later turn, even after a model
+  switch made the summariser reachable again. `ready` is now reset on that failure, so the next
+  attempt (the next turn, or `invalidateModel` after a switch) retries instead of short-circuiting
+  on the stale flag.
+
+- Updated dependencies [6785c92]
+  - @agentionai/marshall-tools@0.6.4
+
 ## 0.15.1
 
 ### Patch Changes
