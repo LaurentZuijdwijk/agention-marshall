@@ -1,5 +1,11 @@
 # @agentionai/marshall-engine
 
+## 0.16.1
+
+### Patch Changes
+
+- 4e87b59: Fix the safety judge crashing against gpt-5/o-series reasoning models: `temperature` is omitted for reasoning-model profiles instead of being sent as `0`, which those models reject with a 400. Temperature handling on plain chat models is unchanged.
+
 ## 0.16.0
 
 ### Minor Changes
