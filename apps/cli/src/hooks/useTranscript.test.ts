@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { transcriptReducer, emptyTranscript } from './useTranscript.js';
+import { transcriptReducer, emptyTranscript, MAX_REASONING_PER_STEP, MAX_REASONING_TOTAL } from './useTranscript.js';
 import type { TranscriptState, TranscriptAction } from './useTranscript.js';
 import type { Message } from '../view/message.js';
 
@@ -123,5 +123,55 @@ describe('replay', () => {
     const before = run([{ type: 'push', message: row('1') }]);
     const after = transcriptReducer(before, { type: 'push', message: row('2') });
     assert.equal(after.epoch, before.epoch);
+  });
+});
+
+describe('reasoning memory bound', () => {
+  const thinking = (key: string, content: string): Message =>
+    ({ key, role: 'reasoning', content });
+
+  it('leaves visible rows untouched', () => {
+    const state = run([{ type: 'push', message: row('1', 'visible') }]);
+    assert.deepEqual(state.messages, [row('1', 'visible')]);
+  });
+
+  it('truncates one huge reasoning trace to its tail', () => {
+    const trace = 'x'.repeat(MAX_REASONING_PER_STEP + 1000) + 'THE_END';
+    const state = run([{ type: 'push', message: thinking('r', trace) }]);
+    assert.equal(state.messages.length, 1);
+    assert.equal(state.messages[0].content.length, MAX_REASONING_PER_STEP);
+    assert.ok(state.messages[0].content.endsWith('THE_END'));
+  });
+
+  it('prunes oldest reasoning rows once the total exceeds the budget, in place', () => {
+    // Rows stay under the per-step cap so the total is what trips the budget.
+    const piece = 2000;
+    const count = Math.ceil(MAX_REASONING_TOTAL / piece) + 1;
+    const rows = Array.from({ length: count }, (_, i) => thinking(`r${i}`, 't'.repeat(piece)));
+    const state = rows.reduce((s, m) => transcriptReducer(s, { type: 'push', message: m }), emptyTranscript);
+
+    assert.equal(state.messages.length, count, 'in place — <Static> tracks by emitted index');
+    assert.equal(state.messages[0].content, '', 'oldest reasoning freed');
+    assert.equal(state.messages[count - 1].content, 't'.repeat(piece), 'newest reasoning kept');
+  });
+
+  it('frees old reasoning but leaves user rows alone', () => {
+    const piece = 2000;
+    const count = Math.ceil(MAX_REASONING_TOTAL / piece) + 1;
+    let state = run([{ type: 'push', message: row('u', 'a question') }]);
+    for (let i = 0; i < count; i++) {
+      state = transcriptReducer(state, { type: 'push', message: thinking(`r${i}`, 't'.repeat(piece)) });
+    }
+
+    assert.deepEqual(state.messages[0], row('u', 'a question'), 'user row untouched');
+    assert.equal(state.messages[1].content, '', 'first (oldest) reasoning dropped');
+    assert.equal(state.messages[state.messages.length - 1].content, 't'.repeat(piece));
+  });
+
+  it('under budget keeps the same row instance (no wasted rewrites)', () => {
+    const small = 'a thought '.repeat(3);
+    const m = thinking('r', small);
+    const state = run([{ type: 'push', message: m }]);
+    assert.strictEqual(state.messages[0], m);
   });
 });
