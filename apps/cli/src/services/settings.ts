@@ -27,9 +27,9 @@
 // config or the environment, exactly like the main model is.
 
 import { PROVIDER_DEFAULTS, resolveModel } from '@agentionai/marshall-engine';
-import type { AgentProfile, Provider, SafetyAgentConfig, SafetyAgentKind } from '@agentionai/marshall-engine';
+import type { AgentProfile, NamedAgent, Provider, SafetyAgentConfig, SafetyAgentKind } from '@agentionai/marshall-engine';
 import { configPath, loadConfig, readJsonConfig } from './config-store.js';
-import type { SavedConfig } from './config-store.js';
+import type { SavedAgentEntry, SavedConfig } from './config-store.js';
 
 /**
  * The tool belt this session runs with.
@@ -303,6 +303,34 @@ export function toSafetyAgentConfig(saved: SavedSafetyAgent, auth: JudgeAuth): S
     ...(saved.kind ? { kind: saved.kind } : {}),
     ...(saved.maxOutputTokens !== undefined ? { maxOutputTokens: saved.maxOutputTokens } : {}),
   };
+}
+
+/**
+ * Turn the saved `/team` roster into something `spawn_agent` can actually
+ * call — same reasoning as `toSafetyAgentConfig`, one credential lookup
+ * shorter: a named agent carries no host of its own (see `SavedAgentEntry`),
+ * so both host and key come from whatever the global config has stored for
+ * that bare provider, the same fallback `credentialsFor` already gives a
+ * fresh endpoint of that provider being set up for the first time.
+ */
+export function toNamedAgents(
+  saved: SavedAgentEntry[],
+  credentialsFor: (ref: { provider: string; name?: string }) => { host?: string; apiKey?: string },
+): NamedAgent[] {
+  return saved.map((entry) => {
+    const { host, apiKey } = credentialsFor({ provider: entry.provider });
+    return {
+      name: entry.name,
+      ...(entry.description ? { description: entry.description } : {}),
+      ...(entry.toolset ? { toolset: entry.toolset } : {}),
+      profile: {
+        provider: entry.provider as Provider,
+        model: entry.model,
+        ...(host ? { host } : {}),
+        ...(apiKey ? { apiKey } : {}),
+      },
+    };
+  });
 }
 
 // ── writing ───────────────────────────────────────────────────────────────────

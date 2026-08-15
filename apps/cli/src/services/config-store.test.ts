@@ -4,12 +4,12 @@ import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, existsSync } from 
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import {
-  withModelSelection, withProviderCredentials, upsertProvider, loadConfig, savedDeepProfile, findProvider,
-  providerCredentials, providerKeyForHost, configPath, globalConfigPath, savedMcpServers, resolveMcpServers,
-  danglingMcpSelections, projectSecretWarnings, legacyProfileWarnings, removeProvider,
+  withAgents, withModelSelection, withProviderCredentials, upsertProvider, loadConfig, savedDeepProfile,
+  findProvider, providerCredentials, providerKeyForHost, configPath, globalConfigPath, savedMcpServers,
+  resolveMcpServers, danglingMcpSelections, projectSecretWarnings, legacyProfileWarnings, removeProvider,
 } from './config-store.js';
 import type { SavedConfig } from './config-store.js';
-import type { SavedProviderEntry } from './config-store.js';
+import type { SavedAgentEntry, SavedProviderEntry } from './config-store.js';
 import type { AgentProfile } from '@agentionai/marshall-engine';
 
 const LOCAL: AgentProfile = { provider: 'llamacpp', model: 'qwen', host: 'http://192.168.1.248:8080' };
@@ -225,6 +225,27 @@ describe('withProviderCredentials', () => {
   it('does not touch the model selection', () => {
     const out = withProviderCredentials({ models: { deep: { provider: 'claude', model: 'opus' } } }, ROUTER, undefined);
     assert.deepEqual(out.models, { deep: { provider: 'claude', model: 'opus' } });
+  });
+});
+
+describe('withAgents', () => {
+  const tester: SavedAgentEntry = {
+    name: 'tester', provider: 'claude', model: 'claude-haiku-4-5', description: 'writes and runs unit tests',
+  };
+
+  it('records the given agents', () => {
+    const out = withAgents({}, [tester]);
+    assert.deepEqual(out.agents, [tester]);
+  });
+
+  it('replaces the whole list rather than merging', () => {
+    const out = withAgents({ agents: [tester] }, []);
+    assert.deepEqual(out.agents, []);
+  });
+
+  it('leaves the rest of the file alone', () => {
+    const out = withAgents({ mcpServers: [{ name: 'gh', url: 'https://example.com/mcp' }] }, [tester]);
+    assert.deepEqual(out.mcpServers, [{ name: 'gh', url: 'https://example.com/mcp' }]);
   });
 });
 

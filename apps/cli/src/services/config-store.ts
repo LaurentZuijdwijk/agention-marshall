@@ -116,6 +116,26 @@ export interface SavedConfig extends SavedProfile {
   providers?: SavedProviderEntry[];
   mcpServers?: SavedMcpServer[];
   mcp?: SavedProjectMcp;
+  agents?: SavedAgentEntry[];
+}
+
+/**
+ * A user-defined agent the coder can delegate to by name — a persona
+ * (`spawn_agent`'s `agent_name`), not an endpoint. No credential field: like
+ * a model selection, the provider/model choice is project-scoped and
+ * committable; the host and key that make it reachable are resolved from the
+ * global `providers` list when the agent actually runs.
+ */
+export interface SavedAgentEntry {
+  name: string;
+  provider: string;
+  model: string;
+  description?: string;
+  /** Fixed for this persona rather than chosen by the coder at every spawn —
+   *  a "tester" that must never get `full` shouldn't have to be trusted not
+   *  to ask for it. Unset means the coder still picks one per spawn, exactly
+   *  like an agent spawned by tier alone. */
+  toolset?: 'readonly' | 'edit' | 'full';
 }
 
 /** Directory holding the global config, honouring `$XDG_CONFIG_HOME`. */
@@ -572,6 +592,17 @@ export function withProviderCredentials(
  */
 export function withMcpServers(config: SavedConfig, servers: McpServerConfig[]): SavedConfig {
   return { ...config, mcpServers: servers };
+}
+
+/**
+ * Set the named-agent list, leaving everything else in the file untouched.
+ *
+ * Always the whole array: the caller (the `/agent` command handler) reads the
+ * current list, computes the upsert or removal, and hands back the result —
+ * same shape as `withMcpServers`.
+ */
+export function withAgents(config: SavedConfig, agents: SavedAgentEntry[]): SavedConfig {
+  return { ...config, agents };
 }
 
 /** Set the project's MCP selection, preserving anything else the repo pins. */

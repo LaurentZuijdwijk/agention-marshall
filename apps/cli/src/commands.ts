@@ -21,6 +21,7 @@ import type { SetMode } from './mode.js';
 import { resolveSlashCommand, HELP, SAFETY_LEVEL_WORDS, SAFETY_LEVEL_LABELS } from './slashCommands.js';
 import type { SafetyLevelWord } from './slashCommands.js';
 import type { RuntimeMode, SettingsScope } from './services/settings.js';
+import type { SavedAgentEntry } from './services/config-store.js';
 import { currentVersion, checkForUpdate, describeUpdate, manualInstallCommand } from './update-check.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -84,6 +85,13 @@ export interface CommandDeps {
    *  session-only (see Session.setSafetyLevel), so this is what lets a header
    *  reprinted later (mid-session model switch, `/clear`) still show it. */
   onSafetyLevelChange?(level: SafetyLevel): void;
+  /** The named agents this workspace has defined, for `/team list`. */
+  agents?: SavedAgentEntry[];
+  /** Persist a `/team add`/`/team remove` change and apply it to the running
+   *  session — both need `ConfigService`/the session directly (to resolve
+   *  each agent's credential and to call `Session.setNamedAgents`), which
+   *  this module deliberately doesn't have; the App owns both. */
+  onAgentsChanged?(agents: SavedAgentEntry[]): void;
 }
 
 function describeJob(job: BackgroundJob): string {
@@ -108,11 +116,18 @@ function describeAgent(job: AgentJob, latest?: string): string {
     : `${job.status} after ${elapsed.toFixed(0)}s`;
   const brief = job.brief.replace(/\s+/g, ' ').trim();
   const short = brief.length > 60 ? `${brief.slice(0, 59)}…` : brief;
-  const head = `${job.id}  ${state}  ${job.tier}/${job.toolset}  ${short}`;
+  const head = `${job.id}  ${state}  ${job.agentName ?? job.tier}/${job.toolset}  ${short}`;
   // The last thing it did, for a running agent only. Elapsed time alone cannot
   // tell thinking from wedged, which is the one question worth asking of an
   // agent that has been going for ten minutes.
   return job.status === 'running' && latest ? `${head}\n    last: ${latest}` : head;
+}
+
+/** One line per named agent: what the coder would delegate to, and why. */
+function describeAgentEntry(entry: SavedAgentEntry): string {
+  const head = `${entry.name}  ${entry.provider}/${entry.model}`;
+  const withToolset = entry.toolset ? `${head}  toolset: ${entry.toolset}` : head;
+  return entry.description ? `${withToolset}  — ${entry.description}` : withToolset;
 }
 
 /** One block per server: what it is, then what it actually gave us. The tool
@@ -227,6 +242,36 @@ export function runSlashCommand(input: string, deps: CommandDeps): void {
         return;
       }
       transcript.push('info', all.map(a => describeAgent(a, agents.activity(a.id).at(-1))).join('\n'));
+      return;
+    }
+
+    // Pure config work — unlike `agents`/`mcp` above, this never needs a live
+    // session: `/team add` before `/setup` still persists fine, it just has
+    // nothing running yet to apply it to.
+    case 'team': {
+      const current = deps.agents ?? [];
+
+      if (command.action === 'add') {
+        setMode({ type: 'team-setup' });
+        return;
+      }
+
+      if (command.action === 'list') {
+        transcript.push('info', current.length === 0
+          ? 'no named agents defined — /team add to define one'
+          : current.map(describeAgentEntry).join('\n'));
+        return;
+      }
+
+      // remove — replacing an entry is the wizard's job (`/team add`); this
+      // only ever forgets one.
+      if (!current.some(a => a.name === command.name)) {
+        transcript.push('info', `no named agent "${command.name}"`);
+        return;
+      }
+      const next = current.filter(a => a.name !== command.name);
+      deps.onAgentsChanged?.(next);
+      transcript.push('info', `removed ${command.name}`);
       return;
     }
 

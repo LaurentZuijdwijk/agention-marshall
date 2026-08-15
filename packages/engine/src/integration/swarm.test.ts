@@ -150,6 +150,147 @@ test('the tier the parent picks is the model the agent runs on', async (t) => {
   requestFor(fake, 'deep-model');
 });
 
+test('a named agent runs on its own configured model instead of a tier', async (t) => {
+  const root = tempRoot();
+  const fake = await startFakeProvider(
+    { toolCalls: [{ name: 'spawn_agent', arguments: { brief: 'write tests for the parser', agent_name: 'tester', toolset: 'edit' } }] },
+    { text: 'started it' },
+    { text: 'done: added tests\nchecked: nothing\nblocked: nothing' },
+  );
+  t.after(() => fake.close());
+
+  const session = makeSession(root, fake, {
+    namedAgents: [{
+      name: 'tester',
+      description: 'writes and runs unit tests',
+      profile: { provider: 'llamacpp', host: fake.host, model: 'tester-model' },
+    }],
+  });
+  t.after(() => session.dispose());
+  await session.run('add coverage');
+  await agentsSettled(session);
+
+  const job = session.agents.list()[0];
+  assert.equal(job.agentName, 'tester');
+  assert.equal(job.tier, undefined);
+  assert.equal(job.label, 'llamacpp/tester-model');
+
+  const child = requestFor(fake, 'tester-model');
+  const prompt = String(child.messages.find(m => m.role === 'system')?.content ?? '');
+  assert.match(prompt, /writes and runs unit tests/);
+});
+
+test('a named agent with a fixed toolset runs on it without being asked for one', async (t) => {
+  const root = tempRoot();
+  const fake = await startFakeProvider(
+    { toolCalls: [{ name: 'spawn_agent', arguments: { brief: 'write tests for the parser', agent_name: 'tester' } }] },
+    { text: 'started it' },
+    { text: 'done: added tests\nchecked: nothing\nblocked: nothing' },
+  );
+  t.after(() => fake.close());
+
+  const session = makeSession(root, fake, {
+    namedAgents: [{
+      name: 'tester',
+      profile: { provider: 'llamacpp', host: fake.host, model: 'tester-model' },
+      toolset: 'edit',
+    }],
+  });
+  t.after(() => session.dispose());
+  await session.run('add coverage');
+  await agentsSettled(session);
+
+  assert.equal(session.agents.list()[0].toolset, 'edit');
+  const child = requestFor(fake, 'tester-model');
+  // `edit` keeps write/edit but drops run_shell — the readonly/edit/full
+  // boundary the sibling toolset test above already pins for a bare tier.
+  assert.ok(child.tools.includes('edit_file'));
+  assert.ok(!child.tools.includes('run_shell'));
+});
+
+test('a named agent’s fixed toolset overrides whatever the caller asked for', async (t) => {
+  const root = tempRoot();
+  const fake = await startFakeProvider(
+    { toolCalls: [{ name: 'spawn_agent', arguments: { brief: 'write tests', agent_name: 'tester', toolset: 'full' } }] },
+    { text: 'started it' },
+    { text: 'done: added tests\nchecked: nothing\nblocked: nothing' },
+  );
+  t.after(() => fake.close());
+
+  const session = makeSession(root, fake, {
+    namedAgents: [{
+      name: 'tester',
+      profile: { provider: 'llamacpp', host: fake.host, model: 'tester-model' },
+      toolset: 'readonly',
+    }],
+  });
+  t.after(() => session.dispose());
+  await session.run('add coverage');
+  await agentsSettled(session);
+
+  assert.equal(session.agents.list()[0].toolset, 'readonly',
+    'the pin is authoritative — a "readonly" persona must not be talked into "full"');
+});
+
+test('a named agent with no fixed toolset still needs one from the caller', async (t) => {
+  const root = tempRoot();
+  const fake = await startFakeProvider(
+    { toolCalls: [{ name: 'spawn_agent', arguments: { brief: 'write tests', agent_name: 'tester' } }] },
+    { text: 'my mistake' },
+  );
+  t.after(() => fake.close());
+
+  const session = makeSession(root, fake, {
+    namedAgents: [{ name: 'tester', profile: { provider: 'llamacpp', host: fake.host, model: 'tester-model' } }],
+  });
+  t.after(() => session.dispose());
+  await session.run('add coverage');
+
+  assert.deepEqual(session.agents.list(), []);
+  const result = fake.requests.at(-1)?.messages.find(m => m.role === 'tool')?.content;
+  assert.match(String(result), /no fixed toolset.*?give one/);
+});
+
+test('an unknown agent_name is reported to the model, not thrown, and starts nothing', async (t) => {
+  const root = tempRoot();
+  const fake = await startFakeProvider(
+    { toolCalls: [{ name: 'spawn_agent', arguments: { brief: 'write tests', agent_name: 'nope', toolset: 'edit' } }] },
+    { text: 'oh, that agent does not exist' },
+  );
+  t.after(() => fake.close());
+
+  const session = makeSession(root, fake, {
+    namedAgents: [{ name: 'tester', profile: { provider: 'llamacpp', host: fake.host, model: 'tester-model' } }],
+  });
+  t.after(() => session.dispose());
+  await session.run('add coverage');
+
+  assert.deepEqual(session.agents.list(), []);
+  // The last request, not the first — that one is what *produced* the tool
+  // call; this one is the follow-up that carries its result.
+  const result = fake.requests.at(-1)?.messages.find(m => m.role === 'tool')?.content;
+  assert.match(String(result), /No agent named .*?nope.*?\. Configured: tester\./);
+});
+
+test('giving both tier and agent_name — or neither — is reported, not thrown', async (t) => {
+  const root = tempRoot();
+  const fake = await startFakeProvider(
+    { toolCalls: [{ name: 'spawn_agent', arguments: { brief: 'write tests', tier: 'fast', agent_name: 'tester', toolset: 'edit' } }] },
+    { text: 'my mistake' },
+  );
+  t.after(() => fake.close());
+
+  const session = makeSession(root, fake, {
+    namedAgents: [{ name: 'tester', profile: { provider: 'llamacpp', host: fake.host, model: 'tester-model' } }],
+  });
+  t.after(() => session.dispose());
+  await session.run('add coverage');
+
+  assert.deepEqual(session.agents.list(), []);
+  const result = fake.requests.at(-1)?.messages.find(m => m.role === 'tool')?.content;
+  assert.match(String(result), /Give exactly one of tier or agent_name\./);
+});
+
 test('a denied spawn starts nothing', async (t) => {
   const root = tempRoot();
   const fake = await startFakeProvider(

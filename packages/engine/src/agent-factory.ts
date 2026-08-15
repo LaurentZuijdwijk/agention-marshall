@@ -157,7 +157,7 @@ concrete problems (bugs, missed requirements, inconsistencies). Do not edit anyt
  * different from the coder: it is working from a brief it cannot check against
  * anything, and it has siblings in the same repository right now.
  */
-export function buildSwarmPrompt(toolset: AgentToolset): string {
+export function buildSwarmPrompt(toolset: AgentToolset, extraContext?: string): string {
   const writes = toolset !== 'readonly';
   const rules = [
     'Do what the brief asks and nothing more. If it turns out to be wrong, impossible, or wider than it looked, stop and say so in your report rather than deciding for yourself',
@@ -175,7 +175,7 @@ export function buildSwarmPrompt(toolset: AgentToolset): string {
 
   return `\
 You are a Marshall agent working on one delegated task.
-
+${extraContext ? `\nYou were configured for: ${extraContext}\n` : ''}
 Your brief is all you have. You cannot see the conversation it came from, the plan it belongs \
 to, or the other agents working alongside you — some of which may be changing this same \
 repository right now.

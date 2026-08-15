@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Limits, CommandPolicy } from '@agentionai/marshall-tools';
 import type { McpServerConfig } from './mcp.js';
+import type { AgentToolset } from './agent-jobs.js';
 
 export type Provider = 'claude' | 'openai' | 'gemini' | 'mistral' | 'ollama' | 'llamacpp' | 'openrouter' | 'openai-compatible';
 
@@ -38,16 +39,39 @@ export type Tier = 'deep' | 'fast';
 export type Role = 'coder' | 'planner' | 'reviewer' | 'context' | 'search' | 'summarizer';
 
 /**
- * A spawned agent, named by the tier its parent chose for it.
+ * A spawned agent, named by the tier its parent chose for it — or, since a
+ * spawn can target a saved `NamedAgent` instead of a bare tier, by that
+ * agent's own name.
  *
  * Deliberately *not* a `Role`. A role is something the user configures a model
  * for, and every one of them maps to a tier through `DEFAULT_ROLE_TIERS`. A
- * spawned agent has neither property: its tier is picked per spawn by the parent
- * agent, so there is no default to state and nothing for `/model` to offer. What
- * it does need is a name — the approval gate uses it to tell two live agents
- * apart, and the usage tally to say what the swarm cost.
+ * spawned agent has neither property: its tier (or named profile) is picked
+ * per spawn by the parent agent, so there is no default to state and nothing
+ * for `/model` to offer. What it does need is a name — the approval gate uses
+ * it to tell two live agents apart, and the usage tally to say what the swarm
+ * cost.
  */
-export type SwarmRole = `swarm:${Tier}`;
+export type SwarmRole = `swarm:${Tier}` | `swarm:agent:${string}`;
+
+/**
+ * A user-defined persona `spawn_agent` can target by name instead of a bare
+ * tier — its own model/provider and a standing brief (`description`) that
+ * gets folded into the spawned agent's system prompt alongside the toolset
+ * rules `buildSwarmPrompt` already writes.
+ *
+ * A wrapper around `AgentProfile`, not an extension of it: `AgentProfile.name`
+ * already means something else (an OpenAI-compatible endpoint's label), and
+ * reusing it here would overload it with a second, unrelated meaning.
+ */
+export interface NamedAgent {
+  name: string;
+  description?: string;
+  profile: AgentProfile;
+  /** Fixed for this persona instead of asked for at every spawn — see
+   *  `resolveSpawnTarget` in `session-tools.ts`, which treats this as
+   *  authoritative over whatever `spawn_agent`'s caller passes when set. */
+  toolset?: AgentToolset;
+}
 
 /**
  * The three postures the belt can take, as one value rather than two booleans.
@@ -163,6 +187,13 @@ export interface EngineConfig {
    */
   swarm?: boolean;
   /**
+   * Personas `spawn_agent` can target by name instead of a bare tier — see
+   * `NamedAgent`. Empty or unset leaves `spawn_agent`'s tool schema exactly as
+   * it was before this existed: `agent_name` is only advertised to the model
+   * when there is at least one to offer.
+   */
+  namedAgents?: NamedAgent[];
+  /**
    * Ceiling for a spawned background agent, in ms. Unset by default — an agent
    * then runs until it finishes or is killed.
    *
@@ -258,6 +289,13 @@ export function resolveTierProfile(config: EngineConfig, tier: Tier): AgentProfi
   if (config.models?.fast) return config.models.fast;
   const cheap = cheapModelFor(deep.provider);
   return cheap ? { ...deep, model: cheap } : deep;
+}
+
+/** The named agent `spawn_agent`'s `agent_name` picked, if any is configured
+ *  under that name. A linear scan — the list is realistically a handful of
+ *  entries, the same reasoning `findProvider` uses. */
+export function resolveNamedAgent(config: EngineConfig, name: string): NamedAgent | undefined {
+  return config.namedAgents?.find(a => a.name === name);
 }
 
 /** Which tier a role runs on, after overrides. */

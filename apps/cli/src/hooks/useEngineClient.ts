@@ -143,7 +143,7 @@ export function createEngineClient(port: TranscriptPort): ClientInterface {
           port.push('spawn', firstLine(event.brief, 72), {
             title: event.id,
             failed: event.status === 'failed',
-            note: `${event.tier}  ${G.bullet}  ${(event.durationMs / 1000).toFixed(1)}s` +
+            note: `${event.agentName ?? event.tier}  ${G.bullet}  ${(event.durationMs / 1000).toFixed(1)}s` +
               (event.resuming ? `  ${G.bullet}  picking it up` : ''),
           });
           break;

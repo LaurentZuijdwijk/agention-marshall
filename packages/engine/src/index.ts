@@ -1,6 +1,6 @@
 export type {
   Provider, AgentProfile, EngineConfig, ResolvedAuth, Tier, Role, ModelTiers,
-  SafetyLevel, SafetyAgentKind, SafetyAgentConfig, SwarmRole, RuntimeMode,
+  SafetyLevel, SafetyAgentKind, SafetyAgentConfig, SwarmRole, RuntimeMode, NamedAgent,
 } from './config.js';
 export type { AgentJob, AgentJobs, AgentJobStatus, AgentToolset } from './agent-jobs.js';
 export { summariseAgentJob } from './agent-jobs.js';

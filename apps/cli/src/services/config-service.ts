@@ -30,9 +30,9 @@ import type { AgentProfile, McpServerConfig } from '@agentionai/marshall-engine'
 import {
   configPath, findProvider, globalConfigPath, legacyProfileWarnings, loadConfig, loadMcpWarnings,
   projectSecretWarnings, providerCredentials, providerKeyForHost, readJsonConfig, removeProvider,
-  resolveMcpServers, withMcpServers, withModelSelection, withProjectMcp, withProviderCredentials,
+  resolveMcpServers, withAgents, withMcpServers, withModelSelection, withProjectMcp, withProviderCredentials,
 } from './config-store.js';
-import type { ProviderRef, SavedConfig, SavedProviderEntry } from './config-store.js';
+import type { ProviderRef, SavedAgentEntry, SavedConfig, SavedProviderEntry } from './config-store.js';
 import {
   applySettings, readSettings, resolveSettings, settingsWarnings,
 } from './settings.js';
@@ -52,6 +52,8 @@ export interface ConfigSnapshot {
   providers: SavedProviderEntry[];
   /** The servers this workspace should connect to, after the project's selection. */
   mcpServers: McpServerConfig[];
+  /** Named agents this workspace has defined, project-scoped. */
+  agents: SavedAgentEntry[];
   /** Resolved settings, CLI flags applied. What the session runs with. */
   settings: Settings;
   /** What this repo alone pins, ignoring the global config. */
@@ -113,6 +115,7 @@ export class ConfigService {
       config,
       providers: config.providers ?? [],
       mcpServers: resolveMcpServers(global, project),
+      agents: config.agents ?? [],
       settings: resolveSettings(readSettings(config), this.flags),
       projectSettings: readSettings(project),
       mcpWarnings,
@@ -217,6 +220,18 @@ export class ConfigService {
         ...current,
         enable: [...new Set([...(current.enable ?? []), name])],
       })));
+  }
+
+  /**
+   * Persist the named-agent list.
+   *
+   * Always the project file, and always the whole array: a named agent is a
+   * model/provider choice, not a credential — the same split as
+   * `withModelSelection`. The caller (the `/agent` command handler) computes
+   * the new array from `snapshot().agents`.
+   */
+  saveAgents(agents: SavedAgentEntry[]): Promise<boolean> {
+    return this.write('project', 'agents', config => withAgents(config, agents));
   }
 
   /** Pin a runtime setting in one of the two files. */

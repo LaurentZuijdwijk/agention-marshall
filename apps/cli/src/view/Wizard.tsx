@@ -9,6 +9,7 @@ import type { useWizardActions } from '../hooks/useWizardActions.js';
 import { currentVersion } from '../update-check.js';
 import { SettingsMenu } from './setupMenu/SettingsMenu.js';
 import { McpSetup } from './McpSetup.js';
+import { TeamSetup } from './TeamSetup.js';
 
 export interface WizardProps {
   mode: Mode;
@@ -98,6 +99,19 @@ export function Wizard({
         <McpSetup
           existing={session?.mcpState().map(s => s.name) ?? []}
           onComplete={actions.handleMcpAdd}
+          onExit={() => setMode({ type: 'idle' })}
+        />
+      </Box>
+    );
+  }
+
+  if (mode.type === 'team-setup') {
+    return (
+      <Box padding={1}>
+        <TeamSetup
+          existing={savedConfig.agents.map(a => a.name)}
+          credentials={config.credentialsFor}
+          onComplete={actions.handleTeamAdd}
           onExit={() => setMode({ type: 'idle' })}
         />
       </Box>

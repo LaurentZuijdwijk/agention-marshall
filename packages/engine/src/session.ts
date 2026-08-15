@@ -39,7 +39,7 @@ import type { ImageAttachment } from './images.js';
 import { describeAgentError, providerErrorDiagnostics, isBadRequestError, isContextLengthError } from './errors.js';
 import { resolveRoleProfile, resolveModel, routingSummary, resolveSearchProfile } from './config.js';
 import type {
-  EngineConfig, AgentProfile, Role, SafetyLevel, SafetyAgentConfig, RuntimeMode,
+  EngineConfig, AgentProfile, Role, SafetyLevel, SafetyAgentConfig, RuntimeMode, NamedAgent,
 } from './config.js';
 import { createUsageTally, throughputOf } from './usage.js';
 import type { PriceBook, UsageReport } from './usage.js';
@@ -413,6 +413,17 @@ export class Session {
     this.log(`SAFETY_AGENT ${agent ? `${agent.profile.provider}/${resolveModel(agent.profile)} kind=${agent.kind ?? 'chat-judge'}` : 'cleared'}`);
   }
 
+  /**
+   * Apply a `/team` change immediately — same reasoning as `setSafetyLevel`:
+   * `spawn_agent`'s schema and `runSpawnedAgent`'s resolution both read
+   * `this.config.namedAgents` fresh on every call, so there is nothing to
+   * rebuild.
+   */
+  setNamedAgents(agents: NamedAgent[]): void {
+    this.config = { ...this.config, namedAgents: agents };
+    this.log(`NAMED_AGENTS ${agents.map(a => a.name).join(', ') || '(none)'}`);
+  }
+
   get hasPendingPlan(): boolean {
     return this.pendingPlan !== null;
   }
@@ -608,7 +619,7 @@ export class Session {
 
     const durationMs = (job.endedAt ?? Date.now()) - job.startedAt;
     this.log(
-      `SWARM ${job.id} ${job.status} ${(durationMs / 1000).toFixed(1)}s ${job.tier} ${job.label} ` +
+      `SWARM ${job.id} ${job.status} ${(durationMs / 1000).toFixed(1)}s ${job.agentName ?? job.tier} ${job.label} ` +
       (job.error ?? `${(job.result ?? '').length} chars`),
     );
 
@@ -619,6 +630,7 @@ export class Session {
       id: job.id,
       brief: job.brief,
       tier: job.tier,
+      agentName: job.agentName,
       model: job.label,
       status: job.status === 'timed-out' ? 'timed-out' : job.status === 'done' ? 'done' : 'failed',
       durationMs,

@@ -34,8 +34,9 @@ import type { AgentJobs, AgentToolset } from './agent-jobs.js';
 import { McpRegistry } from './mcp.js';
 import {
   resolveRoleProfile, resolveModel, contextToolEnabled, resolveSearchProfile, resolveTierProfile,
+  resolveNamedAgent,
 } from './config.js';
-import type { EngineConfig, AgentProfile, Role, SwarmRole, Tier } from './config.js';
+import type { EngineConfig, AgentProfile, Role, SwarmRole, Tier, NamedAgent } from './config.js';
 import type { UsageTally } from './usage.js';
 import type { SessionEvents } from './session-events.js';
 import type { ClientInterface } from './types.js';
@@ -299,51 +300,80 @@ export class ToolBelt {
    */
   private swarmTools(parent: ToolConfig): Tool<unknown>[] {
     const jobs = this.deps.agentJobs;
+    const namedAgents = this.deps.getConfig().namedAgents ?? [];
+
+    const properties: NonNullable<ToolInputSchema['properties']> = {
+      brief: {
+        type: 'string',
+        description:
+          'Self-contained instructions: what to change, where, what "done" looks like, and ' +
+          'anything it must not touch. The agent sees nothing else — not this conversation, ' +
+          'not your plan, not the other agents.',
+      },
+      tier: {
+        type: 'string',
+        enum: ['fast', 'deep'],
+        description:
+          'fast for mechanical or fully-specified work; deep for work needing judgement. ' +
+          'Fast agents are cheaper and quicker, so prefer them when the brief leaves little open.' +
+          (namedAgents.length > 0 ? ' Give this or agent_name, not both.' : ''),
+      },
+      toolset: {
+        type: 'string',
+        enum: ['readonly', 'edit', 'full'],
+        description:
+          'readonly to investigate, edit to change files, full to also run commands. Ask for ' +
+          'the least the brief needs: the user approves this, and a smaller ask is approved faster.' +
+          (namedAgents.some(a => a.toolset)
+            ? ' Not needed for a named agent whose own toolset is already fixed — see agent_name.'
+            : ''),
+      },
+    };
+    // Only advertised once at least one is configured, so a project that
+    // hasn't used `/team` sees this tool's schema exactly as it always has.
+    if (namedAgents.length > 0) {
+      properties.agent_name = {
+        type: 'string',
+        enum: namedAgents.map(a => a.name),
+        description: 'Delegate to one of this project\'s configured agents instead of a bare ' +
+          `tier — give this or tier, not both: ${namedAgents.map(a => this.describeNamedAgentOption(a)).join(', ')}.`,
+      };
+    }
 
     const spawn: ToolSpec = {
       name: 'spawn_agent',
       description: SPAWN_TOOL_DESCRIPTION,
       inputSchema: {
         type: 'object',
-        properties: {
-          brief: {
-            type: 'string',
-            description:
-              'Self-contained instructions: what to change, where, what "done" looks like, and ' +
-              'anything it must not touch. The agent sees nothing else — not this conversation, ' +
-              'not your plan, not the other agents.',
-          },
-          tier: {
-            type: 'string',
-            enum: ['fast', 'deep'],
-            description:
-              'fast for mechanical or fully-specified work; deep for work needing judgement. ' +
-              'Fast agents are cheaper and quicker, so prefer them when the brief leaves little open.',
-          },
-          toolset: {
-            type: 'string',
-            enum: ['readonly', 'edit', 'full'],
-            description:
-              'readonly to investigate, edit to change files, full to also run commands. Ask for ' +
-              'the least the brief needs: the user approves this, and a smaller ask is approved faster.',
-          },
-        },
-        required: ['brief', 'tier', 'toolset'],
+        properties,
+        // `toolset` drops out of `required` once any agent is named, the same
+        // way `tier` already does — a pinned agent supplies its own, and
+        // `resolveSpawnTarget` is what actually enforces "give one" for every
+        // other case, since a JSON schema can't say "required unless X".
+        required: namedAgents.length > 0 ? ['brief'] : ['brief', 'tier', 'toolset'],
       },
-      execute: async ({ brief, tier, toolset }) => {
+      execute: async ({ brief, tier, toolset, agent_name }) => {
+        const target = this.resolveSpawnTarget(
+          tier as Tier | undefined, agent_name as string | undefined, toolset as AgentToolset | undefined,
+        );
+        if (typeof target === 'string') return target;
+
         const job = jobs.start({
           brief: String(brief),
-          tier: tier as Tier,
-          toolset: toolset as AgentToolset,
+          tier: tier as Tier | undefined,
+          agentName: agent_name as string | undefined,
+          toolset: target.toolset,
           timeoutMs: this.deps.getConfig().agentTimeoutMs,
-          label: this.swarmLabel(tier as Tier),
+          label: target.label,
           run: ({ id, signal }) => this.runSpawnedAgent({
-            id, signal, brief: String(brief), tier: tier as Tier, toolset: toolset as AgentToolset,
+            id, signal, brief: String(brief), tier: tier as Tier | undefined,
+            agentName: agent_name as string | undefined, toolset: target.toolset,
           }),
         });
-        this.deps.log(`SWARM ${job.id} START ${job.tier} ${job.toolset} ${job.label} ${JSON.stringify(job.brief.slice(0, 200))}`);
+        this.deps.log(`SWARM ${job.id} START ${job.agentName ?? job.tier} ${job.toolset} ${job.label} ${JSON.stringify(job.brief.slice(0, 200))}`);
+        const who = job.agentName ? `"${job.agentName}"` : `the ${job.tier} tier`;
         return (
-          `Started ${job.id} on the ${job.tier} tier (${job.label}), toolset "${job.toolset}". ` +
+          `Started ${job.id} on ${who} (${job.label}), toolset "${job.toolset}". ` +
           `It is running now — carry on, and you will be told when it finishes.`
         );
       },
@@ -353,15 +383,27 @@ export class ToolBelt {
       withApproval(
         spawn,
         parent.approval,
-        (input) => ({
-          toolName: 'spawn_agent',
-          description: `Start a ${String(input.tier)} agent (${String(input.toolset)}) — ${this.swarmLabel(input.tier as Tier)}`,
-          // The brief *is* the consent question. Shown whole and unabridged:
-          // this is the one prompt where truncating the detail would hide the
-          // very thing being agreed to, since everything the agent later does
-          // is measured against these words.
-          detail: String(input.brief),
-        }),
+        (input) => {
+          const target = this.resolveSpawnTarget(
+            input.tier as Tier | undefined, input.agent_name as string | undefined, input.toolset as AgentToolset | undefined,
+          );
+          // A malformed call (both/neither tier and agent_name, or an unknown
+          // name) still has to show *something* at the gate — the model's raw
+          // input is the best available answer, since there is no resolved
+          // toolset to fall back to.
+          const label = typeof target === 'string' ? target : target.label;
+          const toolsetLabel = typeof target === 'string' ? String(input.toolset) : target.toolset;
+          const who = input.agent_name ? `"${String(input.agent_name)}" agent` : `${String(input.tier)} agent`;
+          return {
+            toolName: 'spawn_agent',
+            description: `Start a ${who} (${toolsetLabel}) — ${label}`,
+            // The brief *is* the consent question. Shown whole and unabridged:
+            // this is the one prompt where truncating the detail would hide the
+            // very thing being agreed to, since everything the agent later does
+            // is measured against these words.
+            detail: String(input.brief),
+          };
+        },
         parent.signal,
         parent.caller,
         parent.taskContext,
@@ -419,6 +461,56 @@ export class ToolBelt {
     return `${profile.provider}/${resolveModel(profile)}`;
   }
 
+  /**
+   * What `spawn_agent`'s `tier`/`agent_name` resolve to — the profile and
+   * toolset to run with, and the label to show at the approval gate and in
+   * the job list. Returns a plain-text error, not a throw, for the same
+   * reason `unknownAgent`/`unknownNamedAgent` do: a model that got the call
+   * wrong should be told so in its tool result, not crash the turn.
+   *
+   * A named agent's own `toolset`, when it has one, wins over whatever the
+   * caller passed — that is the whole point of pinning it: a "tester" fixed
+   * to `edit` should not be trusted to ask for `full` instead, so its own
+   * setting is authoritative rather than a default the caller can override.
+   */
+  private resolveSpawnTarget(
+    tier: Tier | undefined,
+    agentName: string | undefined,
+    toolset: AgentToolset | undefined,
+  ): { profile: AgentProfile; label: string; toolset: AgentToolset } | string {
+    if (Boolean(tier) === Boolean(agentName)) {
+      return 'Give exactly one of tier or agent_name.';
+    }
+    if (agentName) {
+      const named = resolveNamedAgent(this.deps.getConfig(), agentName);
+      if (!named) return this.unknownNamedAgent(agentName);
+      const resolvedToolset = named.toolset ?? toolset;
+      if (!resolvedToolset) return `"${agentName}" has no fixed toolset — give one: readonly, edit or full.`;
+      return {
+        profile: named.profile,
+        label: `${named.profile.provider}/${resolveModel(named.profile)}`,
+        toolset: resolvedToolset,
+      };
+    }
+    if (!toolset) return 'Give a toolset: readonly, edit or full.';
+    return { profile: resolveTierProfile(this.deps.getConfig(), tier as Tier), label: this.swarmLabel(tier as Tier), toolset };
+  }
+
+  private unknownNamedAgent(name: string): string {
+    const known = (this.deps.getConfig().namedAgents ?? []).map(a => a.name);
+    return known.length
+      ? `No agent named "${name}". Configured: ${known.join(', ')}.`
+      : `No agent named "${name}" — none are configured. Use /team add to define one.`;
+  }
+
+  /** One `agent_name` enum entry's description: what it's for, and whether
+   *  its toolset is fixed (so the model knows whether it still needs to pass
+   *  one). */
+  private describeNamedAgentOption(agent: NamedAgent): string {
+    const purpose = agent.description ?? `${agent.profile.provider}/${agent.profile.model ?? 'default'}`;
+    return agent.toolset ? `"${agent.name}" (${purpose}, toolset fixed to ${agent.toolset})` : `"${agent.name}" (${purpose})`;
+  }
+
   private unknownAgent(id: string): string {
     const known = this.deps.agentJobs.list().map(j => j.id);
     return known.length
@@ -473,12 +565,14 @@ export class ToolBelt {
     id: string;
     signal: AbortSignal;
     brief: string;
-    tier: Tier;
+    tier?: Tier;
+    agentName?: string;
     toolset: AgentToolset;
   }): Promise<string> {
     const config = this.deps.getConfig();
-    const profile = resolveTierProfile(config, opts.tier);
-    const role: SwarmRole = `swarm:${opts.tier}`;
+    const named = opts.agentName ? resolveNamedAgent(config, opts.agentName) : undefined;
+    const profile = named?.profile ?? resolveTierProfile(config, opts.tier ?? 'deep');
+    const role: SwarmRole = opts.agentName ? `swarm:agent:${opts.agentName}` : `swarm:${opts.tier ?? 'deep'}`;
     const label = `${profile.provider}/${resolveModel(profile)}`;
 
     const toolConfig: ToolConfig = {
@@ -501,7 +595,7 @@ export class ToolBelt {
     const tools = this.spawnedTools(toolConfig, opts.toolset);
     const agent = await createAgent(profile, tools, new History(), {
       maxTokens: config.maxTokens,
-      systemPrompt: buildSwarmPrompt(opts.toolset),
+      systemPrompt: buildSwarmPrompt(opts.toolset, named?.description),
       name: opts.id,
     });
     this.deps.events.attachSubAgentListeners(agent, tools, opts.id);

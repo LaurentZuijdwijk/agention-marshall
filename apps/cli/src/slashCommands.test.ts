@@ -249,6 +249,27 @@ describe('slashCommands', () => {
     });
   });
 
+  describe('/team', () => {
+    it('lists with no arguments, and with "list"', () => {
+      assert.deepEqual(resolveSlashCommand('/team'), { type: 'team', action: 'list' });
+      assert.deepEqual(resolveSlashCommand('/team list'), { type: 'team', action: 'list' });
+    });
+
+    // Provider/model/description all come from the wizard (view/TeamSetup.tsx)
+    // now, not from typed-out arguments — add takes none, same as /mcp add.
+    it('opens the wizard for add, which takes no arguments', () => {
+      assert.deepEqual(resolveSlashCommand('/team add'), { type: 'team', action: 'add' });
+    });
+
+    it('takes a name for remove', () => {
+      assert.deepEqual(resolveSlashCommand('/team remove tester'), { type: 'team', action: 'remove', name: 'tester' });
+    });
+
+    it('rejects remove with no name', () => {
+      assert.equal(resolveSlashCommand('/team remove').type, 'usage');
+    });
+  });
+
   describe('HELP text', () => {
     it('contains all command names', () => {
       for (const cmd of SLASH_COMMANDS) {

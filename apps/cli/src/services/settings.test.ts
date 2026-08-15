@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import {
   readSettings, resolveSettings, loadSettings, applySettings, projectSettings,
-  settingsWarnings, toSavedSafetyAgent, toSafetyAgentConfig, SETTINGS_VERSION,
+  settingsWarnings, toSavedSafetyAgent, toSafetyAgentConfig, toNamedAgents, SETTINGS_VERSION,
 } from './settings.js';
 import { configPath, globalConfigPath } from './config-store.js';
 import type { AgentProfile } from '@agentionai/marshall-engine';
@@ -250,5 +250,35 @@ describe('judge conversion', () => {
   it('leaves the key unset when nothing has one, so the engine can fall back to the env var', () => {
     const agent = toSafetyAgentConfig({ provider: 'claude', model: 'j' }, { mainProfile: main });
     assert.equal(agent.profile.apiKey, undefined);
+  });
+});
+
+describe('toNamedAgents', () => {
+  const credentialsFor = (host?: string, apiKey?: string) => () => ({ host, apiKey });
+
+  it('resolves the credential from the global provider list, not from the saved entry', () => {
+    const [agent] = toNamedAgents(
+      [{ name: 'tester', provider: 'claude', model: 'claude-haiku-4-5' }],
+      credentialsFor(undefined, 'stored-key'),
+    );
+    assert.equal(agent.profile.apiKey, 'stored-key');
+    assert.equal((agent as unknown as { apiKey?: string }).apiKey, undefined, 'the key belongs on the profile, not the agent');
+  });
+
+  it('carries the description through unset when absent', () => {
+    const [agent] = toNamedAgents([{ name: 'tester', provider: 'claude', model: 'm' }], credentialsFor());
+    assert.equal(agent.description, undefined);
+  });
+
+  it('carries a fixed toolset through', () => {
+    const [agent] = toNamedAgents(
+      [{ name: 'tester', provider: 'claude', model: 'm', toolset: 'edit' }], credentialsFor(),
+    );
+    assert.equal(agent.toolset, 'edit');
+  });
+
+  it('leaves toolset unset when the saved entry has none', () => {
+    const [agent] = toNamedAgents([{ name: 'tester', provider: 'claude', model: 'm' }], credentialsFor());
+    assert.equal(agent.toolset, undefined);
   });
 });

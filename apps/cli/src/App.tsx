@@ -39,7 +39,7 @@ import { describeUpdate, currentVersion } from './update-check.js';
 import type { UpdateInfo } from './update-check.js';
 import { ConfigService } from './services/config-service.js';
 import { useConfig } from './hooks/useConfig.js';
-import { toSafetyAgentConfig } from './services/settings.js';
+import { toNamedAgents, toSafetyAgentConfig } from './services/settings.js';
 import type { RuntimeMode } from './services/settings.js';
 import { completeSlash } from './slashCommands.js';
 import { completeAtPath, expandFileMentions } from './fileCompletion.js';
@@ -192,6 +192,7 @@ export function App({
       contextAgentProfile, plannerAgentProfile, reviewerAgentProfile,
       enableGitHub, enableWebSearch, maxTokens,
       mcpServers: savedConfig.mcpServers,
+      namedAgents: toNamedAgents(savedConfig.agents, config.credentialsFor),
       client, SessionCtor,
       light: settings.runtime === 'light',
       // Both derived from the one saved mode, so a session cannot come up
@@ -415,6 +416,8 @@ export function App({
           // `maxOutputTokens` have to survive the round trip.
           persistSafety(level, session?.safetyAgent);
         },
+        agents: savedConfig.agents,
+        onAgentsChanged: wizardActions.applyAgents,
       });
       return;
     }
@@ -469,7 +472,7 @@ export function App({
   // count to zero and makes it re-emit the whole transcript on the way back.
   // That was the duplicate banner after a model switch.
   const wizardActive = mode.type === 'settings-menu' || mode.type === 'mcp-setup'
-    || mode.type === 'setup' || mode.type === 'safety-setup';
+    || mode.type === 'team-setup' || mode.type === 'setup' || mode.type === 'safety-setup';
   const wizard = (
     <Wizard
       mode={mode}

@@ -21,6 +21,8 @@ export type Mode =
   | { type: 'question'; request: AskRequest }
   /** The `/mcp add` wizard, asking for url, name and token. */
   | { type: 'mcp-setup' }
+  /** The `/team add` wizard, asking for name, provider, model and description. */
+  | { type: 'team-setup' }
   /** `/safety agentic` — picking the model that reviews tool calls. */
   | { type: 'safety-setup' };
 

@@ -336,6 +336,17 @@ describe('scope', () => {
     await config.enableProjectMcpServer('gh');
     assert.deepEqual(JSON.parse(readFileSync(configPath(root), 'utf8')).mcp.enable, ['gh']);
   });
+
+  it('writes the named-agent roster to the project file, leaving the global one alone', async () => {
+    const root = ws();
+    const config = new ConfigService(root);
+    const tester = { name: 'tester', provider: 'claude', model: 'claude-haiku-4-5', description: 'writes tests' };
+    await config.saveAgents([tester]);
+
+    assert.deepEqual(JSON.parse(readFileSync(configPath(root), 'utf8')).agents, [tester]);
+    assert.equal(readGlobal().agents, undefined);
+    assert.deepEqual(config.snapshot().agents, [tester]);
+  });
 });
 
 describe('credential lookups', () => {

@@ -87,7 +87,10 @@ export type OutputEvent =
       type: 'agent-done';
       id: string;
       brief: string;
-      tier: 'deep' | 'fast';
+      /** Absent when spawned by `agentName` instead of a bare tier. */
+      tier?: 'deep' | 'fast';
+      /** Set when spawned via a saved named agent instead of a bare tier. */
+      agentName?: string;
       /** `provider/model` it ran on. */
       model: string;
       status: 'done' | 'failed' | 'timed-out';

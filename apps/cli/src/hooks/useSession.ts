@@ -1,6 +1,8 @@
 import { useRef, useState } from 'react';
 import { Session } from '@agentionai/marshall-engine';
-import type { AgentProfile, ClientInterface, McpServerConfig, SafetyAgentConfig, SafetyLevel } from '@agentionai/marshall-engine';
+import type {
+  AgentProfile, ClientInterface, McpServerConfig, NamedAgent, SafetyAgentConfig, SafetyLevel,
+} from '@agentionai/marshall-engine';
 import type { ConfigService } from '../services/config-service.js';
 import { toSavedSafetyAgent } from '../services/settings.js';
 
@@ -49,6 +51,10 @@ export interface UseSessionOptions {
   safetyAgent?: SafetyAgentConfig;
   /** Servers loaded from the global config, connected at session start. */
   mcpServers?: McpServerConfig[];
+  /** The saved `/team` roster, credentials already resolved — see
+   *  `toNamedAgents`. A later `/team` change applies live via
+   *  `session.setNamedAgents`, not by rebuilding. */
+  namedAgents?: NamedAgent[];
   client: ClientInterface;
   /** Fired after a rebuild, so the caller can restart its transcript. */
   onProfilesChanged(deep: AgentProfile, fast: AgentProfile | undefined): void;
@@ -72,6 +78,7 @@ export function useSession(options: UseSessionOptions): SessionController {
       models: { deep, fast },
       workspaceRoot, enableGitHub, enableWebSearch, maxTokens, light, swarm,
       mcpServers: options.mcpServers,
+      namedAgents: options.namedAgents,
       ...(safetyLevel ? { safetyLevel } : {}),
       ...(safetyAgent ? { safetyAgent } : {}),
       contextAgent: contextAgentProfile,

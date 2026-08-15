@@ -4,8 +4,12 @@ import type { RuntimeMode, SettingsScope } from './services/settings.js';
 
 // `/runtime` rather than `/mode`: a command name that is a strict prefix of
 // another one ("/mode" of "/model") makes tab completion actively wrong — the
-// complete, valid command silently grows into a different one.
-export const SLASH_COMMANDS = ['/agents', '/clear', '/cwd', '/exit', '/goal', '/help', '/jobs', '/login', '/mcp', '/memory', '/model', '/plan', '/review', '/runtime', '/safety', '/setup', '/stream', '/tokens', '/update', '/version'] as const;
+// complete, valid command silently grows into a different one. That rules out
+// `/agent` for the new named-agent command below: it's a strict prefix of the
+// existing `/agents` (which lists what's been *spawned*, a different concept
+// — see the comment on `SlashCommandResult`'s `'team'` member). `/team` is
+// the new command instead.
+export const SLASH_COMMANDS = ['/agents', '/clear', '/cwd', '/exit', '/goal', '/help', '/jobs', '/login', '/mcp', '/memory', '/model', '/plan', '/review', '/runtime', '/safety', '/setup', '/stream', '/team', '/tokens', '/update', '/version'] as const;
 
 /** Which tier `/model` is about to change. `both` is the first-run chain. */
 export type ModelTarget = 'both' | 'deep' | 'fast' | 'off';
@@ -69,7 +73,17 @@ export type SlashCommandResult =
    *  ruling those out actually narrows to the member carrying `server`. */
   | { type: 'mcp'; action: 'list' }
   | { type: 'mcp'; action: 'add' }
-  | { type: 'mcp'; action: 'remove' | 'reconnect'; server: string };
+  | { type: 'mcp'; action: 'remove' | 'reconnect'; server: string }
+  /** `/team` lists named agents the coder can delegate to by name; `add` opens
+   *  a wizard that defines or replaces one, `remove` forgets one by name. A
+   *  different command from `/agents` on purpose: that one lists what's been
+   *  *spawned* this session (ephemeral, engine-tracked); this one manages
+   *  persistent, named provider/model personas (saved to the project config)
+   *  — same word, different concept, so a different command rather than an
+   *  overloaded one. */
+  | { type: 'team'; action: 'list' }
+  | { type: 'team'; action: 'add' }
+  | { type: 'team'; action: 'remove'; name: string };
 
 const MODEL_TARGETS: Record<string, ModelTarget> = {
   '': 'both', deep: 'deep', fast: 'fast', off: 'off',
@@ -102,6 +116,7 @@ export const SUBCOMMANDS: Record<string, readonly SubcommandWord[]> = {
   '/jobs': [{ word: 'kill', operand: '<id>' }],
   '/agents': [{ word: 'stop', operand: '<id>' }],
   '/mcp': [{ word: 'add' }, { word: 'remove', operand: '<name>' }, { word: 'reconnect', operand: '<name>' }],
+  '/team': [{ word: 'add' }, { word: 'remove', operand: '<name>' }],
 };
 
 /**
@@ -237,6 +252,13 @@ export function resolveSlashCommand(input: string): SlashCommandResult {
       }
       return { type: 'agents', stop: id };
     }
+    case '/team': {
+      if (!args || args === 'list') return { type: 'team', action: 'list' };
+      const [verb, name] = args.split(/\s+/);
+      if (verb === 'add') return { type: 'team', action: 'add' };
+      if (verb === 'remove' && name) return { type: 'team', action: 'remove', name };
+      return { type: 'usage', message: `usage: /team [add|remove <name>|list] — got "${args}"` };
+    }
   }
 }
 
@@ -252,6 +274,9 @@ export const HELP = `commands:
   /review [notes]    — get a second opinion on the current workspace state
   /agents            — list the agents the model has spawned this session
   /agents stop <id>  — stop one agent, or "stop all" for every running one
+  /team              — list the named agents the coder can delegate to by name
+  /team add          — open a wizard to define or replace a named agent
+  /team remove <name> — forget a named agent
   /safety            — show the current tool-call safety level and what each does
   /safety yolo       — no approval gate at all (dangerous)
   /safety default    — you approve every state-changing tool call (the default)
@@ -270,7 +295,7 @@ export const HELP = `commands:
   /runtime default   — use the full tool belt
   /runtime light     — use the lean tool belt for small models (no scratchpad,
                        background jobs or sub-agents; ~1100 fewer tokens per request)
-  /runtime agentic   — use agentic behaviour (coming soon)
+  /runtime agentic   — full tool belt + spawn_agent for background and named agents
   /runtime <mode> --global
                      — save it for every workspace, not just this one
   /version           — show the installed version

@@ -19,7 +19,7 @@ import { traceRender } from '../renderTrace.js';
 /** Sentinel row offered when picking the fast tier — means "don't tier at all". */
 const SAME_AS_DEEP = '(same as deep)';
 
-function ProviderSelect({ onSelect, onBack, offerSameAsDeep, customProviders }: {
+export function ProviderSelect({ onSelect, onBack, offerSameAsDeep, customProviders }: {
   onSelect: (p: Provider | typeof SAME_AS_DEEP, name?: string) => void;
   onBack: () => void;
   offerSameAsDeep?: boolean;

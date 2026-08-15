@@ -9,6 +9,7 @@ import type {
   AgentProfile, AgentJob, McpServerState, RuntimeMode, SafetyLevel, SafetyAgentConfig, UsageReport,
 } from '@agentionai/marshall-engine';
 import type { BackgroundJob } from '@agentionai/marshall-tools';
+import type { SavedAgentEntry } from './services/config-store.js';
 
 // ── fakes ─────────────────────────────────────────────────────────────────────
 
@@ -407,6 +408,70 @@ describe('/agents', () => {
     runSlashCommand('/agents kill agent1', deps);
     assert.equal(pushed[0].role, 'error');
     assert.match(pushed[0].content, /usage: \/agents/);
+  });
+});
+
+describe('/team', () => {
+  const tester: SavedAgentEntry = {
+    name: 'tester', provider: 'claude', model: 'claude-haiku-4-5', description: 'writes and runs unit tests',
+  };
+
+  it('says there is nothing configured yet', () => {
+    const { deps, pushed } = setup();
+    runSlashCommand('/team', deps);
+    assert.match(pushed[0].content, /no named agents/);
+  });
+
+  it('lists each agent with its provider, model and description', () => {
+    const { deps, pushed } = setup({ agents: [tester] });
+    runSlashCommand('/team list', deps);
+    assert.match(pushed[0].content, /tester\s+claude\/claude-haiku-4-5\s+—\s+writes and runs unit tests/);
+  });
+
+  it('lists a fixed toolset between the model and the description', () => {
+    const { deps, pushed } = setup({ agents: [{ ...tester, toolset: 'edit' }] });
+    runSlashCommand('/team list', deps);
+    assert.match(pushed[0].content, /claude-haiku-4-5\s+toolset: edit\s+—\s+writes and runs unit tests/);
+  });
+
+  // Building the entry (provider, model, description) is the wizard's job
+  // (view/TeamSetup.tsx) now — add just opens it, same as /mcp add.
+  it('opens the wizard for add, without touching the agent list itself', () => {
+    const changed: SavedAgentEntry[][] = [];
+    const { deps, modes } = setup({ agents: [], onAgentsChanged: (next) => changed.push(next) });
+    runSlashCommand('/team add', deps);
+    assert.deepEqual(modes, [{ type: 'team-setup' }]);
+    assert.equal(changed.length, 0);
+  });
+
+  it('removes an agent by name', () => {
+    const changed: SavedAgentEntry[][] = [];
+    const { deps, pushed } = setup({ agents: [tester], onAgentsChanged: (next) => changed.push(next) });
+    runSlashCommand('/team remove tester', deps);
+    assert.deepEqual(changed, [[]]);
+    assert.match(pushed[0].content, /removed tester/);
+  });
+
+  it('reports removing an unknown name without touching anything', () => {
+    const changed: SavedAgentEntry[][] = [];
+    const { deps, pushed } = setup({ agents: [tester], onAgentsChanged: (next) => changed.push(next) });
+    runSlashCommand('/team remove nope', deps);
+    assert.equal(changed.length, 0);
+    assert.match(pushed[0].content, /no named agent "nope"/);
+  });
+
+  // Unlike /agents and /mcp: a named agent is config, not something the
+  // engine has to be running to define, list or remove.
+  it('works with no model chosen yet', () => {
+    const changed: SavedAgentEntry[][] = [];
+    const { deps, modes, pushed } = setup({ session: null, agents: [tester], onAgentsChanged: (next) => changed.push(next) });
+
+    runSlashCommand('/team add', deps);
+    assert.deepEqual(modes, [{ type: 'team-setup' }]);
+
+    runSlashCommand('/team remove tester', deps);
+    assert.deepEqual(changed, [[]]);
+    assert.doesNotMatch(pushed.at(-1)?.content ?? '', /no model chosen/);
   });
 });
 

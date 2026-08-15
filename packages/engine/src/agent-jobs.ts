@@ -57,7 +57,10 @@ export interface AgentJob {
   id: string;
   /** The instructions the parent gave it, as approved at the spawn gate. */
   brief: string;
-  tier: Tier;
+  /** Absent when spawned by `agentName` instead of a bare tier. */
+  tier?: Tier;
+  /** Set when spawned via a saved `NamedAgent` instead of a bare tier. */
+  agentName?: string;
   toolset: AgentToolset;
   /** `provider/model`, for display and the log. */
   label: string;
@@ -72,7 +75,8 @@ export interface AgentJob {
 
 export interface StartAgentJobOptions {
   brief: string;
-  tier: Tier;
+  tier?: Tier;
+  agentName?: string;
   toolset: AgentToolset;
   label: string;
   /**
@@ -184,12 +188,13 @@ export function createAgentJobs(options: AgentJobsOptions = {}): AgentJobs {
   };
 
   return {
-    start({ brief, tier, toolset, label, run, timeoutMs }) {
+    start({ brief, tier, agentName, toolset, label, run, timeoutMs }) {
       const id = `agent${++counter}`;
       const job: AgentJob = {
         id,
         brief,
         tier,
+        agentName,
         toolset,
         label,
         startedAt: Date.now(),
@@ -272,5 +277,5 @@ export function summariseAgentJob(job: AgentJob): string {
   const state = job.status === 'running'
     ? `running for ${elapsed.toFixed(1)}s`
     : `${job.status} after ${elapsed.toFixed(1)}s`;
-  return `${job.id} (${job.tier}, ${job.label}, ${job.toolset}) — ${state}`;
+  return `${job.id} (${job.agentName ?? job.tier}, ${job.label}, ${job.toolset}) — ${state}`;
 }

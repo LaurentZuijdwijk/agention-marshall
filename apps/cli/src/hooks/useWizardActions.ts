@@ -3,8 +3,10 @@ import type { AgentProfile, McpServerConfig, Provider, SafetyAgentConfig, Safety
 import type { Mode } from '../mode.js';
 import type { McpScope } from '../view/McpSetup.js';
 import type { ConfigService } from '../services/config-service.js';
+import type { SavedAgentEntry } from '../services/config-store.js';
 import type { Transcript } from './useTranscript.js';
 import { chosenProfile } from '../startup/profiles.js';
+import { toNamedAgents } from '../services/settings.js';
 import { G } from '../view/theme.js';
 
 export interface UseWizardActionsOptions {
@@ -94,6 +96,30 @@ export function useWizardActions({
       .catch((err: unknown) => transcript.push('error', err instanceof Error ? err.message : String(err)));
   };
 
+  // ── named agents (/team) ────────────────────────────────────────────────────
+  //
+  // Persisted and applied together — the settings menu's runtime/safety
+  // changes do the same pair for the same reason: a subscriber that only saw
+  // the write, or only the live session, would show the two disagreeing until
+  // the next full sync.
+  const applyAgents = (agents: SavedAgentEntry[]) => {
+    void config.saveAgents(agents);
+    session?.setNamedAgents(toNamedAgents(agents, config.credentialsFor));
+  };
+
+  // Same shape `describeAgentEntry` (commands.ts) lists it in, so `/team list`
+  // afterwards reads as a continuation of this line, not a different format.
+  const handleTeamAdd = (entry: SavedAgentEntry) => {
+    const current = config.snapshot().agents;
+    const existed = current.some(a => a.name === entry.name);
+    applyAgents([...current.filter(a => a.name !== entry.name), entry]);
+    const head = `${entry.name}  ${entry.provider}/${entry.model}`;
+    const withToolset = entry.toolset ? `${head}  toolset: ${entry.toolset}` : head;
+    transcript.push('info',
+      `${existed ? 'updated' : 'added'} ${entry.description ? `${withToolset}  — ${entry.description}` : withToolset}`);
+    setMode({ type: 'idle' });
+  };
+
   // ── safety judge wizard (/safety agentic) ─────────────────────────────────
   //
   // Deliberately does not go through `applyProfiles`/`persist()`: that path
@@ -148,5 +174,6 @@ export function useWizardActions({
   return {
     seedProfile, persistMcp, removeMcpServer, handleMcpAdd,
     handleSafetySetupComplete, handleSetupComplete, persistSafety,
+    applyAgents, handleTeamAdd,
   };
 }
