@@ -125,6 +125,66 @@ test('calling run() while a run is already in progress emits an error event', as
 });
 
 // ---------------------------------------------------------------------------
+// busy, and announcing the turn that made it busy
+//
+// These two go together. `busy` is the condition the guard above refuses on,
+// and a client can only avoid walking into that refusal if it is told the turn
+// started at the moment the session was claimed — not several awaited seconds
+// later, once MCP has settled and the agent is built.
+// ---------------------------------------------------------------------------
+
+test('busy is false on a new session', () => {
+  const session = makeSession(tempRoot(), makeClient());
+  assert.equal(session.busy, false);
+});
+
+test('busy is true for the whole of a turn and false once it ends', async () => {
+  const session = makeSession(tempRoot(), makeClient());
+
+  const running = session.run('a task').catch(() => {});
+  // Synchronously: the controller is claimed before the first await, which is
+  // the whole reason a client cannot infer this from the event stream.
+  assert.equal(session.busy, true, 'claimed before run() yields');
+
+  await running;
+  assert.equal(session.busy, false, 'released in run()\'s finally');
+});
+
+test('run() announces the turn before it awaits anything', async () => {
+  const events: OutputEvent[] = [];
+  const session = makeSession(tempRoot(), makeClient(events));
+
+  const running = session.run('a task').catch(() => {});
+  assert.deepEqual(events, [{ type: 'thinking' }],
+    'the turn is announced at claim time, not after the setup awaits');
+
+  await running;
+});
+
+test('a side agent announces its turn before it awaits anything', async () => {
+  const events: OutputEvent[] = [];
+  const session = makeSession(tempRoot(), makeClient(events));
+
+  const planning = session.plan('plan this').catch(() => {});
+  assert.deepEqual(events, [{ type: 'thinking' }]);
+
+  await planning;
+});
+
+test('a refused turn announces nothing', async () => {
+  const events: OutputEvent[] = [];
+  const session = makeSession(tempRoot(), makeClient(events));
+
+  const first = session.run('task one').catch(() => {});
+  const second = session.run('task two').catch(() => {});
+  // One turn, one announcement: the refused call must not put a second spinner
+  // up over a turn it never started.
+  assert.equal(events.filter(e => e.type === 'thinking').length, 1);
+
+  await Promise.all([first, second]);
+});
+
+// ---------------------------------------------------------------------------
 // background jobs & auto-resume
 //
 // `run()` reaches a real provider and fails, which is fine here: what these
@@ -174,8 +234,23 @@ test('a job finishing on an idle session starts a turn', async () => {
 
   await waitFor(() => jobDone(events).length > 0);
   assert.equal(jobDone(events)[0].resuming, true);
-  // `thinking` is emitted once per turn, right before the agent runs.
+  // `thinking` is emitted once per turn, as the session is claimed.
   await waitFor(() => events.some(e => e.type === 'thinking'));
+  session.dispose();
+});
+
+test('a turn a job started is announced before the session reads as busy', async () => {
+  const events: OutputEvent[] = [];
+  const session = jobSession(tempRoot(), makeClient(events));
+  session.backgroundJobs.start({ command: 'true', cwd: tempRoot() });
+
+  await waitFor(() => session.busy);
+  // The regression: the announcement used to come after the setup awaits, so
+  // for a second or more the session was busy with a turn nobody had been told
+  // about. A client sitting at an idle prompt submitted into that window and
+  // had the prompt refused and dropped.
+  assert.ok(events.some(e => e.type === 'thinking'),
+    'anything that can observe the session as busy has already been told a turn started');
   session.dispose();
 });
 

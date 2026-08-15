@@ -28,7 +28,7 @@ import { writeFile, mkdir, chmod } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import type { AgentProfile, McpServerConfig } from '@agentionai/marshall-engine';
 import {
-  buildConfig, configPath, globalConfigPath, loadConfig, loadMcpWarnings, projectSecretWarnings,
+  buildConfig, configPath, findProvider, globalConfigPath, loadConfig, loadMcpWarnings, projectSecretWarnings,
   providerCredentials, providerKeyForHost, readJsonConfig, removeProvider, resolveMcpServers,
   withMcpServers, withProjectMcp,
 } from './config-store.js';
@@ -154,12 +154,34 @@ export class ConfigService {
     return this.write('global', 'model settings', config => buildConfig(deep, fast, config));
   }
 
-  /** Forget one endpoint's stored host and key. */
+  /**
+   * Forget one endpoint's stored host and key, wherever it is defined.
+   *
+   * A provider entry can live in the global file, the project file, or both —
+   * `mergeProviders` combines the two field by field, and the merged result is
+   * what the settings menu shows. Removal has to check both rather than assume
+   * global, or an entry the project file contributes (a shared host with no
+   * key, committed for the whole team) survives the write untouched and
+   * reappears on the very next merge, while the UI has already said it was
+   * removed.
+   *
+   * Each file is only opened if the entry actually lives there: writing to the
+   * project scope unconditionally would create `.marshall/config.json` out of
+   * nothing for an entry that only ever lived in the global one.
+   */
   removeProvider(ref: ProviderRef): Promise<boolean> {
-    return this.write('global', 'provider list', config => ({
+    const inGlobal = findProvider(readJsonConfig(globalConfigPath()).providers, ref) !== undefined;
+    const inProject = findProvider(readJsonConfig(configPath(this.workspaceRoot)).providers, ref) !== undefined;
+    if (!inGlobal && !inProject) return Promise.resolve(false);
+
+    const drop = (config: SavedConfig): SavedConfig => ({
       ...config,
       providers: removeProvider(config.providers ?? [], ref),
-    }));
+    });
+    return Promise.all([
+      ...(inGlobal ? [this.write('global', 'provider list', drop)] : []),
+      ...(inProject ? [this.write('project', 'provider list', drop)] : []),
+    ]).then(results => results.every(Boolean));
   }
 
   /**

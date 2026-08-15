@@ -13,7 +13,7 @@ import { App } from './App.js';
 import { ConfigService } from './services/config-service.js';
 import { SETTINGS_VERSION } from './services/settings.js';
 import type { SettingsFile } from './services/settings.js';
-import { fakeStdout, fakeStdin, renderTui, waitFor } from './testing/ink.js';
+import { fakeStdout, fakeStdin, renderTui, waitFor, KEY } from './testing/ink.js';
 
 // ── test helpers ───────────────────────────────────────────────────────────────
 
@@ -69,10 +69,17 @@ let mockInterrupt: (() => void) | null = null;
 let mockClear: (() => Promise<string>) | null = null;
 let mockMessages: any[] = [];
 let mockSetRuntime: ((mode: string) => void) | null = null;
+let mockBusy = false;
+/** The engine-side client the App handed to the session, for driving events. */
+let engineClient: { onOutput(event: any): void } | null = null;
+/** Every `setProfiles` call, in order — how a live model switch is observed. */
+let setProfilesCalls: Array<{ deep: any; fast: any }> = [];
 
 class MockSession {
   opts: any;
-  constructor(opts: any) { this.opts = opts; }
+  constructor(opts: any, client: any) { this.opts = opts; engineClient = client; }
+  get busy(): boolean { return mockBusy; }
+  setProfiles(deep: any, fast: any): void { setProfilesCalls.push({ deep, fast }); }
   run(text: string, images: unknown[] = []): Promise<void> {
     if (mockRun) return mockRun(text, images);
     return Promise.resolve();
@@ -111,6 +118,9 @@ describe('App component', () => {
     mockClear = null;
     mockMessages = [];
     mockSetRuntime = null;
+    mockBusy = false;
+    engineClient = null;
+    setProfilesCalls = [];
   });
 
   it('renders without error when model is provided', () => {
@@ -407,6 +417,96 @@ describe('App component', () => {
       const image = sent[0].images[0] as { data: string; mimeType: string };
       assert.equal(image.mimeType, 'image/png');
       assert.ok(Buffer.from(image.data, 'base64').equals(png), 'the bytes survive the round trip');
+    } finally {
+      instance.unmount();
+    }
+  });
+
+  // Switching the deep tier via /model used to spread the *whole* outgoing
+  // profile before applying the new choice, so a switch to a provider with no
+  // name of its own kept the old one — a named openai-compatible endpoint's
+  // `name` surviving onto an unrelated provider. That mislabels the header
+  // (`providerName ?? provider`) and, because the result is what gets
+  // persisted, corrupts the saved config for every session after.
+  it('does not carry the outgoing profile\'s name into a /model switch to an unnamed endpoint', async () => {
+    const ws = mkTemp();
+    const stream = fakeStdout(chunk => { capturedOutput += chunk; });
+    const stdin = fakeStdin();
+
+    // MockSetup's onComplete only ever passes (provider, model) — no name, no
+    // host, no key — which is exactly the "switched to an unnamed endpoint"
+    // case this test is about.
+    const instance = renderTui(
+      React.createElement(App, {
+        workspaceRoot: ws,
+        agentProfile: { provider: 'openai-compatible' as const, model: 'zai-glm-4.7', name: 'cerebras' },
+        SessionCtor: MockSession as any,
+        SetupCtor: MockSetup as any,
+        startLoginCtor: mockStartLogin,
+        completeLoginCtor: mockCompleteLogin,
+      } as any),
+      { stdout: stream, stdin },
+    );
+
+    try {
+      await waitFor(() => capturedOutput.includes('type a task'));
+
+      stdin.push('/model deep');
+      await waitFor(() => capturedOutput.includes('/model deep'));
+      stdin.push(KEY.enter);
+
+      await waitFor(() => setProfilesCalls.length > 0, 'the switch to reach the session');
+      assert.equal(setProfilesCalls[0].deep.provider, 'claude');
+      assert.equal(setProfilesCalls[0].deep.name, undefined,
+        'the previous endpoint\'s name must not survive onto an unrelated provider');
+    } finally {
+      instance.unmount();
+    }
+  });
+
+  // A turn this UI did not start still owns the session: a finished background
+  // job wakes the agent on its own. Going by the visible mode alone, the prompt
+  // typed over that idle-looking screen went to session.run(), came back as
+  // "A task is already running." and was lost.
+  it('queues a prompt typed while a turn the engine started owns the session', async () => {
+    const sent: string[] = [];
+    mockRun = async (text) => { sent.push(text); };
+
+    const ws = mkTemp();
+    const stream = fakeStdout(chunk => { capturedOutput += chunk; });
+    const stdin = fakeStdin();
+
+    const instance = renderTui(
+      React.createElement(App, {
+        workspaceRoot: ws,
+        agentProfile: { provider: 'claude' as const, model: 'claude-sonnet-4-6' },
+        SessionCtor: MockSession as any,
+        startLoginCtor: mockStartLogin,
+        completeLoginCtor: mockCompleteLogin,
+      } as any),
+      { stdout: stream, stdin },
+    );
+
+    try {
+      await waitFor(() => capturedOutput.includes('type a task'));
+
+      // The background job the last turn started has finished, and the engine
+      // has claimed the session to pick it up. Nothing here typed to cause it.
+      mockBusy = true;
+
+      stdin.push('what about background jobs?');
+      await waitFor(() => capturedOutput.includes('what about background jobs?'));
+      stdin.push(KEY.enter);
+
+      await waitFor(() => capturedOutput.includes('queued prompt 1'), 'the queued-prompt row');
+      assert.deepEqual(sent, [], 'nothing is sent into a session that would refuse it');
+
+      // The resume turn ends and the session is free again.
+      mockBusy = false;
+      engineClient!.onOutput({ type: 'response', text: 'the suite passed' });
+
+      await waitFor(() => sent.length > 0, 'the queued prompt to run');
+      assert.equal(sent[0], 'what about background jobs?');
     } finally {
       instance.unmount();
     }

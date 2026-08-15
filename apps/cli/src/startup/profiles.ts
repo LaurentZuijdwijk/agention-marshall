@@ -49,13 +49,19 @@ function checkProvider(name: string, label: string): Provider {
 export function resolveProfiles(flags: CliFlags, config: SavedConfig): ResolvedProfiles {
   const saved = savedDeepProfile(config);
   const provider = checkProvider(flags.provider ?? saved.provider ?? 'claude', 'provider');
+  // A named endpoint belongs to the provider it was saved under. `--provider`
+  // can resolve to a different one, and `saved.name` naming that other
+  // provider's server would mislabel the header and misdirect the credential
+  // lookup below — e.g. an openai-compatible "LM Studio" carried onto a
+  // `--provider claude` run.
+  const name = saved.provider === provider ? saved.name : undefined;
 
   // Per-endpoint last-used host/key — lets each one keep its own settings as the
   // user switches between them, instead of one flat host being overwritten.
-  const savedEntry = providerCredentials(config.providers, { provider, name: saved.name });
+  const savedEntry = providerCredentials(config.providers, { provider, name });
   const agentProfile: AgentProfile = {
     provider,
-    ...(saved.name ? { name: saved.name } : {}),
+    ...(name ? { name } : {}),
     // undefined when given neither on the CLI nor in saved config — that is what
     // puts the App into the setup wizard on first run.
     model:  flags.model ?? saved.model,
@@ -119,4 +125,42 @@ function resolveFastProfile(
 
 function roleProfile(deep: AgentProfile, model: string | undefined): AgentProfile | undefined {
   return model ? { ...deep, model } : undefined;
+}
+
+/** What the setup wizard or the settings menu returned for one tier — a full
+ *  replacement, not a merge. `provider`/`model` are `null` for the fast
+ *  tier's "same as deep" row, which picks nothing of its own. */
+export interface ModelChoice {
+  provider: Provider | null;
+  model: string | null;
+  host?: string;
+  apiKey?: string;
+  name?: string;
+}
+
+/**
+ * The profile that results from picking a new endpoint interactively — the
+ * wizard-and-settings-menu counterpart to `resolveProfiles` above, which does
+ * the same job for CLI flags at startup.
+ *
+ * Only `reasoningEffort` carries over from `carryReasoningEffortFrom`, and
+ * only when the caller passes it — spreading the *whole* previous profile (as
+ * this used to) let a switch to a provider or an unnamed endpoint keep the
+ * old `name`, `host` or `apiKey`, none of which describe the endpoint just
+ * chosen. That was this same bug's other half: `resolveProfiles` above guards
+ * `name` the same way, against `saved` instead of against a fresh pick.
+ */
+export function chosenProfile(
+  choice: ModelChoice,
+  carryReasoningEffortFrom?: AgentProfile,
+): AgentProfile | undefined {
+  if (!choice.provider || !choice.model) return undefined;
+  return {
+    ...(carryReasoningEffortFrom ? { reasoningEffort: carryReasoningEffortFrom.reasoningEffort } : {}),
+    provider: choice.provider,
+    model: choice.model,
+    host: choice.host,
+    ...(choice.name ? { name: choice.name } : {}),
+    ...(choice.apiKey ? { apiKey: choice.apiKey } : {}),
+  };
 }

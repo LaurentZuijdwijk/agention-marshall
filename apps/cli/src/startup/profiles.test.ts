@@ -1,9 +1,10 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveProfiles, StartupError } from './profiles.js';
+import { resolveProfiles, chosenProfile, StartupError } from './profiles.js';
 import { parseCliArgs } from './args.js';
 import type { CliFlags } from './args.js';
 import type { SavedConfig } from '../services/config-store.js';
+import type { AgentProfile } from '@agentionai/marshall-engine';
 
 /** Flags as if nothing was passed, so each test states only what it varies. */
 function flags(overrides: Partial<CliFlags> = {}): CliFlags {
@@ -46,6 +47,28 @@ describe('resolveProfiles — deep tier', () => {
     assert.strictEqual(agentProfile.provider, 'llamacpp');
     assert.strictEqual(agentProfile.model, 'local');
     assert.strictEqual(agentProfile.host, 'http://cli');
+  });
+
+  it('drops the saved endpoint name when a CLI flag switches to a different provider', () => {
+    // The saved deep tier is a named openai-compatible endpoint. Overriding the
+    // provider on the CLI must not carry that name onto the new provider — the
+    // name identifies an endpoint that belongs to the old one, and describes a
+    // server the new provider was never pointed at.
+    const config: SavedConfig = {
+      models: { deep: { provider: 'openai-compatible', name: 'LM Studio', model: 'llama-3' } },
+    };
+    const { agentProfile } = resolveProfiles(flags({ provider: 'claude' }), config);
+    assert.strictEqual(agentProfile.provider, 'claude');
+    assert.strictEqual(agentProfile.name, undefined);
+  });
+
+  it('keeps the saved endpoint name when the provider is not overridden', () => {
+    const config: SavedConfig = {
+      models: { deep: { provider: 'openai-compatible', name: 'LM Studio', model: 'llama-3' } },
+    };
+    const { agentProfile } = resolveProfiles(flags(), config);
+    assert.strictEqual(agentProfile.provider, 'openai-compatible');
+    assert.strictEqual(agentProfile.name, 'LM Studio');
   });
 
   it('falls back to the provider entry for host and key', () => {
@@ -160,5 +183,53 @@ describe('parseCliArgs', () => {
     assert.strictEqual(parsed.fastModel, 'small');
     assert.strictEqual(parsed.fastHost, 'http://box:8080');
     assert.strictEqual(parsed.reviewerModel, 'r');
+  });
+});
+
+// The interactive counterpart to `resolveProfiles` above: what the setup
+// wizard or settings menu produces when it replaces one tier's endpoint.
+describe('chosenProfile', () => {
+  it('is undefined for the fast tier\'s "same as deep" row', () => {
+    assert.strictEqual(chosenProfile({ provider: null, model: null }), undefined);
+  });
+
+  it('builds a profile from a full choice', () => {
+    const profile = chosenProfile({
+      provider: 'llamacpp', model: 'local', host: 'http://box:8080', apiKey: 'k',
+    });
+    assert.deepStrictEqual(profile, { provider: 'llamacpp', model: 'local', host: 'http://box:8080', apiKey: 'k' });
+  });
+
+  it('does not carry a name onto a different provider than the one it was saved under', () => {
+    // The regression this exists for: switching to an unnamed llamacpp entry
+    // used to keep a previous named openai-compatible endpoint's name, which
+    // mislabelled the header and got persisted back into the saved config.
+    const profile = chosenProfile({ provider: 'llamacpp', model: 'local' });
+    assert.strictEqual(profile?.name, undefined);
+  });
+
+  it('keeps the name the wizard actually returned', () => {
+    const profile = chosenProfile({ provider: 'openai-compatible', model: 'llama-3', name: 'LM Studio' });
+    assert.strictEqual(profile?.name, 'LM Studio');
+  });
+
+  it('carries reasoningEffort only from the profile explicitly named to carry it from', () => {
+    const previous: AgentProfile = { provider: 'openai', model: 'gpt-4o', reasoningEffort: 'high' };
+    const withCarry = chosenProfile({ provider: 'llamacpp', model: 'local' }, previous);
+    assert.strictEqual(withCarry?.reasoningEffort, 'high');
+
+    const withoutCarry = chosenProfile({ provider: 'llamacpp', model: 'local' });
+    assert.strictEqual(withoutCarry?.reasoningEffort, undefined);
+  });
+
+  it('does not carry host or apiKey from the previous profile', () => {
+    // Those describe the endpoint being left, not the one just chosen — unlike
+    // reasoningEffort, which is a preference rather than a connection detail.
+    const previous: AgentProfile = {
+      provider: 'openai-compatible', model: 'old', host: 'http://old', apiKey: 'old-key',
+    };
+    const profile = chosenProfile({ provider: 'llamacpp', model: 'local' }, previous);
+    assert.strictEqual(profile?.host, undefined);
+    assert.strictEqual(profile?.apiKey, undefined);
   });
 });

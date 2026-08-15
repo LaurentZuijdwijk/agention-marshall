@@ -20,6 +20,15 @@ function readGlobal(): any {
     ? JSON.parse(readFileSync(globalConfigPath(), 'utf8'))
     : {};
 }
+function writeProject(root: string, contents: unknown): void {
+  mkdirSync(dirname(configPath(root)), { recursive: true });
+  writeFileSync(configPath(root), JSON.stringify(contents));
+}
+function readProject(root: string): any {
+  return existsSync(configPath(root))
+    ? JSON.parse(readFileSync(configPath(root), 'utf8'))
+    : {};
+}
 
 // Every test gets its own $XDG_CONFIG_HOME so the global config never touches
 // the real developer machine, and tests can't see each other's state.
@@ -141,6 +150,59 @@ describe('disk is the source of truth', () => {
 
     await config.removeProvider({ provider: 'openai-compatible', name: 'LM Studio' });
     assert.deepEqual(config.snapshot().providers, [{ provider: 'openai-compatible', host: 'http://plain' }]);
+  });
+
+  // `mergeProviders` deliberately lets the project file contribute an entry —
+  // a shared host with no key, committed for the whole team — and merges it
+  // into the same list a global entry appears in. Removal has to reach every
+  // file an entry actually lives in, or the part left behind survives the
+  // write and comes back on the very next merge while the UI already said it
+  // was gone.
+  it('removes an entry that lives only in the project file', async () => {
+    const root = ws();
+    writeProject(root, { providers: [{ provider: 'llamacpp', host: 'http://ci-box:8080' }] });
+    const config = new ConfigService(root);
+    assert.equal(config.snapshot().providers.length, 1);
+
+    const removed = await config.removeProvider({ provider: 'llamacpp' });
+    assert.equal(removed, true);
+    assert.deepEqual(config.snapshot().providers, []);
+    assert.deepEqual(readProject(root).providers, [], 'the project file itself must lose the entry too');
+  });
+
+  it('removes an entry that lives in both files', async () => {
+    const root = ws();
+    writeGlobal({ providers: [{ provider: 'llamacpp', host: 'http://old-host', apiKey: 'k' }] });
+    writeProject(root, { providers: [{ provider: 'llamacpp', host: 'http://ci-box:8080' }] });
+    const config = new ConfigService(root);
+    // The merged view: project's host wins, global's key survives since the
+    // project layer can never supply one.
+    assert.deepEqual(config.snapshot().providers, [{ provider: 'llamacpp', host: 'http://ci-box:8080', apiKey: 'k' }]);
+
+    await config.removeProvider({ provider: 'llamacpp' });
+    assert.deepEqual(config.snapshot().providers, []);
+    assert.deepEqual(readGlobal().providers, [], 'left in the global file, it would reappear on the next merge');
+    assert.deepEqual(readProject(root).providers, [], 'left in the project file, it would reappear on the next merge');
+  });
+
+  it('does not create a project config file for an entry that only ever lived in the global one', async () => {
+    const root = ws();
+    writeGlobal({ providers: [{ provider: 'llamacpp', host: 'http://box' }] });
+    const config = new ConfigService(root);
+
+    await config.removeProvider({ provider: 'llamacpp' });
+    assert.equal(existsSync(configPath(root)), false,
+      'a scope the entry never touched must not be written at all');
+  });
+
+  it('reports false and touches nothing for an entry that exists nowhere', async () => {
+    const root = ws();
+    writeGlobal({ providers: [{ provider: 'llamacpp', host: 'http://box' }] });
+    const config = new ConfigService(root);
+
+    const removed = await config.removeProvider({ provider: 'openrouter' });
+    assert.equal(removed, false);
+    assert.deepEqual(config.snapshot().providers, [{ provider: 'llamacpp', host: 'http://box' }]);
   });
 });
 

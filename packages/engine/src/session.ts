@@ -111,6 +111,42 @@ function resumeInstructionFor(reports: readonly PendingReport[]): string {
   return agents ? AGENT_RESUME_INSTRUCTION : AUTO_RESUME_INSTRUCTION;
 }
 
+/**
+ * Throws if `signal` is already aborted.
+ *
+ * Every turn spends time on awaited setup — MCP settling, an agent being
+ * built — before it reaches the model call this guards, and the turn has been
+ * on screen for all of it, so Esc can already have fired by the time this
+ * runs. `signal.addEventListener('abort', ...)` never fires for a signal that
+ * is *already* aborted, so without this check `raceAbort` below would wait on
+ * a call the user already called off. Thrown rather than checked inline by
+ * each caller, so it lands in the same catch as an abort that arrives
+ * mid-stream and is reported identically either way.
+ */
+function throwIfAborted(signal: AbortSignal): void {
+  if (signal.aborted) throw new DOMException('Task interrupted by user', 'AbortError');
+}
+
+/**
+ * Await `work`, but reject immediately if `signal` fires first.
+ *
+ * The agent SDK has no cancellation hook of its own: an abort can only stop
+ * this process *awaiting* the call, not the in-flight LLM/tool-call loop
+ * itself, which keeps running in the background until it ends naturally
+ * (every tool call it makes finds `signal.aborted` and short-circuits, so the
+ * abandoned work goes quiet rather than doing anything). Without this race,
+ * Esc would do nothing until that background work finished on its own, which
+ * can take minutes on a local model or a long `/review`.
+ */
+function raceAbort<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    work.then(resolve, reject);
+    signal.addEventListener('abort', () => {
+      reject(new DOMException('Task interrupted by user', 'AbortError'));
+    }, { once: true });
+  });
+}
+
 export class Session {
   private readonly history: History;
   private readonly maskingPlugin: ToolResultMaskingPlugin;
@@ -281,6 +317,20 @@ export class Session {
 
   get hasSteering(): boolean {
     return this.steeringContext !== null;
+  }
+
+  /**
+   * Whether a turn owns the session right now — the exact condition `run` and
+   * `runSideAgent` refuse on.
+   *
+   * Exposed because a client cannot infer it from the event stream alone. The
+   * engine claims the controller before it announces the turn, and a turn the
+   * engine started by itself (a background job finishing) is claimed with no
+   * user action behind it at all. A client that decides "am I busy?" from the
+   * last event it saw will submit into that window and have the prompt refused.
+   */
+  get busy(): boolean {
+    return this.controller !== null;
   }
 
   get light(): boolean {
@@ -725,6 +775,107 @@ export class Session {
     void this.mcp.disconnect().catch(() => {});
   }
 
+  // ── turn lifecycle ───────────────────────────────────────────────────────────
+  //
+  // `run` (the coder) and `runSideAgent` (/plan, /goal, /review) are two
+  // different turns — different tools, different history, different recovery
+  // on a bad request — but they open, close and report an abort identically.
+  // That scaffolding lives here once, so a fix to it applies to every turn by
+  // construction instead of by remembering to port it: the gap this closes is
+  // exactly how `runSideAgent` ended up swallowing Esc after `run` was fixed
+  // to stop doing the same thing.
+
+  /**
+   * Refuses a new turn when one already owns the session.
+   *
+   * Checked before either turn spends anything setting up its own work, so
+   * "already running" always wins over any other reason a turn might refuse
+   * to start.
+   */
+  private refuseIfBusy(): boolean {
+    if (!this.controller) return false;
+    this.client.onOutput({ type: 'error', message: 'A task is already running.' });
+    return true;
+  }
+
+  /**
+   * Claims the controller for a new turn and announces it immediately.
+   *
+   * Everything between this and the model call is awaited work — MCP servers
+   * settling, a compression pass that calls a model of its own, the agent
+   * being built — and the session is busy for all of it. Announcing here
+   * rather than after that setup is what lets a client tell the two states
+   * apart: one that only learns "busy" at the end shows an idle prompt over a
+   * turn that has already started, invisible for a turn the user just typed
+   * and the whole story for one a finished background job started on its own.
+   *
+   * `currentTask` is set here too, not by the caller, so `interrupt()` always
+   * has something to restore into `steeringContext` regardless of which kind
+   * of turn it cut off — a side-agent turn used to leave this unset, so
+   * interrupting `/plan` dropped the abandoned prompt instead of keeping it.
+   */
+  private beginTurn(task: string): AbortSignal {
+    this.controller = new AbortController();
+    this.currentTask = task;
+    this.client.onOutput({ type: 'thinking' });
+    return this.controller.signal;
+  }
+
+  /** Releases the controller and wakes anything waiting on the session going
+   *  free. The last thing every turn's `finally` does. */
+  private endTurn(): void {
+    this.currentTask = null;
+    this.controller = null;
+    this.maybeResume();
+  }
+
+  /**
+   * Reports an interrupted turn: the task restored as steering context so the
+   * next message can course-correct instead of starting over, logged, told to
+   * the client. The same for every kind of turn; a caller with more to record
+   * around the abort (`run` also appends a note to `history`) does that
+   * itself, in addition to this.
+   *
+   * `steeringContext` is set here rather than assumed from `interrupt()`
+   * having already set it from `currentTask`: a turn interrupted during its
+   * own setup runs on past that point, and by the time it reaches here the
+   * prompt-building step may already have *consumed* `steeringContext` (reads
+   * it, then clears it) — restating it is what keeps the abandoned task from
+   * being dropped by the very turn it was kept for.
+   */
+  private reportInterrupted(task: string, startMs: number): void {
+    this.steeringContext = task;
+    this.log(`INTERRUPTED after ${((Date.now() - startMs) / 1000).toFixed(1)}s`);
+    this.client.onOutput({ type: 'interrupted' });
+  }
+
+  /** Reports a turn that failed for a reason other than being interrupted —
+   *  same shape for the coder and every side agent, just under the role that
+   *  was running. */
+  private reportAgentError(role: string, profile: AgentProfile, err: unknown): void {
+    const message = describeAgentError(role, profile, err);
+    this.log(`ERROR ${message} details=${providerErrorDiagnostics(err)}`);
+    this.client.onOutput({ type: 'error', message });
+  }
+
+  /** Stops the usage sampler and logs the tally and elapsed time under
+   *  `label` — the same bookkeeping for the coder and every side agent.
+   *  Called from `finally`, before `endTurn`, so the next turn's sampler
+   *  cannot start running alongside this one's. */
+  private finishSampling(
+    label: string,
+    stopSampling: (() => UsageReport) | null,
+    startMs: number,
+  ): void {
+    const elapsed = ((Date.now() - startMs) / 1000).toFixed(1);
+    if (!stopSampling) {
+      this.log(`${label} ${elapsed}s`);
+      return;
+    }
+    const { turn } = stopSampling();
+    this.log(`${label} ↑${turn.inputTokens} ↓${turn.outputTokens} tokens ${elapsed}s`);
+  }
+
   /**
    * Run one turn.
    *
@@ -739,10 +890,7 @@ export class Session {
     images: ImageAttachment[] = [],
     options: { auto?: boolean } = {},
   ): Promise<void> {
-    if (this.controller) {
-      this.client.onOutput({ type: 'error', message: 'A task is already running.' });
-      return;
-    }
+    if (this.refuseIfBusy()) return;
 
     // Before anything is spent. The refusals this catches are ones where the
     // request would otherwise succeed and mislead — ollama drops images on the
@@ -758,7 +906,7 @@ export class Session {
       this.autoResumeBudget = this.config.autoResumeBudget ?? DEFAULT_AUTO_RESUME_BUDGET;
     }
 
-    this.controller = new AbortController();
+    const signal = this.beginTurn(task);
     const [, roleTools] = await Promise.all([
       this.compression.ensure(),
       this.toolBelt.ready(),
@@ -793,7 +941,6 @@ export class Session {
       ? `[${planLabel}]\n${plan}\n\n[Task]\n${task}`
       : task);
 
-    this.currentTask = task;
     let errorReported = false;
     let detachToolResult: (() => void) | null = null;
     let stopSampling: (() => UsageReport) | null = null;
@@ -806,15 +953,6 @@ export class Session {
       ? ` +${images.length} image${images.length > 1 ? 's' : ''}`
       : '';
     this.log(`TASK ${JSON.stringify(task)}${attached}`);
-
-    // Captured locally (not read from this.controller later) because the underlying
-    // agent SDK has no cancellation hook: a real interrupt can only stop us *awaiting*
-    // the call, not the in-flight LLM/tool-call loop itself, which keeps running in
-    // the background until it naturally ends (every tool call it makes will find
-    // signal.aborted and short-circuit). Event listeners below check this exact
-    // signal so that abandoned background activity stays silent instead of spamming
-    // the UI with a stale task's tool calls after the user has already moved on.
-    const signal = this.controller.signal;
 
     const coderProfile = resolveRoleProfile(this.config, 'coder');
 
@@ -873,26 +1011,17 @@ export class Session {
       // — the agent adds that inside execute — so the pairing to read is this
       // dump against the task named in its own header.
       this.traceHistory(`before ${JSON.stringify(task)}`);
-      this.client.onOutput({ type: 'thinking' });
-      // Race instead of a plain await: the agent SDK has no cancellation hook, so
-      // the run itself won't reject on abort — without this race, Esc would
-      // do nothing until the model's current turn (and any tool-blocked retries it
-      // attempts afterward) finished on its own, which can take minutes on local models.
       const stream = (input: string | ReturnType<typeof buildInput>): Promise<string> =>
-        new Promise<string>((resolve, reject) => {
-          runAgent(agent, input, chunk => {
-            if (signal.aborted) return;
-            this.client.onOutput(chunk.type === 'reasoning'
-              ? { type: 'reasoning', text: chunk.content }
-              : { type: 'token', text: chunk.content });
-          }).then(resolve, reject);
-          signal.addEventListener('abort', () => {
-            reject(new DOMException('Task interrupted by user', 'AbortError'));
-          }, { once: true });
-        });
+        raceAbort(runAgent(agent, input, chunk => {
+          if (signal.aborted) return;
+          this.client.onOutput(chunk.type === 'reasoning'
+            ? { type: 'reasoning', text: chunk.content }
+            : { type: 'token', text: chunk.content });
+        }), signal);
 
       let response: string;
       try {
+        throwIfAborted(signal);
         response = await stream(buildInput(effectiveTask, images));
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -939,35 +1068,24 @@ export class Session {
       this.client.onOutput({ type: 'response', text: response });
     } catch (err) {
       if (this.controller?.signal.aborted) {
+        this.reportInterrupted(task, startMs);
         try { this.history.addText('user', `[Task was interrupted by the user: "${task}"]`); } catch {}
-        this.log(`INTERRUPTED after ${((Date.now() - startMs) / 1000).toFixed(1)}s`);
-        this.client.onOutput({ type: 'interrupted' });
       } else if (!errorReported) {
-        const message = describeAgentError('coder', coderProfile, err);
-        this.log(`ERROR ${message} details=${providerErrorDiagnostics(err)}`);
-        this.client.onOutput({ type: 'error', message });
+        this.reportAgentError('coder', coderProfile, err);
       }
     } finally {
       detachToolResult?.();
-      // Before `maybeResume`, which can start the next turn synchronously: the
+      // Before `endTurn`, which can start the next turn synchronously: the
       // final reading has to be attributed to the turn that spent it, and the
       // sampler for the next one must not be running alongside this one's.
-      if (stopSampling) {
-        const { turn } = stopSampling();
-        this.log(`DONE ↑${turn.inputTokens} ↓${turn.outputTokens} tokens ${((Date.now() - startMs) / 1000).toFixed(1)}s`);
-      }
-      this.currentTask = null;
-      this.controller = null;
+      this.finishSampling('DONE', stopSampling, startMs);
       // Paired with the `before` dump above, so the turn's own contribution —
       // its answer, its tool calls and their results — is the diff between the
       // two. In the `finally` because an interrupted or failed turn still
       // leaves history in a state the next turn inherits, and that state is
       // exactly what is worth seeing when a turn went wrong.
       this.traceHistory(`after ${JSON.stringify(task)}`);
-      // A job that finished mid-turn was only queued — this is the boundary
-      // where acting on it becomes safe, and the last chance to notice it before
-      // the session goes idle.
-      this.maybeResume();
+      this.endTurn();
     }
   }
 
@@ -979,13 +1097,9 @@ export class Session {
     prompt: string,
     eventType: 'plan' | 'goal' | 'review',
   ): Promise<void> {
-    if (this.controller) {
-      this.client.onOutput({ type: 'error', message: 'A task is already running.' });
-      return;
-    }
+    if (this.refuseIfBusy()) return;
 
-    this.controller = new AbortController();
-    const signal = this.controller.signal;
+    const signal = this.beginTurn(prompt);
     const startMs = Date.now();
     let detach: (() => void) | null = null;
     let stopSampling: (() => UsageReport) | null = null;
@@ -1030,8 +1144,8 @@ export class Session {
       // breakdown, and rolling them together hides which one costs.
       stopSampling = this.sampleUsage(usageKey, eventType === 'review' ? 'reviewer' : 'planner', profile, agent, startMs);
 
-      this.client.onOutput({ type: 'thinking' });
-      const text = await agent.execute(prompt);
+      throwIfAborted(signal);
+      const text = await raceAbort(agent.execute(prompt), signal);
 
       // /goal shares the plan slot rather than getting its own: both exist to
       // prime the next run() call with context the user approved beforehand,
@@ -1044,16 +1158,16 @@ export class Session {
       }
       this.client.onOutput({ type: eventType, text });
     } catch (err) {
-      const message = describeAgentError(eventType, profile, err);
-      this.log(`ERROR ${message}`);
-      this.client.onOutput({ type: 'error', message });
+      if (this.controller?.signal.aborted) {
+        this.reportInterrupted(prompt, startMs);
+      } else {
+        this.reportAgentError(eventType, profile, err);
+      }
     } finally {
       detach?.();
       // After the result, for the same reason as in run().
-      stopSampling?.();
-      this.log(`${eventType.toUpperCase()}_DONE ${((Date.now() - startMs) / 1000).toFixed(1)}s`);
-      this.controller = null;
-      this.maybeResume();
+      this.finishSampling(`${eventType.toUpperCase()}_DONE`, stopSampling, startMs);
+      this.endTurn();
     }
   }
 

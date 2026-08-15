@@ -37,6 +37,7 @@ import { useKeyBindings } from './hooks/useKeyBindings.js';
 import { startLogin, completeLogin } from './login.js';
 import type { LoginSession } from './login.js';
 import { runSlashCommand } from './commands.js';
+import { chosenProfile } from './startup/profiles.js';
 import { describeUpdate, currentVersion } from './update-check.js';
 import type { UpdateInfo } from './update-check.js';
 import { ConfigService } from './services/config-service.js';
@@ -501,10 +502,12 @@ export function App({
     apiKey?: string,
     name?: string,
   ) => {
-    // provider === null is the "same as deep" row on the fast tier.
-    const chosen: AgentProfile | undefined = provider && model
-      ? { ...(tier === 'deep' ? agentProfile : {}), provider, model, host, ...(name ? { name } : {}), ...(apiKey ? { apiKey } : {}) }
-      : undefined;
+    // `activeProfile`, not the `agentProfile` prop, so a second switch in the
+    // same session carries the effort just set rather than the one from boot
+    // — the prop is fixed at mount, `activeProfile` tracks every switch since.
+    // See `chosenProfile` for why only the effort carries over.
+    const chosen = chosenProfile({ provider, model, host, apiKey, name },
+      tier === 'deep' ? activeProfile : undefined);
 
     if (tier === 'fast') {
       applyProfiles(activeProfile, chosen);
@@ -523,7 +526,14 @@ export function App({
   const handleSubmit = (value: string) => {
     // While a turn is active, capture the prompt explicitly instead of dropping it
     // or starting a concurrent engine run with ambiguous ordering.
-    if (mode.type === 'running' || mode.type === 'approval') {
+    //
+    // `session.busy` is asked as well as the mode, because the two can disagree:
+    // a turn the *engine* started — a finished background job waking the agent —
+    // claims the session while this UI is still sitting at an idle prompt. Going
+    // by the mode alone, that prompt went to `run`, came back as "A task is
+    // already running." and was lost.
+    if (mode.type === 'running' || mode.type === 'approval'
+      || (mode.type === 'idle' && session?.busy === true)) {
       const queued = pasteBuffer.expand(value).trim();
       if (!queued) return;
       setPendingPrompts(previous => [...previous, queued]);
@@ -615,6 +625,12 @@ export function App({
   // This is explicit FIFO handling: no prompt is silently discarded or run concurrently.
   useEffect(() => {
     if (activity !== 'complete' && activity !== 'error' && activity !== 'cancelled') return;
+    // A turn ending is not the same as the session going free: the engine picks
+    // up finished background jobs in the same breath, so the next turn can
+    // already own the session by the time this runs. Leave the queue alone and
+    // wait for that turn to end too, rather than sending the head prompt into a
+    // refusal or rotating it to the back of the queue.
+    if (session?.busy) return;
     const [next, ...rest] = pendingPrompts;
     if (!next) return;
     setPendingPrompts(rest);
