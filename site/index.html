@@ -307,10 +307,6 @@
   }
   .card:hover { border-color: #2c3547; transform: translateY(-2px); }
 
-  /* The open-weights block is four pillars, not a feed. At the 920px wrap the
-     default minmax(260px) gives three columns and orphans the fourth — force a
-     2×2 by raising the floor, and let min() collapse it to one on mobile. */
-  #local .grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); }
   .card .glyph { font-size: 18px; margin-bottom: 10px; }
   .card h4 { font-size: 15px; margin-bottom: 6px; }
   .card p { color: var(--muted); font-size: 13.5px; }
@@ -442,10 +438,13 @@
     <h1 class="sr-only">marshall — a coding agent built for open weights</h1>
     <div id="hero-logo" aria-hidden="true"></div>
     <p class="tagline">
-      A coding agent built for <b>open weights</b>. Point it at llama.cpp or
-      Ollama and the whole planner/coder/reviewer loop runs on <b>your own
-      hardware</b> — no key, no account, no cloud. Nothing is written without
-      your approval.
+      A coding agent built for <b>open weights</b>, optimized for <b>local
+      inference</b>: llama.cpp and Ollama are first-class providers, no key,
+      no account, no cloud. Bring any other provider when you want one, run
+      lightweight on a single model, or go full agentic and compose a
+      <b>team of agents</b>, each pinned to its own model. Nothing is written
+      without your approval, unless you want it fully hands off. Your agent,
+      your choice.
     </p>
     <div class="cta">
       <button class="install" type="button" data-copy="curl -fsSL https://marshall.agention.ai/install.sh | sh" aria-label="Copy install command">
@@ -491,14 +490,9 @@
         <p>The picker reads llama.cpp's router and Ollama's <code>/api/ps</code> for live state — which models are <b>resident right now</b>, the real runtime context vs. what a preset merely asks for, the trained ceiling, quant and file size. Loaded models sort first, so you don't eat a cold reload mid-task.</p>
       </div>
       <div class="card">
-        <div class="glyph" style="color:var(--warn)" aria-hidden="true">◧</div>
-        <h4>Written for small context windows</h4>
-        <p>Rolling compression with pinned goals, tool-result masking and read dedup keep a session inside a modest window instead of overflowing it on the third file. Local servers also get an output ceiling — without one they'll happily generate until the window is gone.</p>
-      </div>
-      <div class="card">
         <div class="glyph" style="color:var(--tool)" aria-hidden="true">⊞</div>
         <h4>Combine fast and deep, per role</h4>
-        <p>Run a <b>deep</b> and a <b>fast</b> model together and decide which one you want where. Each is a full profile with its own provider, host and key, so they can be different vendors. Put a frontier model on <b>deep</b> (planning, coding, review) and a local one on <b>fast</b> (reading files, searching, summarising history): the bulk of the tokens never leaves your machine or hits your bill, and you pay only for the reasoning. Or run both local, on two different servers. <code>/model deep</code>, <code>/model fast</code>, <code>/model off</code>.</p>
+        <p>Deep and fast are each a full profile, with their own provider, host and key, so they don't need to be the same vendor. Put a frontier model on <b>deep</b> for planning, coding and review, and a local model on <b>fast</b> for reading files, searching and summarising history. Spawned and <code>/team</code> agents use the same split, so adding more agents scales your GPU's workload, not your API bill. Or run both tiers local, on two different servers. <code>/model deep</code>, <code>/model fast</code>, <code>/model off</code>.</p>
       </div>
     </div>
   </div>
@@ -508,11 +502,13 @@
 <section id="how">
   <div class="wrap">
     <h2>how it works</h2>
-    <h3>Three agents, one <span class="grad">feedback loop</span></h3>
+    <h3>Three agents by default, <span class="grad">as many as the task needs</span></h3>
     <p class="lede">
       Not a single autocomplete on steroids — a <b>planner</b> breaks the task down,
       a <b>coder</b> executes with a safe tool belt, and a <b>reviewer</b> inspects
-      the diff before you're asked to ship it.
+      the diff before you're asked to ship it. That trio is the core loop for every
+      task; call <code>spawn_agent</code> or delegate to a named agent from
+      <code>/team</code> when the work benefits from running something else alongside it.
     </p>
     <div class="loop">
       <div class="stage plan">
@@ -568,6 +564,11 @@
         <p>vLLM, SGLang, LM Studio, TabbyAPI, an internal gateway — if it speaks <code>/v1/chat/completions</code>, point <code>--host</code> at it. No plugin, no adapter, no waiting for someone to add your runtime.</p>
       </div>
       <div class="card">
+        <div class="glyph" style="color:var(--accent)" aria-hidden="true">◈</div>
+        <h4>Compose your own team</h4>
+        <p><code>/team add</code> walks you through defining a named agent: its own provider and model, an optional pinned tool belt (<b>readonly</b>, <b>edit</b> or <b>full</b>), a one-line brief. The coder delegates to it by name with <code>spawn_agent</code> — a <b>tester</b> that only ever gets read-and-run tools, a <b>summariser</b> pinned to a cheap local model, as many personas as the task needs. A pinned toolset always wins over whatever the coder asks for.</p>
+      </div>
+      <div class="card">
         <div class="glyph" style="color:var(--user)" aria-hidden="true">↪</div>
         <h4>Interrupt &amp; steer</h4>
         <p><code>esc</code> stops at the next safe boundary — no half-written files (atomic writes) — and your next message course-corrects instead of restarting. Worth a lot when a local model is three minutes into the wrong idea.</p>
@@ -591,6 +592,11 @@
         <div class="glyph" style="color:var(--ok)" aria-hidden="true">○</div>
         <h4>Open source, all the way down</h4>
         <p>MIT licensed, and the engine is headless with a stdio JSON-RPC transport — the terminal is just one client. Open weights on an open agent, with no hosted service in the middle.</p>
+      </div>
+      <div class="card">
+        <div class="glyph" style="color:var(--tool)" aria-hidden="true">↻</div>
+        <h4>Self-improving</h4>
+        <p>Marshall builds marshall. Every feature on this page, <code>/team</code>, the toolset pinning, the judge model, was planned, coded and reviewed by marshall's own loop before it shipped. If it can't survive its own review, it doesn't ship.</p>
       </div>
     </div>
   </div>
@@ -632,6 +638,7 @@
       <div class="row"><span class="k">/model</span><span class="d">combine a deep and a fast model — you pick which one you want where; the wizard lists OpenRouter's live catalogue or probes local servers for what's actually loaded</span></div>
       <div class="row"><span class="k">/runtime &lt;mode&gt;</span><span class="d">set the tool belt: <code>light</code> (lean, no sub-agents), <code>default</code> (full), <code>agentic</code> (full + spawn background agents)</span></div>
       <div class="row"><span class="k">/safety &lt;level&gt;</span><span class="d">set the approval gate: <code>yolo</code> (none, sandbox only), <code>default</code> (approve every change), <code>agentic</code> (judge model reviews first)</span></div>
+      <div class="row"><span class="k">/team add</span><span class="d">define a named agent — model, optional pinned toolset, one-line brief — that the coder can delegate to by name</span></div>
       <div class="row"><span class="k">/plan &lt;task&gt;</span><span class="d">get a plan before touching code — carried as context into your next task</span></div>
       <div class="row"><span class="k">/review [notes]</span><span class="d">second opinion on the current workspace state</span></div>
       <div class="row"><span class="k">/memory</span><span class="d">view <code>AGENTS.md</code>, the project memory loaded at session start</span></div>
@@ -872,31 +879,33 @@ document.querySelectorAll('a[href^="http"]').forEach(a => {
 
   const SCRIPT = {
     tiers: [
-      'deep · Qwen3-Coder-30B-A3B · Q5_K_M · 128k · loaded',
-      'fast · Gemma-4-E4B · Q6_K · 32k · loaded',
+      'deep · DeepSeek-V4-Flash · Q4_K_M · 128k · loaded',
+      'fast · Qwen3.8-27B · Q6_K · 32k · loaded',
     ],
-    prompt: 'add input validation to the signup form',
+    prompt: 'build a wishlist feature for the storefront, then have tester check it',
     plan: [
-      '1. read src/components/SignupForm.tsx',
-      '2. add zod schema + field errors',
-      '3. wire submit handler',
-      '4. run the test suite',
+      '1. read src/pages/ProductPage.tsx',
+      '2. add a wishlist store + toggle button',
+      '3. persist to localStorage, sync on load',
+      '4. spawn tester agent to verify',
     ],
     tools: [
-      ['read_file',  'src/components/SignupForm.tsx', null],
-      ['edit_file',  'src/components/SignupForm.tsx', '±42 lines'],
-      ['write_file', 'src/validation/signup.ts', '+28 lines'],
-      ['run_shell',  'npm test -- SignupForm', '12 passed'],
+      ['read_file',   'src/pages/ProductPage.tsx', null],
+      ['write_file',  'src/store/wishlist.ts', '+54 lines'],
+      ['edit_file',   'src/pages/ProductPage.tsx', '±18 lines', ' <span class="c">◆ judge: safe</span>'],
+      ['spawn_agent', 'tester · verify the new wishlist flow', null, ' <span class="a">◈ spawned</span>'],
+      ['run_shell',   'npm test -- wishlist', '9 passed'],
     ],
-    usage: '  usage · ↑8 214  ↓1 036  · 9.4s',
-    answer: 'Done. SignupForm now validates email, password strength and ' +
-      'matching confirmation client-side with zod, shows inline errors, and the ' +
-      'suite passes — 12/12.',
+    agent: '<span class="a">◆ tester</span> <span class="f">· done, 5 checks, 0 issues</span>',
+    usage: '  usage · ↑9 640  ↓1 180  · 11.6s',
+    answer: 'Done. Storefront now has a wishlist: a toggle on every product card, ' +
+      'persisted to localStorage and synced on load. tester confirmed 5/5 checks, ' +
+      'and the suite passes, 9/9.',
   };
 
-  const toolLine = ([name, arg, note]) =>
+  const toolLine = ([name, arg, note, label]) =>
     `<span class="t">● ${esc(name)}</span>  <span class="m">${esc(arg)}</span>` +
-    (name === 'read_file' ? '' : ' <span class="ok">✓ approved</span>') +
+    (label ?? (name === 'read_file' ? '' : ' <span class="ok">✓ approved</span>')) +
     (note ? ` <span class="f">· ${esc(note)}</span>` : '');
 
   // Reduced motion: render the finished transcript once and stop. Replaying it
@@ -908,6 +917,7 @@ document.querySelectorAll('a[href^="http"]').forEach(a => {
     line('<span class="f">│ </span><span class="a">◆ planner</span> <span class="f">· 4 steps</span>');
     for (const step of SCRIPT.plan) line(`<span class="f">│   ${esc(step)}</span>`);
     for (const t of SCRIPT.tools) line(toolLine(t));
+    line(`<span class="f">│ </span>${SCRIPT.agent}`);
     line(`<span class="f">${esc(SCRIPT.usage)}</span>`);
     line(`<span class="a">◆ </span>${esc(SCRIPT.answer)}`);
   }
@@ -949,28 +959,30 @@ document.querySelectorAll('a[href^="http"]').forEach(a => {
       let d = document.createElement('div');
       d.innerHTML = '<span class="p">❯ </span>';
       body.appendChild(d);
-      await type(d, SCRIPT.prompt, 'u', 28);
-      await sleep(500);
+      await type(d, SCRIPT.prompt, 'u', 22);
+      await sleep(650);
 
       line('<span class="f">│ </span><span class="a">◆ planner</span> <span class="f">· 4 steps</span>');
-      await sleep(350);
+      await sleep(450);
       for (const step of SCRIPT.plan) line(`<span class="f">│   ${esc(step)}</span>`);
-      await sleep(500);
+      await sleep(650);
 
       for (const t of SCRIPT.tools) {
         line(toolLine(t));
-        await sleep(420);
+        await sleep(550);
       }
+      await sleep(450);
+      line(`<span class="f">│ </span>${SCRIPT.agent}`);
       line(`<span class="f">${esc(SCRIPT.usage)}</span>`);
-      await sleep(400);
+      await sleep(520);
 
       d = document.createElement('div');
       d.innerHTML = '<span class="a">◆ </span>';
       body.appendChild(d);
-      await type(d, SCRIPT.answer, null, 60);
+      await type(d, SCRIPT.answer, null, 48);
 
       // idle prompt
-      await sleep(700);
+      await sleep(900);
       d = document.createElement('div');
       d.innerHTML = '<span class="p">❯ </span>';
       body.appendChild(d);
@@ -978,7 +990,7 @@ document.querySelectorAll('a[href^="http"]').forEach(a => {
       caret.className = 'caret';
       d.appendChild(caret);
 
-      await sleep(4200);
+      await sleep(4600);
     }
   }
 
