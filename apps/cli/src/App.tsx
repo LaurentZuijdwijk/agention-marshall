@@ -1,17 +1,12 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { homedir } from 'node:os';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Box, Static, useApp, useStdout } from 'ink';
-import { Session, formatCost } from '@agentionai/marshall-engine';
-import type { AgentProfile, Provider, Tier, McpServerConfig, SafetyLevel } from '@agentionai/marshall-engine';
+import { Session } from '@agentionai/marshall-engine';
+import type { AgentProfile, SafetyLevel } from '@agentionai/marshall-engine';
 import type { ApprovalDecision } from '@agentionai/marshall-tools';
 import { Setup } from './view/Setup.js';
-import { McpSetup } from './view/McpSetup.js';
-import { SettingsMenu } from './view/setupMenu/SettingsMenu.js';
-import type { McpScope } from './view/McpSetup.js';
-import { Banner, STARTUP_TAGLINES } from './view/Banner.js';
-import type { HeaderMeta } from './view/Banner.js';
-import { C, G } from './view/theme.js';
-import { shortenPath } from './format.js';
+import { Wizard } from './view/Wizard.js';
+import { Banner } from './view/Banner.js';
+import { G } from './view/theme.js';
 import { MessageRow } from './view/MessageRow.js';
 import { ApprovalPanel, APPROVAL_LABELS } from './view/ApprovalPanel.js';
 import { QuestionPanel } from './view/QuestionPanel.js';
@@ -26,7 +21,8 @@ import { useTranscript } from './hooks/useTranscript.js';
 import { useApprovals } from './hooks/useApprovals.js';
 import { useQuestions, NO_ANSWER } from './hooks/useQuestions.js';
 import { useEngineClient } from './hooks/useEngineClient.js';
-import type { TranscriptPort } from './hooks/useEngineClient.js';
+import { useTranscriptPort } from './hooks/useTranscriptPort.js';
+import type { Activity } from './hooks/useTranscriptPort.js';
 import { usePreferences } from './hooks/usePreferences.js';
 import { usePasteBuffer } from './hooks/usePasteBuffer.js';
 import { useAttachments, describeImage } from './hooks/useAttachments.js';
@@ -34,17 +30,18 @@ import { readClipboardImage } from './services/clipboard.js';
 import { fetchOpenRouterPricing } from './services/pricing.js';
 import { useSession } from './hooks/useSession.js';
 import { useKeyBindings } from './hooks/useKeyBindings.js';
+import { useWizardActions } from './hooks/useWizardActions.js';
+import { useHeader } from './hooks/useHeader.js';
 import { startLogin, completeLogin } from './login.js';
 import type { LoginSession } from './login.js';
 import { runSlashCommand } from './commands.js';
-import { chosenProfile } from './startup/profiles.js';
 import { describeUpdate, currentVersion } from './update-check.js';
 import type { UpdateInfo } from './update-check.js';
 import { ConfigService } from './services/config-service.js';
 import { useConfig } from './hooks/useConfig.js';
 import { toSafetyAgentConfig } from './services/settings.js';
 import type { RuntimeMode } from './services/settings.js';
-import { completeSlash, SAFETY_LEVEL_LABELS } from './slashCommands.js';
+import { completeSlash } from './slashCommands.js';
 import { completeAtPath, expandFileMentions } from './fileCompletion.js';
 import type { Mode } from './mode.js';
 import { traceRender } from './renderTrace.js';
@@ -152,7 +149,7 @@ export function App({
 
   const [input, setInput] = useState('');
   const [pendingPrompts, setPendingPrompts] = useState<string[]>([]);
-  const [activity, setActivity] = useState<'idle' | 'loading' | 'thinking' | 'generating' | 'complete' | 'error' | 'cancelled'>('idle');
+  const [activity, setActivity] = useState<Activity>('idle');
   const [metrics, setMetrics] = useState<ActivityMetrics>({});
   const [mode, setMode] = useState<Mode>(
     agentProfile.model ? { type: 'idle' } : { type: 'setup', tier: 'deep', chain: true },
@@ -175,87 +172,14 @@ export function App({
   const attachments = useAttachments();
 
   // ── the header row ─────────────────────────────────────────────────────────
-  const headerMeta = (deep: AgentProfile, fast?: AgentProfile): HeaderMeta => ({
-    provider: deep.provider,
-    providerName: deep.name,
-    model: deep.model ?? 'default',
-    dir: shortenPath(workspaceRoot, homedir()),
-    fastModel: fast?.model,
-    fastProvider: fast?.provider,
-    fastProviderName: fast?.name,
-    safety: SAFETY_LEVEL_LABELS[safetyLevel],
-    version: currentVersion,
-    runtime: runtimeMode,
-    webSearch: enableWebSearch,
-    github: enableGitHub,
+  const { headerMeta, headerMessage, sessionTagline } = useHeader({
+    workspaceRoot, safetyLevel, runtimeMode, enableWebSearch, enableGitHub, transcript,
   });
-  // The session's tagline, chosen once: the animated banner and the static header
-  // that replaces it must settle on the same sentence, so the pick lives here and
-  // is handed to both rather than rolled twice.
-  const [sessionTagline] = useState(
-    () => STARTUP_TAGLINES[Math.floor(Math.random() * STARTUP_TAGLINES.length)],
-  );
-  const headerMessage = (deep: AgentProfile, fast?: AgentProfile, compact = false): Message =>
-    ({ key: transcript.nextKey(), role: 'header', content: '', meta: headerMeta(deep, fast), compact, tagline: sessionTagline });
 
   // ── engine client ──────────────────────────────────────────────────────────
-  //
-  // The client is memoised once and fires at event time, so everything it reads
-  // has to come through a ref rather than a closed-over render value.
-  const live = useRef({ transcript, approvals, questions, setSteering, prefs });
-  live.current = { transcript, approvals, questions, setSteering, prefs };
-
-  // Preference gating lives here, not in the translator, so the translator stays
-  // a pure event → transcript mapping.
-  const client = useEngineClient(useMemo((): TranscriptPort => ({
-    push: (role, content, extra) => live.current.transcript.push(role, content, extra),
-    appendToken: (text) => {
-      setActivity('generating');
-      if (live.current.prefs.read().stream) live.current.transcript.appendStream(text);
-    },
-    appendReasoning: (text) => {
-      if (live.current.prefs.read().showReasoning) live.current.transcript.appendReasoning(text);
-    },
-    takeStream: () => live.current.transcript.takeStream(),
-    takeReasoning: () => live.current.transcript.takeReasoning(),
-    // Only `idle` is promoted. A turn started by a finished background job must
-    // put the spinner up in place of the input prompt, but it must not shove the
-    // setup wizard, a login prompt or a pending approval off the screen to do it
-    // — those are waiting on the user, and the turn can render underneath them.
-    turnStarted: () => {
-      setActivity('thinking');
-      setMetrics({});
-      setMode(prev => (prev.type === 'idle' ? { type: 'running' } : prev));
-    },
-    // The turn's rollup, not the session's: the row sits under the turn you are
-    // watching. `/tokens` is where the session total lives.
-    reportUsage: ({ turn, durationMs, rates, ttftMs }) => {
-      setMetrics({
-        inputTokens: turn.inputTokens,
-        outputTokens: turn.outputTokens,
-        durationMs,
-        cost: formatCost(turn),
-        rates,
-        ttftMs,
-        reasoningTokens: turn.reasoningTokens,
-      });
-    },
-    turnEnded: (outcome) => {
-      live.current.setSteering(outcome === 'interrupted');
-      setActivity(outcome === 'done' ? 'complete' : outcome === 'interrupted' ? 'cancelled' : 'error');
-      setMode({ type: 'idle' });
-    },
-    requestApproval: (request) => {
-      const { promise, show } = live.current.approvals.enqueue(request);
-      if (show) setMode({ type: 'approval', request: show });
-      return promise;
-    },
-    askUser: (request) => {
-      const { promise, show } = live.current.questions.enqueue(request);
-      if (show) setMode({ type: 'question', request: show });
-      return promise;
-    },
-  }), []));
+  const client = useEngineClient(useTranscriptPort({
+    transcript, approvals, questions, setSteering, prefs, setActivity, setMetrics, setMode,
+  }));
 
   // The stored judge names a provider and model but never a key, so it has to
   // be authenticated at load time exactly like the main model. Without this a
@@ -294,8 +218,8 @@ export function App({
   // transcript rather than in a swallowed `.catch`. The service is built before
   // the UI exists, so it starts out reporting to stderr and is redirected here.
   useEffect(() => {
-    config.reportErrorsTo(message => live.current.transcript.push('error', message));
-  }, [config]);
+    config.reportErrorsTo(message => transcript.push('error', message));
+  }, [config]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Prices, once, in the background — a turn that finishes before the catalogue
   // lands reports tokens without a cost and picks the cost up on the next one,
@@ -412,115 +336,12 @@ export function App({
     setMode(next.show ? { type: 'approval', request: next.show } : { type: 'running' });
   };
 
-  // ── mcp ────────────────────────────────────────────────────────────────────
-  //
-  // The engine session owns the *connections*; the config file only records the
-  // definitions. So the session is always read for what to persist, and it must
-  // have finished changing before it is read — see `removeMcpServer`.
-  const persistMcp = (enableForProjectOnly?: string) => {
-    if (!session) return;
-    const servers = session.mcpServers().map(server =>
-      server.name === enableForProjectOnly ? { ...server, enabled: false } : server);
-    void config.saveMcpServers(servers);
-    if (enableForProjectOnly) void config.enableProjectMcpServer(enableForProjectOnly);
-  };
-
-  /**
-   * Disconnect a server and forget it, in that order.
-   *
-   * The order is the whole point: `removeMcpServer` is async, and persisting
-   * before it settles writes back the list that still contains the server —
-   * which is how a removed server came back on the next launch. `/mcp remove`
-   * has always awaited it; the settings menu called the same pair the other way
-   * round.
-   */
-  const removeMcpServer = (name: string) => {
-    if (!session) return;
-    session.removeMcpServer(name)
-      .then(removed => {
-        if (!removed) { transcript.push('error', `${name} is not a configured MCP server`); return; }
-        persistMcp();
-        transcript.push('info', `removed MCP server: ${name}`);
-      })
-      .catch((err: unknown) => transcript.push('error', err instanceof Error ? err.message : String(err)));
-  };
-
-  const handleMcpAdd = (server: McpServerConfig, scope: McpScope) => {
-    setMode({ type: 'idle' });
-    if (!session) return;
-    transcript.push('info', `connecting to ${server.name}…`);
-    session.addMcpServer(server)
-      .then((state) => {
-        if (state.status === 'connected') {
-          transcript.push('info',
-            `${G.ok} ${state.name} connected — ${state.toolNames.length} tools, ` +
-            'each one asks before it runs');
-          // Persisted only on success. Writing a server we could not reach
-          // would retry it on every future start and fail there too.
-          //
-          // The definition always goes to the global config — it can hold a
-          // bearer token, and that never belongs in a repo. `project` scope
-          // marks it off-by-default there and opts this one checkout in, so the
-          // committed file names a server without carrying its credentials.
-          persistMcp(scope === 'project' ? state.name : undefined);
-        } else {
-          transcript.push('error', `${state.name}: ${state.error ?? 'could not connect'}`);
-        }
-      })
-      .catch((err: unknown) => transcript.push('error', err instanceof Error ? err.message : String(err)));
-  };
-
-  // ── safety judge wizard (/safety agentic) ─────────────────────────────────
-  //
-  // Deliberately does not go through `applyProfiles`/`persist()`: that path
-  // writes credentials to the global config, and the judge is persisted through
-  // `persistSafety`, which strips the key and records only provider/model/host.
-  const handleSafetySetupComplete = (
-    provider: Provider | null,
-    model: string | null,
-    host?: string,
-    apiKey?: string,
-  ) => {
-    if (provider && model && session) {
-      const agent = { profile: { provider, model, host, ...(apiKey ? { apiKey } : {}) } };
-      session.setSafetyAgent(agent);
-      session.setSafetyLevel(3);
-      persistSafety(3, agent);
-      setSafetyLevelState(3);
-      transcript.push('info', `safety: agentic — reviewing tool calls with ${provider}/${model}`);
-    }
-    setMode({ type: 'idle' });
-  };
-
-  // ── setup wizard ───────────────────────────────────────────────────────────
-  const handleSetupComplete = (
-    tier: Tier,
-    chain: boolean,
-    provider: Provider | null,
-    model: string | null,
-    host?: string,
-    apiKey?: string,
-    name?: string,
-  ) => {
-    // `activeProfile`, not the `agentProfile` prop, so a second switch in the
-    // same session carries the effort just set rather than the one from boot
-    // — the prop is fixed at mount, `activeProfile` tracks every switch since.
-    // See `chosenProfile` for why only the effort carries over.
-    const chosen = chosenProfile({ provider, model, host, apiKey, name },
-      tier === 'deep' ? activeProfile : undefined);
-
-    if (tier === 'fast') {
-      applyProfiles(activeProfile, chosen);
-    } else if (chain) {
-      // First run: pick the delegation target next, before starting a session.
-      stageProfile(chosen ?? activeProfile);
-      setMode({ type: 'setup', tier: 'fast', chain: false });
-      return;
-    } else {
-      applyProfiles(chosen ?? activeProfile, fastProfile);
-    }
-    setMode({ type: 'idle' });
-  };
+  // ── wizard completion (setup / mcp add / safety judge) ─────────────────────
+  const wizardActions = useWizardActions({
+    session, config, transcript, activeProfile, fastProfile,
+    applyProfiles, stageProfile, persistSafety, setMode, setSafetyLevelState,
+  });
+  const { persistMcp } = wizardActions;
 
   // ── submitting ─────────────────────────────────────────────────────────────
   const handleSubmit = (value: string) => {
@@ -640,101 +461,35 @@ export function App({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activity, pendingPrompts]);
 
-  /** What to pre-fill the wizard with for the tier being chosen. */
-  const seedProfile = (tier: Tier) => {
-    const seed = tier === 'fast' ? (fastProfile ?? activeProfile) : activeProfile;
-    return { provider: seed.provider, model: seed.model, host: seed.host };
-  };
-
   // ── render ─────────────────────────────────────────────────────────────────
   //
-  // The wizards render *inside* the tree below rather than replacing it. Ink's
+  // The wizard renders *inside* the tree below rather than replacing it. Ink's
   // <Static> keeps the count of rows it has already emitted in component state,
   // so unmounting it — which an early return here used to do — resets that
   // count to zero and makes it re-emit the whole transcript on the way back.
   // That was the duplicate banner after a model switch.
-  const wizard =
-    mode.type === 'settings-menu' ? (
-      <Box padding={1}>
-        <SettingsMenu
-          scope={mode.scope}
-          runtime={runtimeMode}
-          safetyLevel={safetyLevel}
-          deepModel={{ provider: activeProfile.provider, model: activeProfile.model }}
-          fastModel={fastProfile ? { provider: fastProfile.provider, model: fastProfile.model } : undefined}
-          providers={endpoints}
-          // The live connections, not the file: a server added this session is
-          // connected but not yet in the snapshot the menu was opened with.
-          mcpServers={session?.mcpServers() ?? savedConfig.mcpServers}
-          onMcpAdd={() => setMode({ type: 'mcp-setup' })}
-          onMcpRemove={server => removeMcpServer(server.name)}
-          onProviderAdd={() => setMode({ type: 'setup', tier: 'deep', chain: false })}
-          onProviderRemove={entry => {
-            // Only on a write that landed: the service reports the failure
-            // itself, and "removed" next to "could not save" is worse than
-            // either alone.
-            void config.removeProvider(entry).then(saved => {
-              if (saved) transcript.push('info', `removed provider: ${entry.name ?? entry.provider}`);
-            });
-          }}
-          onRuntimeChange={(next, scope) => {
-            setRuntimeMode(next);
-            session?.setRuntime(next);
-            void config.updateSettings(current => ({ ...current, runtime: next }), scope)
-              .then(saved => {
-                if (saved) transcript.push('info', `runtime: ${next} (${scope === 'global' ? 'global' : 'local'})`);
-              });
-          }}
-          onSafetyChange={level => {
-            setSafetyLevelState(level);
-            if (level === 3) setMode({ type: 'safety-setup' });
-            else {
-              session?.setSafetyLevel(level);
-              persistSafety(level, session?.safetyAgent);
-              transcript.push('info', `safety: ${level === 1 ? 'yolo (session only)' : 'default'}`);
-              setMode({ type: 'idle' });
-            }
-          }}
-          onModels={tier => setMode({ type: 'setup', tier, chain: false })}
-          onUpdate={() => transcript.push('info', `current version: ${currentVersion} — use /update to check for updates`)}
-          onExit={() => setMode({ type: 'idle' })}
-        />
-      </Box>
-    ) : mode.type === 'mcp-setup' ? (
-      <Box padding={1}>
-        <McpSetup
-          existing={session?.mcpState().map(s => s.name) ?? []}
-          onComplete={handleMcpAdd}
-          onExit={() => setMode({ type: 'idle' })}
-        />
-      </Box>
-    ) : mode.type === 'setup' ? (
-      <Box padding={1}>
-        <SetupCtor
-          key={mode.tier}
-          tier={mode.tier}
-          customProviders={customProviders}
-          deepLabel={activeProfile.model}
-          // The fast tier usually lives on the same server as deep, so seed it
-          // from whichever profile is closest to what the user is about to pick.
-          initial={seedProfile(mode.tier)}
-          credentials={config.credentialsFor}
-          onComplete={(p: Provider | null, m: string | null, h?: string, k?: string, n?: string) =>
-            handleSetupComplete(mode.tier, mode.chain, p, m, h, k, n)}
-          onExit={() => setMode({ type: 'idle' })}
-        />
-      </Box>
-    ) : mode.type === 'safety-setup' ? (
-      <Box padding={1}>
-        <SetupCtor
-          title="safety judge model"
-          blurb='reviews each tool call before it runs — a "safe" verdict skips your approval, "unsafe" still asks you, with its reasoning attached'
-          credentials={config.credentialsFor}
-          onComplete={handleSafetySetupComplete}
-          onExit={() => setMode({ type: 'idle' })}
-        />
-      </Box>
-    ) : null;
+  const wizardActive = mode.type === 'settings-menu' || mode.type === 'mcp-setup'
+    || mode.type === 'setup' || mode.type === 'safety-setup';
+  const wizard = (
+    <Wizard
+      mode={mode}
+      setMode={setMode}
+      runtimeMode={runtimeMode}
+      safetyLevel={safetyLevel}
+      activeProfile={activeProfile}
+      fastProfile={fastProfile}
+      endpoints={endpoints}
+      customProviders={customProviders}
+      session={session}
+      savedConfig={savedConfig}
+      config={config}
+      transcript={transcript}
+      setRuntimeMode={setRuntimeMode}
+      setSafetyLevelState={setSafetyLevelState}
+      SetupCtor={SetupCtor}
+      actions={wizardActions}
+    />
+  );
 
   const accepting = mode.type === 'idle' || mode.type === 'running' || mode.type === 'login-pending' || mode.type === 'approval';
 
@@ -819,7 +574,7 @@ export function App({
       {/* Typing under an approval queues a prompt rather than answering it, so
           on a terminal too short to hold both the panel wins and the input goes.
           Esc still interrupts, and the approval keys still work. */}
-      {!booting && accepting && !wizard && (!modal || panel.showPrompt) && (
+      {!booting && accepting && !wizardActive && (!modal || panel.showPrompt) && (
         <InputPrompt
           kind={mode.type === 'login-pending' ? 'login' : steering ? 'steering' : 'task'}
           value={input}
