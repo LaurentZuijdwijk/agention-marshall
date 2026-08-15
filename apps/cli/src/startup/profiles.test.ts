@@ -62,6 +62,19 @@ describe('resolveProfiles — deep tier', () => {
     assert.strictEqual(agentProfile.name, undefined);
   });
 
+  it('does not carry the saved provider\'s key or host onto a different provider', () => {
+    // Regression: the saved deep tier is llamacpp with its own key and host. A
+    // CLI flag switches the provider to openai — its own, distinct key lives in
+    // `providers`, and must win over the llamacpp key `saved` still carries.
+    const config: SavedConfig = {
+      models: { deep: { provider: 'llamacpp', model: 'local', host: 'http://box:8080', apiKey: 'llamacpp-key' } },
+      providers: [{ provider: 'openai', apiKey: 'openai-key' }],
+    };
+    const { agentProfile } = resolveProfiles(flags({ provider: 'openai', model: 'gpt-4o' }), config);
+    assert.strictEqual(agentProfile.apiKey, 'openai-key');
+    assert.strictEqual(agentProfile.host, undefined);
+  });
+
   it('keeps the saved endpoint name when the provider is not overridden', () => {
     const config: SavedConfig = {
       models: { deep: { provider: 'openai-compatible', name: 'LM Studio', model: 'llama-3' } },

@@ -54,7 +54,8 @@ export function resolveProfiles(flags: CliFlags, config: SavedConfig): ResolvedP
   // provider's server would mislabel the header and misdirect the credential
   // lookup below — e.g. an openai-compatible "LM Studio" carried onto a
   // `--provider claude` run.
-  const name = saved.provider === provider ? saved.name : undefined;
+  const sameProvider = saved.provider === provider;
+  const name = sameProvider ? saved.name : undefined;
 
   // Per-endpoint last-used host/key — lets each one keep its own settings as the
   // user switches between them, instead of one flat host being overwritten.
@@ -65,8 +66,13 @@ export function resolveProfiles(flags: CliFlags, config: SavedConfig): ResolvedP
     // undefined when given neither on the CLI nor in saved config — that is what
     // puts the App into the setup wizard on first run.
     model:  flags.model ?? saved.model,
-    apiKey: flags.apiKey ?? saved.apiKey ?? savedEntry.apiKey,
-    host:   flags.host   ?? saved.host   ?? savedEntry.host,
+    // `saved.apiKey`/`saved.host` describe whatever provider `saved` was last
+    // pointed at — only trust them when that's still `provider`. `--provider`
+    // (or a fresh `/model` pick) can switch providers out from under `saved`,
+    // and without this guard the old provider's key rides along onto the new
+    // one ahead of `savedEntry`, which is the one actually looked up for it.
+    apiKey: flags.apiKey ?? (sameProvider ? saved.apiKey : undefined) ?? savedEntry.apiKey,
+    host:   flags.host   ?? (sameProvider ? saved.host   : undefined) ?? savedEntry.host,
     reasoningEffort: checkReasoningEffort(flags.reasoningEffort ?? saved.reasoningEffort),
   };
 
