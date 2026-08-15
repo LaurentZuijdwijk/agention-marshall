@@ -4,8 +4,37 @@ import { formatTokens as groupDigits, formatRate } from '@agentionai/marshall-en
 import { C, G } from './theme.js';
 import { Spinner } from './Spinner.js';
 
-/** An absent count is a dash, not a zero — see the note on ActivityMetrics. */
-const formatTokens = (n?: number) => (n === undefined ? '—' : groupDigits(n));
+/**
+ * `1.5k`, `10k`, `1.5M` — this row is a live, four-segment-wide status line,
+ * not the `/tokens` report, so once a count is long enough to need grouped
+ * digits it is better off abbreviated instead. An absent count is a dash, not
+ * a zero — see the note on ActivityMetrics.
+ */
+const formatTokens = (n?: number): string => {
+  if (n === undefined) return '—';
+  if (n < 10_000) return groupDigits(n);
+  const [divisor, suffix] = n >= 1_000_000 ? [1_000_000, 'M'] as const : [1_000, 'k'] as const;
+  return `${(n / divisor).toFixed(1).replace(/\.0$/, '')}${suffix}`;
+};
+
+/**
+ * `12.3s`, `24m59s`, `1h05m` — a turn or a first-token wait can run long
+ * enough that a raw seconds count stops being readable at a glance. Whole
+ * seconds only past a minute: the tenths that matter for "how long did the
+ * first token take" stop being interesting once the answer is in minutes.
+ */
+const formatDuration = (ms: number): string => {
+  const totalSeconds = ms / 1000;
+  if (totalSeconds < 60) return `${totalSeconds.toFixed(1)}s`;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const roundedSeconds = Math.round(totalSeconds);
+  const minutes = Math.floor(roundedSeconds / 60);
+  const seconds = roundedSeconds % 60;
+  if (minutes < 60) return seconds === 0 ? `${minutes}m` : `${minutes}m${pad(seconds)}s`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return remainingMinutes === 0 ? `${hours}h` : `${hours}h${pad(remainingMinutes)}m`;
+};
 
 export type ActivityState = 'idle' | 'loading' | 'thinking' | 'generating' | 'complete' | 'error' | 'cancelled';
 
@@ -67,17 +96,17 @@ export function ActivityStatus({ state, metrics, pending = 0, blocked = false }:
     return `${arrow}${formatTokens(tokens)}${rate ? ` ~${rate}` : ''}`;
   };
   const thinking = metrics?.reasoningTokens
-    ? ` (${groupDigits(metrics.reasoningTokens)} thinking)`
+    ? ` (${formatTokens(metrics.reasoningTokens)} thinking)`
     : '';
   const metric = metrics && (metrics.inputTokens !== undefined || metrics.outputTokens !== undefined)
     ? [
         withRate('↑', metrics.inputTokens, metrics.rates?.input)
           + `  ↓${formatTokens(metrics.outputTokens)}${thinking}`
           + (formatRate(metrics.rates?.output) ? ` ~${formatRate(metrics.rates?.output)}` : ''),
-        metrics.durationMs !== undefined ? `${(metrics.durationMs / 1000).toFixed(1)}s` : undefined,
+        metrics.durationMs !== undefined ? formatDuration(metrics.durationMs) : undefined,
         // Abbreviated because the row is already four segments wide, and this is
         // the one a reader glances at rather than reads.
-        metrics.ttftMs !== undefined ? `${(metrics.ttftMs / 1000).toFixed(1)}s→1st` : undefined,
+        metrics.ttftMs !== undefined ? `${formatDuration(metrics.ttftMs)}→1st` : undefined,
         metrics.cost,
       ].filter(Boolean).join(`  ${G.bullet}  `)
     // Before the first response of a turn there is genuinely nothing to report,

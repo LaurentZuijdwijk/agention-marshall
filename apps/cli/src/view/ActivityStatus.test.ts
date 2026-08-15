@@ -20,10 +20,29 @@ describe('ActivityStatus', () => {
     assert.match(text, /5\.0s/);
   });
 
-  it('groups the digits of counts long enough to be misread', () => {
-    const text = metricRow({ state: 'complete', metrics: { inputTokens: 1234567, outputTokens: 8901 } });
-    assert.match(text, /↑1,234,567/);
+  it('switches the elapsed time to minutes and hours once it runs long', () => {
+    const minutes = metricRow({ state: 'complete', metrics: { outputTokens: 250, durationMs: 1_499_600 } });
+    assert.match(minutes, /\b25m$/, 'rounds to a whole second before splitting into minutes');
+
+    const exact = metricRow({ state: 'complete', metrics: { outputTokens: 250, durationMs: 300_000 } });
+    assert.match(exact, /\b5m$/, 'a round number of minutes drops the seconds');
+
+    const withSeconds = metricRow({ state: 'complete', metrics: { outputTokens: 250, durationMs: 149_000 } });
+    assert.match(withSeconds, /\b2m29s$/);
+
+    const hours = metricRow({ state: 'complete', metrics: { outputTokens: 250, durationMs: 3_900_000 } });
+    assert.match(hours, /\b1h05m$/);
+  });
+
+  it('groups the digits of a count under 10,000', () => {
+    const text = metricRow({ state: 'complete', metrics: { inputTokens: 100, outputTokens: 8901 } });
     assert.match(text, /↓8,901/);
+  });
+
+  it('abbreviates a count of 10,000 or more instead of grouping it', () => {
+    const text = metricRow({ state: 'complete', metrics: { inputTokens: 10_000, outputTokens: 1_500_000 } });
+    assert.match(text, /↑10k/, 'a round thousand drops the .0');
+    assert.match(text, /↓1\.5M/);
   });
 
   it('puts the output rate beside the count it belongs to', () => {
@@ -54,7 +73,7 @@ describe('ActivityStatus', () => {
       state: 'generating',
       metrics: { inputTokens: 48_210, outputTokens: 3_140, rates: { output: 52.4 }, ttftMs: 1200 },
     });
-    assert.match(text, /↑48,210 {2}↓/, 'the input count stands alone');
+    assert.match(text, /↑48\.2k {2}↓/, 'the input count stands alone');
     assert.match(text, /1\.2s→1st/);
   });
 
