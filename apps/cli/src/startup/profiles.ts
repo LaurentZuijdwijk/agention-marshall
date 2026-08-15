@@ -113,8 +113,13 @@ function resolveFastProfile(
     provider: fastProvider,
     model,
     // Only inherit the key when the tiers share a provider — a local fast tier
-    // must not be handed a hosted provider's credentials.
-    apiKey: sameProvider ? (flags.apiKey ?? savedDeepProfile(config).apiKey) : saved?.apiKey,
+    // must not be handed a hosted provider's credentials. Either way, a saved
+    // model selection no longer carries its own key inline (see
+    // `withModelSelection`), so both branches fall back to the stored
+    // provider entry the same way `host` does below.
+    apiKey: sameProvider
+      ? (flags.apiKey ?? deep.apiKey)
+      : (saved?.apiKey ?? providerCredentials(config.providers, { provider: fastProvider, name: saved?.name }).apiKey),
     host: flags.fastHost
       ?? saved?.host
       ?? providerCredentials(config.providers, { provider: fastProvider, name: saved?.name }).host

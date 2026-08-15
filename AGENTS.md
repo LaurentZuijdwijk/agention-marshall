@@ -37,6 +37,13 @@ wholesale, so reusing the key would make a project file silently replace the
 global list — which forces every secret to be repeated in the committed file to
 keep the other entries working. That is how this goes wrong quietly.
 
+`saveProfiles` (`/model`, the setup wizard) is the reference implementation:
+`withModelSelection` writes which model/provider each tier uses to the
+*project* file, credential-free, so the choice is local to this workspace
+instead of following the user to every other repo; `withProviderCredentials`
+writes the host and key that make it reachable to the *global* file, since
+that's the same wherever marshall runs. Both in `config-store.ts`.
+
 Same rule for anything written at runtime: OAuth tokens, refresh tokens, API
 keys and PKCE verifiers belong in the global config or `~/.marshall/`, at
 `0600`. Never in the workspace, and never in `.marshall/` inside it.

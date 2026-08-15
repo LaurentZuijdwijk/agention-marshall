@@ -278,6 +278,24 @@ export function savedDeepProfile(config: SavedConfig): SavedProfile {
   return config.models?.deep ?? config;
 }
 
+/**
+ * A model saved before `withModelSelection` existed — the flat top-level
+ * `provider`/`model` keys instead of `models.deep`.
+ *
+ * `savedDeepProfile` above already reads it fine, so this is not a startup
+ * error. But a config in this shape still lives entirely in the global file,
+ * applying to every workspace on the machine, rather than the model choice
+ * being pinned to this one — the split only takes effect once the model is
+ * saved again. Worth telling the user rather than leaving them to notice by
+ * accident, in the same spirit as `settingsWarnings`.
+ */
+export function legacyProfileWarnings(config: SavedConfig): string[] {
+  if (config.models?.deep) return [];
+  if (!config.provider && !config.model) return [];
+  return ['the saved model is in the older, pre-workspace format, shared by every project '
+    + 'on this machine — run /model to save it again and pin it to this workspace.'];
+}
+
 /** One ref as a map key. Equality only — nothing parses this back apart. */
 export function providerKey(ref: ProviderRef): string {
   return ref.name ? `${ref.provider}:${ref.name}` : ref.provider;
@@ -499,31 +517,51 @@ export function upsertProvider(
   return next;
 }
 
+/** Everything about a profile except its credential. What the project file
+ *  is allowed to say about a model — see AGENTS.md. */
+function stripCredential(profile: AgentProfile): SavedProfile {
+  const { apiKey: _drop, ...rest } = strip(profile);
+  return rest;
+}
+
 /**
- * The full file contents for a given pair of tiers.
+ * Pin which model each tier uses, without its credential.
  *
- * Pure, so the merge rules are testable without touching a disk. The flat
- * top-level keys mirror the deep tier so an older build still finds a model.
+ * Written to the *project* file, so the choice is local to this workspace
+ * instead of following the user to every other repo on the machine —
+ * `withProviderCredentials` is where the credential that makes it work
+ * actually lives.
  *
  * `existing` is spread back in rather than dropped. This used to take only the
  * providers array, which meant choosing a model silently deleted every other
  * section of the file — `mcpServers`, `mcp` and `settings` all lived through
  * exactly one `/model` before disappearing.
  */
-export function buildConfig(
+export function withModelSelection(
+  existing: SavedConfig,
   deep: AgentProfile,
   fast: AgentProfile | undefined,
-  existing: SavedConfig = {},
+): SavedConfig {
+  return {
+    ...existing,
+    models: { deep: stripCredential(deep), ...(fast ? { fast: stripCredential(fast) } : {}) },
+  };
+}
+
+/**
+ * Remember this endpoint's host and key for next time.
+ *
+ * Always the global file: a credential is exactly what the project file must
+ * never hold — see AGENTS.md.
+ */
+export function withProviderCredentials(
+  existing: SavedConfig,
+  deep: AgentProfile,
+  fast: AgentProfile | undefined,
 ): SavedConfig {
   let providers = upsertProvider(existing.providers ?? [], deep);
   if (fast) providers = upsertProvider(providers, fast);
-
-  return {
-    ...existing,
-    ...strip(deep),
-    models: { deep: strip(deep), ...(fast ? { fast: strip(fast) } : {}) },
-    providers,
-  };
+  return { ...existing, providers };
 }
 
 /**

@@ -119,6 +119,33 @@ describe('resolveProfiles — fast tier', () => {
     assert.strictEqual(fastProfile?.host, 'http://box:8080');
   });
 
+  // `withModelSelection` (config-store.ts) never writes an apiKey into the
+  // saved model selection — the credential lives only in `providers[]`. Both
+  // branches of the fast tier's key resolution have to reach for it there,
+  // not for a key `models.deep`/`models.fast` no longer carries.
+  it('finds the key in the provider entry when the saved profiles carry none', () => {
+    const shared: SavedConfig = {
+      models: { deep: { provider: 'openrouter', model: 'kimi' } },
+      providers: [{ provider: 'openrouter', apiKey: 'router-key' }],
+    };
+    const { fastProfile } = resolveProfiles(flags({ fastModel: 'small' }), shared);
+    assert.strictEqual(fastProfile?.apiKey, 'router-key',
+      'a same-provider fast tier must still authenticate once the deep tier does');
+
+    const split: SavedConfig = {
+      models: { deep: { provider: 'openrouter', model: 'kimi' } },
+      providers: [
+        { provider: 'openrouter', apiKey: 'router-key' },
+        { provider: 'llamacpp', host: 'http://box:8080', apiKey: 'box-key' },
+      ],
+    };
+    const { fastProfile: splitFast } = resolveProfiles(
+      flags({ fastProvider: 'llamacpp', fastModel: 'small' }), split,
+    );
+    assert.strictEqual(splitFast?.apiKey, 'box-key',
+      'a split fast tier looks up its own provider’s entry, not the deep tier’s');
+  });
+
   it('does not leak the deep host to a different provider', () => {
     const config: SavedConfig = { models: { deep: { provider: 'openrouter', model: 'kimi', host: 'http://gateway' } } };
     const { fastProfile } = resolveProfiles(flags({ fastProvider: 'ollama', fastModel: 'small' }), config);

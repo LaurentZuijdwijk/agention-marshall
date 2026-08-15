@@ -28,9 +28,9 @@ import { writeFile, mkdir, chmod } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import type { AgentProfile, McpServerConfig } from '@agentionai/marshall-engine';
 import {
-  buildConfig, configPath, findProvider, globalConfigPath, loadConfig, loadMcpWarnings, projectSecretWarnings,
-  providerCredentials, providerKeyForHost, readJsonConfig, removeProvider, resolveMcpServers,
-  withMcpServers, withProjectMcp,
+  configPath, findProvider, globalConfigPath, legacyProfileWarnings, loadConfig, loadMcpWarnings,
+  projectSecretWarnings, providerCredentials, providerKeyForHost, readJsonConfig, removeProvider,
+  resolveMcpServers, withMcpServers, withModelSelection, withProjectMcp, withProviderCredentials,
 } from './config-store.js';
 import type { ProviderRef, SavedConfig, SavedProviderEntry } from './config-store.js';
 import {
@@ -120,6 +120,7 @@ export class ConfigService {
         ...mcpWarnings,
         ...settingsWarnings(config),
         ...projectSecretWarnings(this.workspaceRoot),
+        ...legacyProfileWarnings(config),
       ],
     };
     return this.memo;
@@ -144,14 +145,23 @@ export class ConfigService {
   // ── writing ─────────────────────────────────────────────────────────────────
 
   /**
-   * Persist both model tiers, preserving the providers not involved.
+   * Persist both model tiers: the credential in the global file, which model/
+   * provider is selected in the project file.
    *
-   * Like every mutation here, resolves `true` when the change reached disk and
-   * `false` when it did not — a caller that announces "saved" on a promise that
-   * merely settled will contradict the error this reported a line earlier.
+   * Two writes, not one — a credential is the same wherever marshall runs, so
+   * it belongs in the file every workspace shares, but which model this
+   * workspace uses is a per-project choice and must not follow the user to
+   * every other repo on the machine. See AGENTS.md.
+   *
+   * Like every mutation here, resolves `true` only once both writes reached
+   * disk — a caller that announces "saved" on a promise that merely settled
+   * will contradict the error this reported a line earlier.
    */
   saveProfiles(deep: AgentProfile, fast: AgentProfile | undefined): Promise<boolean> {
-    return this.write('global', 'model settings', config => buildConfig(deep, fast, config));
+    return this.writeMany([
+      { scope: 'global', what: 'provider credentials', transform: config => withProviderCredentials(config, deep, fast) },
+      { scope: 'project', what: 'model selection', transform: config => withModelSelection(config, deep, fast) },
+    ]);
   }
 
   /**
@@ -219,6 +229,27 @@ export class ConfigService {
 
   // ── the only writer ─────────────────────────────────────────────────────────
 
+  /** Read one target file, transform it, write it back. No queueing, no
+   *  invalidate/notify — `write` and `writeMany` below wrap this with those,
+   *  since a multi-file save needs them to happen once for every file rather
+   *  than once per file. */
+  private async performWrite(
+    scope: SettingsScope,
+    transform: (config: SavedConfig) => SavedConfig,
+  ): Promise<void> {
+    const path = scope === 'global' ? globalConfigPath() : configPath(this.workspaceRoot);
+    await mkdir(dirname(path), { recursive: true });
+    // From disk, not from `this.memo`: the memo is a rendering convenience and
+    // may predate another writer's change.
+    const next = transform(readJsonConfig(path));
+    await writeFile(path, JSON.stringify(next, null, 2) + '\n',
+      scope === 'global' ? { mode: 0o600 } : {});
+    // `mode` on writeFile only applies when the file is created, and the global
+    // config normally already exists. Tighten it explicitly, so a file that was
+    // once created loosely does not stay that way while holding an API key.
+    if (scope === 'global') await chmod(path, 0o600);
+  }
+
   /**
    * Read the target file, transform it, write it back, invalidate, notify.
    *
@@ -237,17 +268,7 @@ export class ConfigService {
     transform: (config: SavedConfig) => SavedConfig,
   ): Promise<boolean> {
     const task = this.queue.then(async () => {
-      const path = scope === 'global' ? globalConfigPath() : configPath(this.workspaceRoot);
-      await mkdir(dirname(path), { recursive: true });
-      // From disk, not from `this.memo`: the memo is a rendering convenience and
-      // may predate another writer's change.
-      const next = transform(readJsonConfig(path));
-      await writeFile(path, JSON.stringify(next, null, 2) + '\n',
-        scope === 'global' ? { mode: 0o600 } : {});
-      // `mode` on writeFile only applies when the file is created, and the global
-      // config normally already exists. Tighten it explicitly, so a file that was
-      // once created loosely does not stay that way while holding an API key.
-      if (scope === 'global') await chmod(path, 0o600);
+      await this.performWrite(scope, transform);
       this.invalidate();
     });
 
@@ -258,6 +279,35 @@ export class ConfigService {
       this.onError(`could not save ${what}: ${err instanceof Error ? err.message : String(err)}`);
       return false;
     });
+  }
+
+  /**
+   * Like `write`, but for a save that spans more than one file and must be
+   * seen as a single change — one invalidate/notify once every file has
+   * settled, not one per file. A subscriber (the UI) would otherwise re-render
+   * on a save that is only half done, showing a model pinned to a credential
+   * that was never actually written, or the other way round.
+   *
+   * Each file is still written independently — one failing does not stop the
+   * others, matching `write`'s per-scope error reporting — but the queue only
+   * advances, and the snapshot only invalidates, once every one of them has
+   * settled.
+   */
+  private writeMany(
+    writes: Array<{ scope: SettingsScope; what: string; transform: (config: SavedConfig) => SavedConfig }>,
+  ): Promise<boolean> {
+    const task: Promise<boolean> = this.queue.then(async () => {
+      const results = await Promise.all(writes.map(({ scope, what, transform }) =>
+        this.performWrite(scope, transform).then(() => true, (err: unknown) => {
+          this.onError(`could not save ${what}: ${err instanceof Error ? err.message : String(err)}`);
+          return false;
+        })));
+      this.invalidate();
+      return results.every(Boolean);
+    });
+
+    this.queue = task.then(() => {}, () => {});
+    return task;
   }
 
   private invalidate(): void {

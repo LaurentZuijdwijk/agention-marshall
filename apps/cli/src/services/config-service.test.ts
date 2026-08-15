@@ -42,18 +42,41 @@ afterEach(() => {
 });
 
 describe('saveProfiles', () => {
-  it('round-trips through the reader, via the global config', async () => {
-    await new ConfigService(ws()).saveProfiles(ROUTER, LOCAL);
-    const back = loadConfig(ws());
+  it('round-trips through the reader: model from the project file, credential from the global one', async () => {
+    const root = ws();
+    await new ConfigService(root).saveProfiles(ROUTER, LOCAL);
+    const back = loadConfig(root);
     assert.equal(savedDeepProfile(back).model, 'deepseek/v4');
     assert.equal(providerCredentials(back.providers, { provider: 'llamacpp' }).host,
       'http://192.168.1.248:8080');
   });
 
+  // The whole point: which model a workspace uses must not follow the user to
+  // every other repo, unlike the credential that makes it reachable.
+  it('does not pin the model choice for a different workspace', async () => {
+    const root = ws();
+    await new ConfigService(root).saveProfiles(ROUTER, undefined);
+
+    const other = ws();
+    assert.equal(savedDeepProfile(loadConfig(other)).model, undefined,
+      'a different workspace must not inherit the model this one picked');
+    assert.equal(providerCredentials(loadConfig(other).providers, { provider: 'openrouter' }).apiKey, 'or-key',
+      'but the credential, being global, is still there for it to use');
+  });
+
+  it('records the model selection in the project file, without its key', async () => {
+    const root = ws();
+    await new ConfigService(root).saveProfiles(ROUTER, undefined);
+    const project = readProject(root);
+    assert.equal(project.models.deep.model, 'deepseek/v4');
+    assert.equal('apiKey' in project.models.deep, false);
+  });
+
   it('preserves a provider entry written by an earlier session', async () => {
     writeGlobal({ providers: [{ provider: 'ollama', host: 'http://localhost:11434' }] });
-    await new ConfigService(ws()).saveProfiles(ROUTER, undefined);
-    assert.equal(providerCredentials(loadConfig(ws()).providers, { provider: 'ollama' }).host,
+    const root = ws();
+    await new ConfigService(root).saveProfiles(ROUTER, undefined);
+    assert.equal(providerCredentials(loadConfig(root).providers, { provider: 'ollama' }).host,
       'http://localhost:11434');
   });
 
@@ -61,11 +84,11 @@ describe('saveProfiles', () => {
     const config = new ConfigService(ws());
     await config.saveProfiles(LOCAL, undefined);   // using llama.cpp
     await config.saveProfiles(ROUTER, undefined);  // switch to OpenRouter
-    assert.equal(providerCredentials(loadConfig(ws()).providers, { provider: 'llamacpp' }).host,
+    assert.equal(providerCredentials(config.snapshot().providers, { provider: 'llamacpp' }).host,
       'http://192.168.1.248:8080', 'the llama.cpp host must survive the switch');
   });
 
-  it('writes 0600, since the file can hold an API key', async () => {
+  it('writes the global file at 0600, since it can hold an API key', async () => {
     await new ConfigService(ws()).saveProfiles(ROUTER, undefined);
     assert.equal(statSync(globalConfigPath()).mode & 0o777, 0o600);
   });
@@ -73,7 +96,7 @@ describe('saveProfiles', () => {
   // `mode` on writeFile only applies when the file is created, so a file that
   // already exists keeps whatever it had — including a loose mode from an older
   // build that wrote it without one.
-  it('tightens the mode of a file that already existed', async () => {
+  it('tightens the mode of a global file that already existed', async () => {
     writeGlobal({ providers: [] });
     await new ConfigService(ws()).saveProfiles(ROUTER, undefined);
     assert.equal(statSync(globalConfigPath()).mode & 0o777, 0o600);
@@ -92,20 +115,30 @@ describe('saveProfiles', () => {
     const back = readGlobal();
     assert.deepEqual(back.mcpServers, [{ name: 'gh', url: 'https://example.com/mcp', headers: { auth: 't' } }]);
     assert.deepEqual(back.settings, { version: 1, mode: 'light' });
-    assert.equal(back.model, 'deepseek/v4', 'and still records the tier it was called with');
+    assert.equal(back.providers?.[0]?.provider, 'openrouter', 'and still records the credential it was called with');
   });
 
-  it('recovers from a corrupt existing file instead of throwing', async () => {
+  it('leaves the rest of the project file alone', async () => {
+    const root = ws();
+    writeProject(root, { mcp: { enable: ['gh'] } });
+    await new ConfigService(root).saveProfiles(ROUTER, undefined);
+
+    const back = readProject(root);
+    assert.deepEqual(back.mcp, { enable: ['gh'] });
+    assert.equal(back.models.deep.model, 'deepseek/v4');
+  });
+
+  it('recovers from a corrupt existing global file instead of throwing', async () => {
     mkdirSync(dirname(globalConfigPath()), { recursive: true });
     writeFileSync(globalConfigPath(), 'not json at all');
     await new ConfigService(ws()).saveProfiles(ROUTER, undefined);
-    assert.equal(readGlobal().provider, 'openrouter');
+    assert.equal(readGlobal().providers?.[0]?.provider, 'openrouter');
   });
 
-  it('never writes to the project-local override', async () => {
+  it('writes the model selection to the project file', async () => {
     const root = ws();
     await new ConfigService(root).saveProfiles(ROUTER, undefined);
-    assert.equal(existsSync(configPath(root)), false);
+    assert.equal(existsSync(configPath(root)), true);
   });
 });
 
@@ -221,11 +254,13 @@ describe('one write path', () => {
     const back = readGlobal();
     assert.equal(back.mcpServers?.length, 1, 'the MCP write survived');
     assert.equal(back.settings?.runtime, 'light', 'the settings write survived');
-    assert.equal(back.model, 'deepseek/v4', 'the profile write survived');
+    assert.equal(back.providers?.[0]?.provider, 'openrouter', 'the credential write survived');
   });
 
   it('reports a failed write rather than swallowing it, and still resolves', async () => {
     // A file where the config *directory* should be: every mkdir under it fails.
+    // Only the global write goes under $XDG_CONFIG_HOME — the project write, in
+    // the workspace's own temp dir, is unaffected and still succeeds.
     const blocked = join(mkdtempSync(join(tmpdir(), 'blocked-')), 'not-a-dir');
     writeFileSync(blocked, '');
     process.env.XDG_CONFIG_HOME = blocked;
@@ -238,7 +273,7 @@ describe('one write path', () => {
     await config.saveProfiles(ROUTER, undefined);
 
     assert.equal(errors.length, 1);
-    assert.match(errors[0], /could not save model settings/);
+    assert.match(errors[0], /could not save provider credentials/);
   });
 
   it('keeps working after a failed write', async () => {
@@ -256,7 +291,7 @@ describe('one write path', () => {
     // One EACCES used to be enough to wedge the queue for the rest of the
     // session, since every later write chained onto a rejected promise.
     await config.saveProfiles(LOCAL, undefined);
-    assert.equal(readGlobal().model, 'qwen');
+    assert.equal(readGlobal().providers?.some((p: { provider: string }) => p.provider === 'llamacpp'), true);
     assert.equal(errors.length, 1);
   });
 

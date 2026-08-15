@@ -4,9 +4,9 @@ import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, existsSync } from 
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import {
-  buildConfig, upsertProvider, loadConfig, savedDeepProfile, findProvider, providerCredentials,
-  providerKeyForHost, configPath, globalConfigPath, savedMcpServers, resolveMcpServers,
-  danglingMcpSelections, projectSecretWarnings, removeProvider,
+  withModelSelection, withProviderCredentials, upsertProvider, loadConfig, savedDeepProfile, findProvider,
+  providerCredentials, providerKeyForHost, configPath, globalConfigPath, savedMcpServers, resolveMcpServers,
+  danglingMcpSelections, projectSecretWarnings, legacyProfileWarnings, removeProvider,
 } from './config-store.js';
 import type { SavedConfig } from './config-store.js';
 import type { SavedProviderEntry } from './config-store.js';
@@ -174,27 +174,57 @@ describe('providerKeyForHost', () => {
   });
 });
 
-describe('buildConfig', () => {
-  it('mirrors the deep tier into the flat legacy keys', () => {
-    const out = buildConfig(ROUTER, undefined);
-    assert.equal(out.provider, 'openrouter');
-    assert.equal(out.model, 'deepseek/v4');
-    assert.deepEqual(out.models?.deep, { provider: 'openrouter', model: 'deepseek/v4', apiKey: 'or-key' });
+describe('withModelSelection', () => {
+  it('records the deep tier, without its key', () => {
+    const out = withModelSelection({}, ROUTER, undefined);
+    assert.deepEqual(out.models?.deep, { provider: 'openrouter', model: 'deepseek/v4' });
+  });
+
+  // The project file is meant to be committed — see AGENTS.md. A key that
+  // slipped through here would be a leak for everyone who clones the repo.
+  it('never includes the apiKey, even though the profile has one', () => {
+    const out = withModelSelection({}, ROUTER, LOCAL);
+    assert.equal('apiKey' in (out.models?.deep ?? {}), false);
+    assert.equal('apiKey' in (out.models?.fast ?? {}), false);
   });
 
   it('omits the fast tier when there is none', () => {
-    assert.equal(buildConfig(ROUTER, undefined).models?.fast, undefined);
+    assert.equal(withModelSelection({}, ROUTER, undefined).models?.fast, undefined);
   });
 
-  it('records both tiers under providers when they differ', () => {
-    const out = buildConfig(ROUTER, LOCAL);
-    assert.deepEqual(out.providers?.map(e => e.provider).sort(), ['llamacpp', 'openrouter']);
+  it('records both tiers', () => {
+    const out = withModelSelection({}, ROUTER, LOCAL);
+    assert.equal(out.models?.deep?.model, 'deepseek/v4');
     assert.equal(out.models?.fast?.model, 'qwen');
   });
 
+  it('leaves the rest of the file alone', () => {
+    const out = withModelSelection({ mcpServers: [{ name: 'gh', url: 'https://example.com/mcp' }] }, ROUTER, undefined);
+    assert.deepEqual(out.mcpServers, [{ name: 'gh', url: 'https://example.com/mcp' }]);
+  });
+});
+
+describe('withProviderCredentials', () => {
+  it('records the deep tier’s credential', () => {
+    const out = withProviderCredentials({}, ROUTER, undefined);
+    assert.deepEqual(out.providers, [{ provider: 'openrouter', apiKey: 'or-key' }]);
+  });
+
+  it('records both tiers under providers when they differ', () => {
+    const out = withProviderCredentials({}, ROUTER, LOCAL);
+    assert.deepEqual(out.providers?.map(e => e.provider).sort(), ['llamacpp', 'openrouter']);
+  });
+
   it('keeps a provider that neither tier uses', () => {
-    const out = buildConfig(ROUTER, undefined, { providers: [{ provider: 'ollama', host: 'http://localhost:11434' }] });
+    const out = withProviderCredentials(
+      { providers: [{ provider: 'ollama', host: 'http://localhost:11434' }] }, ROUTER, undefined,
+    );
     assert.equal(out.providers?.find(e => e.provider === 'ollama')?.host, 'http://localhost:11434');
+  });
+
+  it('does not touch the model selection', () => {
+    const out = withProviderCredentials({ models: { deep: { provider: 'claude', model: 'opus' } } }, ROUTER, undefined);
+    assert.deepEqual(out.models, { deep: { provider: 'claude', model: 'opus' } });
   });
 });
 
@@ -324,6 +354,25 @@ describe('reading tiers back', () => {
   it('reports no host for a provider that has none stored', () => {
     const entries = [{ provider: 'llamacpp', host: 'h' }, { provider: 'claude' }];
     assert.equal(providerCredentials(entries, { provider: 'claude' }).host, undefined);
+  });
+});
+
+describe('legacyProfileWarnings', () => {
+  it('warns when a model is only in the flat pre-tier shape', () => {
+    const warnings = legacyProfileWarnings({ provider: 'claude', model: 'opus' });
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /run \/model/);
+  });
+
+  it('says nothing once a workspace has re-saved in the tiered shape', () => {
+    assert.deepEqual(
+      legacyProfileWarnings({ provider: 'claude', model: 'opus', models: { deep: { provider: 'claude', model: 'opus' } } }),
+      [],
+    );
+  });
+
+  it('says nothing for a config with no model saved at all', () => {
+    assert.deepEqual(legacyProfileWarnings({}), []);
   });
 });
 
