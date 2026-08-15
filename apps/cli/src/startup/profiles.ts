@@ -10,7 +10,7 @@
 
 import type { AgentProfile, Provider } from '@agentionai/marshall-engine';
 import { PROVIDER_DEFAULTS } from '@agentionai/marshall-engine';
-import { savedDeepProfile, savedProviders } from '../services/config-store.js';
+import { providerCredentials, savedDeepProfile } from '../services/config-store.js';
 import type { SavedConfig } from '../services/config-store.js';
 import type { CliFlags } from './args.js';
 
@@ -48,19 +48,19 @@ function checkProvider(name: string, label: string): Provider {
 
 export function resolveProfiles(flags: CliFlags, config: SavedConfig): ResolvedProfiles {
   const saved = savedDeepProfile(config);
-  // Per-provider last-used host/key — lets each provider keep its own settings
-  // as the user switches between them, instead of one flat host being overwritten.
-  const byProvider = savedProviders(config);
-
   const provider = checkProvider(flags.provider ?? saved.provider ?? 'claude', 'provider');
 
+  // Per-endpoint last-used host/key — lets each one keep its own settings as the
+  // user switches between them, instead of one flat host being overwritten.
+  const savedEntry = providerCredentials(config.providers, { provider, name: saved.name });
   const agentProfile: AgentProfile = {
     provider,
+    ...(saved.name ? { name: saved.name } : {}),
     // undefined when given neither on the CLI nor in saved config — that is what
     // puts the App into the setup wizard on first run.
     model:  flags.model ?? saved.model,
-    apiKey: flags.apiKey ?? saved.apiKey ?? byProvider[provider]?.apiKey,
-    host:   flags.host   ?? saved.host   ?? byProvider[provider]?.host,
+    apiKey: flags.apiKey ?? saved.apiKey ?? savedEntry.apiKey,
+    host:   flags.host   ?? saved.host   ?? savedEntry.host,
     reasoningEffort: checkReasoningEffort(flags.reasoningEffort ?? saved.reasoningEffort),
   };
 
@@ -111,7 +111,7 @@ function resolveFastProfile(
     apiKey: sameProvider ? (flags.apiKey ?? savedDeepProfile(config).apiKey) : saved?.apiKey,
     host: flags.fastHost
       ?? saved?.host
-      ?? savedProviders(config)[fastProvider]?.host
+      ?? providerCredentials(config.providers, { provider: fastProvider, name: saved?.name }).host
       ?? (sameProvider ? deep.host : undefined),
     reasoningEffort: saved?.reasoningEffort,
   };

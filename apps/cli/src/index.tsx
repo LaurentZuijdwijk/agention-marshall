@@ -13,8 +13,7 @@ import { resolveProfiles, StartupError } from './startup/profiles.js';
 import { installCrashLogging } from './startup/crash-log.js';
 import { installResizeRedraw } from './view/resize.js';
 import { checkForUpdate } from './update-check.js';
-import { loadConfig, savedHosts, savedKeys, savedProviders, loadMcpServers, loadMcpWarnings, projectSecretWarnings } from './services/config-store.js';
-import { readSettings, resolveSettings, settingsWarnings } from './services/settings.js';
+import { ConfigService } from './services/config-service.js';
 
 const flags = parseCliArgs();
 
@@ -26,20 +25,19 @@ if (flags.help) {
 const workspaceRoot = resolveWorkspaceRoot(flags.workspace);
 loadEnvFiles(workspaceRoot);
 
-// Saved config from .marshall/config.json, overridden by CLI flags. The flat
-// provider/model/host keys are the pre-tier format and are still read as the
-// deep tier, so existing workspaces keep working untouched.
-const savedConfig = loadConfig(workspaceRoot);
+// One owner for everything on disk: the two config files, their merge, and
+// every write back to them. Constructed here and handed down, so nothing
+// downstream has to know which file a value came from, whether a flag beat it,
+// or how to persist a change to it. Errors are wired to the transcript by the
+// App; before it renders there is nowhere to put them but stderr.
+const config = new ConfigService(workspaceRoot, { light: flags.light },
+  message => console.error(message));
 
-// Non-secret settings come through one reader, resolved once here, so nothing
-// downstream has to know which of the two config files a value came from or
-// whether a flag beat it. See services/settings.ts.
-const settings = resolveSettings(readSettings(savedConfig), { light: flags.light });
-const configWarnings = [...settingsWarnings(savedConfig), ...projectSecretWarnings(workspaceRoot)];
-
+// The flat provider/model/host keys are the pre-tier format and are still read
+// as the deep tier, so existing workspaces keep working untouched.
 let profiles;
 try {
-  profiles = resolveProfiles(flags, savedConfig);
+  profiles = resolveProfiles(flags, config.snapshot().config);
 } catch (err) {
   if (!(err instanceof StartupError)) throw err;
   console.error(err.message);
@@ -74,13 +72,7 @@ inkInstance = render(
     enableGitHub={flags.github}
     enableWebSearch={flags.webSearch}
     maxTokens={profiles.maxTokens}
-    settings={settings}
-    savedHosts={savedHosts(savedConfig)}
-    savedKeys={savedKeys(savedConfig)}
-    customProviders={Object.values(savedProviders(savedConfig)).filter(p => p.name).map(p => ({ name: p.name!, host: p.host }))}
-    mcpServers={loadMcpServers(workspaceRoot)}
-    mcpWarnings={loadMcpWarnings(workspaceRoot)}
-    configWarnings={configWarnings}
+    config={config}
     updateCheck={updateCheck}
     registerRedraw={fn => { replayTranscript = fn; }}
   />,

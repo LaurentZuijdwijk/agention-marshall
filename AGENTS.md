@@ -40,3 +40,42 @@ keep the other entries working. That is how this goes wrong quietly.
 Same rule for anything written at runtime: OAuth tokens, refresh tokens, API
 keys and PKCE verifiers belong in the global config or `~/.marshall/`, at
 `0600`. Never in the workspace, and never in `.marshall/` inside it.
+
+## One way to read and write config
+
+`ConfigService` (`apps/cli/src/services/config-service.ts`) owns both files.
+Disk is the source of truth: it caches a snapshot only until the next write, and
+every write re-reads the file it is about to change. `write()` is the single
+place that opens a config file for writing — it queues, sets the mode, and
+notifies subscribers. Add a mutation as a transform passed to it.
+
+Do not add a second writer, and do not mirror config in React state. Five
+independent read-modify-write functions, plus copies of their data in props,
+is what made a removed provider stay on screen and a removed MCP server come
+back on the next launch.
+
+## Release process
+
+Use Changesets for user-facing package changes. Add a changeset under `.changeset/`
+with the real workspace package names, then apply it from the repository root:
+
+```bash
+npx @changesets/cli status
+npx @changesets/cli version
+npm install
+npm test
+```
+
+Review the generated package versions, changelogs, and lockfile. Commit the
+changeset output and implementation together, then publish from an authenticated
+npm session after pushing the release commit:
+
+```bash
+npm whoami
+npx @changesets/cli publish
+git push --follow-tags origin main
+```
+
+Do not put npm tokens or other release credentials in the repository. If publish
+is interrupted, inspect Changeset status and rerun the publish command rather
+than creating another version commit.

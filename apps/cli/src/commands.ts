@@ -285,6 +285,10 @@ export function runSlashCommand(input: string, deps: CommandDeps): void {
       transcript.push('info', deps.workspaceRoot);
       return;
 
+    case 'setup':
+      setMode({ type: 'settings-menu', scope: command.scope });
+      return;
+
     case 'model':
       if (command.target === 'off') deps.applyProfiles(deps.activeProfile, undefined);
       else if (command.target === 'both') setMode({ type: 'setup', tier: 'deep', chain: true });

@@ -12,6 +12,8 @@ export type Mode =
   // `chain` continues on to the fast tier once deep is chosen — that's the
   // first-run flow. `/model fast` sets just one tier and stops.
   | { type: 'setup'; tier: Tier; chain: boolean }
+  /** The root `/setup` settings category menu. */
+  | { type: 'settings-menu'; scope: 'project' | 'global' }
   | { type: 'idle' }
   | { type: 'running' }
   | { type: 'login-pending'; session: LoginSession }

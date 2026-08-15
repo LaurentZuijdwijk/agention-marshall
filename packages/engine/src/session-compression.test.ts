@@ -51,6 +51,34 @@ test('compressionThreshold zero disables compression', async () => {
   assert.ok(logs.some(line => line.includes('no summariser available')));
 });
 
+test('failed summariser init resets ready so a later ensure retries', async () => {
+  // First pin the summariser to an openai-compatible profile with an empty host.
+  // createAgent rejects on that (no base URL), so this ensure() must fail.
+  const roleProfiles: EngineConfig['roleProfiles'] = {
+    summarizer: { provider: 'openai-compatible', model: 'x', host: '' },
+  };
+  const config = { ...CONFIG, roleProfiles };
+  const history = new History();
+  const logs: string[] = [];
+  const compression = new CompressionManager(history, () => config, (line) => logs.push(line));
+
+  await compression.ensure();
+  assert.ok(
+    logs.some((l) => l.includes('COMPRESSION_UNAVAILABLE')),
+    'first ensure logs that the summariser could not be created',
+  );
+
+  // Drop the broken pin so the summariser now resolves to the default (ollama)
+  // coder, which constructs fine. A failed init must have reset `ready` — the
+  // second ensure() must retry rather than short-circuit on the stale flag.
+  delete roleProfiles.summarizer;
+  await compression.ensure();
+  assert.ok(
+    logs.some((l) => l.includes('COMPRESSION_READY')),
+    'ensure retries after a failed init instead of staying disabled',
+  );
+});
+
 test('context compression reports no progress for an empty history', async () => {
   const { logs, compression } = manager({ ...CONFIG, compressionThreshold: 1 });
 

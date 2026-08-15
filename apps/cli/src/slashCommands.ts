@@ -5,7 +5,7 @@ import type { RuntimeMode, SettingsScope } from './services/settings.js';
 // `/runtime` rather than `/mode`: a command name that is a strict prefix of
 // another one ("/mode" of "/model") makes tab completion actively wrong — the
 // complete, valid command silently grows into a different one.
-export const SLASH_COMMANDS = ['/agents', '/clear', '/cwd', '/exit', '/goal', '/help', '/jobs', '/login', '/mcp', '/memory', '/model', '/plan', '/review', '/runtime', '/safety', '/stream', '/tokens', '/update', '/version'] as const;
+export const SLASH_COMMANDS = ['/agents', '/clear', '/cwd', '/exit', '/goal', '/help', '/jobs', '/login', '/mcp', '/memory', '/model', '/plan', '/review', '/runtime', '/safety', '/setup', '/stream', '/tokens', '/update', '/version'] as const;
 
 /** Which tier `/model` is about to change. `both` is the first-run chain. */
 export type ModelTarget = 'both' | 'deep' | 'fast' | 'off';
@@ -49,6 +49,7 @@ export type SlashCommandResult =
   | { type: 'stream' }
   /** No `mode` means "show the current one". `scope` is where a change is saved. */
   | { type: 'runtime'; mode?: RuntimeMode; scope: SettingsScope }
+  | { type: 'setup'; scope: SettingsScope }
   | { type: 'tokens' }
   | { type: 'update' }
   | { type: 'version' }
@@ -97,6 +98,7 @@ export const SUBCOMMANDS: Record<string, readonly SubcommandWord[]> = {
   '/model': [{ word: 'deep' }, { word: 'fast' }, { word: 'off' }],
   '/runtime': [{ word: 'default' }, { word: 'light' }, { word: 'agentic' }],
   '/safety': [{ word: 'default' }, { word: 'yolo' }, { word: 'agentic' }],
+  '/setup': [{ word: 'local' }, { word: 'global' }],
   '/jobs': [{ word: 'kill', operand: '<id>' }],
   '/agents': [{ word: 'stop', operand: '<id>' }],
   '/mcp': [{ word: 'add' }, { word: 'remove', operand: '<name>' }, { word: 'reconnect', operand: '<name>' }],
@@ -176,6 +178,13 @@ export function resolveSlashCommand(input: string): SlashCommandResult {
         ? { type: 'runtime', mode, scope }
         : { type: 'usage', message: usage };
     }
+    case '/setup': {
+      const words = args.toLowerCase().split(/\s+/).filter(Boolean);
+      if (words.length > 1 || (words[0] && words[0] !== 'local' && words[0] !== 'global')) {
+        return { type: 'usage', message: `usage: /setup [local|global] — got "${args}"` };
+      }
+      return { type: 'setup', scope: words[0] === 'global' ? 'global' : 'project' };
+    }
     case '/tokens': return { type: 'tokens' };
     case '/update': return args
       ? { type: 'usage', message: `usage: /update — got "${args}"` }
@@ -247,6 +256,7 @@ export const HELP = `commands:
   /safety yolo       — no approval gate at all (dangerous)
   /safety default    — you approve every state-changing tool call (the default)
   /safety agentic    — a judge model reviews each call first; choose it after this
+  /setup [local|global] — open the settings menu for this workspace or globally
   /jobs              — list background shell jobs from this session
   /jobs kill <id>    — stop one background job, or "all" for every one
   /mcp               — list MCP servers and the tools they offer

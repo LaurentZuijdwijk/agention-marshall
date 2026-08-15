@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, existsSync, mkdirSync, rmSync } from 'node:fs';
+import { readFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -9,6 +10,9 @@ const here = dirname(fileURLToPath(import.meta.url));
 import { Session } from '@agentionai/marshall-engine';
 import React from 'react';
 import { App } from './App.js';
+import { ConfigService } from './services/config-service.js';
+import { SETTINGS_VERSION } from './services/settings.js';
+import type { SettingsFile } from './services/settings.js';
 import { fakeStdout, fakeStdin, renderTui, waitFor } from './testing/ink.js';
 
 // ── test helpers ───────────────────────────────────────────────────────────────
@@ -16,7 +20,18 @@ import { fakeStdout, fakeStdin, renderTui, waitFor } from './testing/ink.js';
 let tempDirs: string[] = [];
 let capturedOutput = '';
 
+// The App builds a ConfigService when it is not handed one, and reading through
+// it creates the global config on first run. Every test gets its own
+// $XDG_CONFIG_HOME so that lands in a temp dir rather than in the config of
+// whoever is running the suite.
+const originalXdg = process.env.XDG_CONFIG_HOME;
+beforeEach(() => {
+  process.env.XDG_CONFIG_HOME = mkdtempSync(join(tmpdir(), 'marshall-app-xdg-'));
+});
+
 afterEach(() => {
+  if (originalXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+  else process.env.XDG_CONFIG_HOME = originalXdg;
   for (const dir of tempDirs) {
     if (existsSync(dir)) {
       rmSync(dir, { recursive: true, force: true });
@@ -25,6 +40,16 @@ afterEach(() => {
   tempDirs = [];
   capturedOutput = '';
 });
+
+/** A workspace whose project config pins `settings`, and a service over it. */
+function configWith(workspaceRoot: string, settings: SettingsFile): ConfigService {
+  mkdirSync(join(workspaceRoot, '.marshall'), { recursive: true });
+  writeFileSync(
+    join(workspaceRoot, '.marshall', 'config.json'),
+    JSON.stringify({ settings: { version: SETTINGS_VERSION, ...settings } }, null, 2),
+  );
+  return new ConfigService(workspaceRoot);
+}
 
 // fakeStdout/fakeStdin/waitFor live in ../testing/ink.js — the integration suite
 // needs the same two carefully-shaped streams, and a second copy of them is a
@@ -43,6 +68,7 @@ let mockRun: ((text: string, images: unknown[]) => Promise<void>) | null = null;
 let mockInterrupt: (() => void) | null = null;
 let mockClear: (() => Promise<string>) | null = null;
 let mockMessages: any[] = [];
+let mockSetRuntime: ((mode: string) => void) | null = null;
 
 class MockSession {
   opts: any;
@@ -56,6 +82,10 @@ class MockSession {
     if (mockClear) return mockClear();
     return Promise.resolve('cleared');
   }
+  setRuntime(mode: string): void { mockSetRuntime?.(mode); }
+  // The settings menu lists the live connections, not the config file.
+  mcpServers(): unknown[] { return []; }
+  mcpState(): unknown[] { return []; }
   get messages() { return mockMessages; }
 }
 
@@ -80,6 +110,7 @@ describe('App component', () => {
     mockInterrupt = null;
     mockClear = null;
     mockMessages = [];
+    mockSetRuntime = null;
   });
 
   it('renders without error when model is provided', () => {
@@ -218,12 +249,14 @@ describe('App component', () => {
       React.createElement(App, {
         workspaceRoot: ws,
         agentProfile: { provider: 'openrouter' as const, model: 'm1', apiKey: 'deep-key' },
-        settings: {
-          runtime: 'light' as const,
-          safetyLevel: 3 as const,
-          safetyAgent: { provider: 'openrouter' as const, model: 'judge-model' },
-        },
-        savedKeys: {},
+        // Pinned in the workspace's own config file and read back through the
+        // service, which is the path a real session takes.
+        config: configWith(ws, {
+          version: SETTINGS_VERSION,
+          runtime: 'light',
+          safetyLevel: 3,
+          safetyAgent: { provider: 'openrouter', model: 'judge-model' },
+        }),
         SessionCtor: SessionCapture as any,
         startLoginCtor: mockStartLogin,
         completeLoginCtor: mockCompleteLogin,
@@ -374,6 +407,129 @@ describe('App component', () => {
       const image = sent[0].images[0] as { data: string; mimeType: string };
       assert.equal(image.mimeType, 'image/png');
       assert.ok(Buffer.from(image.data, 'base64').equals(png), 'the bytes survive the round trip');
+    } finally {
+      instance.unmount();
+    }
+  });
+
+  // The runtime settings menu updates React state and disk, but until it also
+  // called session.setRuntime() the live session kept using the old tool belt:
+  // the UI said "light" while the engine still had the full one. The /runtime
+  // command always did the right thing; the menu path did not.
+  it('calls session.setRuntime when the settings menu changes the runtime', async () => {
+    const agentProfile = { provider: 'claude' as const, model: 'claude-sonnet-4-6' };
+    const ws = mkTemp();
+    const stream = fakeStdout(chunk => { capturedOutput += chunk; });
+    const stdin = fakeStdin();
+
+    const runtimeCalls: string[] = [];
+    mockSetRuntime = (mode) => { runtimeCalls.push(mode); };
+
+    const instance = renderTui(
+      React.createElement(App, {
+        workspaceRoot: ws,
+        agentProfile,
+        SessionCtor: MockSession as any,
+        startLoginCtor: mockStartLogin,
+        completeLoginCtor: mockCompleteLogin,
+      }),
+      { stdout: stream, stdin },
+    );
+
+    try {
+      await waitFor(() => capturedOutput.includes('type a task'), 'the idle prompt');
+
+      stdin.push('/setup');
+      await waitFor(() => capturedOutput.includes('/setup'), 'the typed command');
+      stdin.push('\r');
+      await waitFor(() => capturedOutput.includes('settings'), 'the settings menu');
+
+      // Select Runtime (cursor starts on it), then move down to 'light' and pick it.
+      stdin.push('\r');
+      await waitFor(() => capturedOutput.includes('runtime'), 'the runtime page');
+      stdin.push('\u001B[B'); // down to 'light'
+      // Settle on the re-rendered frame — the cursor marker on 'light' — rather
+      // than a fixed sleep: under the parallel load of the full suite the sleep
+      // can be shorter than a render pass, and Enter would read the old cursor.
+      const visible = () => capturedOutput.replace(/\u001B\[[0-9;]*m/g, '');
+      await waitFor(() => visible().includes('❯ light'), 'the cursor on light');
+      stdin.push('\r');
+
+      await waitFor(() => runtimeCalls.length > 0, 'session.setRuntime to be called');
+      assert.deepEqual(runtimeCalls, ['light'],
+        'the live session must switch to the runtime chosen in the menu');
+    } finally {
+      instance.unmount();
+    }
+  });
+
+  // `removeMcpServer` is async. Persisting without waiting for it wrote back the
+  // list that still contained the server, so a server removed in the menu was
+  // connected again on the next launch — the removal only looked like it worked
+  // until you restarted.
+  it('persists the MCP list only after the removal has actually finished', async () => {
+    const ws = mkTemp();
+    const stream = fakeStdout(chunk => { capturedOutput += chunk; });
+    const stdin = fakeStdin();
+
+    const connected = [{ name: 'gh', url: 'https://example.com/mcp' }];
+    class SessionWithMcp extends MockSession {
+      mcpServers() { return connected; }
+      async removeMcpServer(name: string): Promise<boolean> {
+        // The removal settling a tick later is the whole point: a caller that
+        // persists on the next line reads this list before it has changed.
+        await new Promise(resolve => setTimeout(resolve, 20));
+        const index = connected.findIndex(server => server.name === name);
+        if (index === -1) return false;
+        connected.splice(index, 1);
+        return true;
+      }
+    }
+
+    const instance = renderTui(
+      React.createElement(App, {
+        workspaceRoot: ws,
+        agentProfile: { provider: 'claude' as const, model: 'claude-sonnet-4-6' },
+        SessionCtor: SessionWithMcp as any,
+        startLoginCtor: mockStartLogin,
+        completeLoginCtor: mockCompleteLogin,
+      }),
+      { stdout: stream, stdin },
+    );
+
+    try {
+      await waitFor(() => capturedOutput.includes('type a task'), 'the idle prompt');
+      stdin.push('/setup');
+      await waitFor(() => capturedOutput.includes('/setup'), 'the typed command');
+      stdin.push('\r');
+      await waitFor(() => capturedOutput.includes('settings'), 'the settings menu');
+
+      // Down to MCP (Runtime, Safety, Models, Providers, MCP), then remove the
+      // one server, which the cursor starts on.
+      //
+      // Each arrow settles on the re-rendered frame — the cursor marker on the
+      // next row — instead of a fixed 30 ms sleep. Under the parallel load of
+      // the full suite the sleep can be shorter than a render pass, so the
+      // navigation desyncs (flaky failure).
+      const visible = () => capturedOutput.replace(/\u001B\[[0-9;]*m/g, '');
+      for (const row of ['Safety', 'Models', 'Providers', 'MCP']) {
+        stdin.push('\u001B[B');
+        await waitFor(() => visible().includes(`❯ ${row}`), `the cursor on ${row}`);
+      }
+      stdin.push('\r');
+      await waitFor(() => capturedOutput.includes('example.com/mcp'), 'the MCP page');
+      stdin.push('\r');
+
+      await waitFor(() => capturedOutput.includes('removed MCP server: gh'), 'the removal');
+
+      const globalConfig = join(process.env.XDG_CONFIG_HOME!, 'marshall', 'config.json');
+      await waitFor(() => existsSync(globalConfig), 'the global config to be written');
+      await waitFor(
+        () => JSON.parse(readFileSync(globalConfig, 'utf8')).mcpServers !== undefined,
+        'the persisted server list',
+      );
+      assert.deepEqual(JSON.parse(readFileSync(globalConfig, 'utf8')).mcpServers, [],
+        'the removed server must not be written back to the config');
     } finally {
       instance.unmount();
     }

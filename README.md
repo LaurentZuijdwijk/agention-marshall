@@ -184,8 +184,8 @@ From a clean checkout of `main`:
 npm ci
 npm test
 npm run typecheck -w @agentionai/marshall-cli  # optional focused check
-npm exec changeset status
-npm exec changeset version
+npx @changesets/cli status
+npx @changesets/cli version
 npm install                    # refresh package-lock.json
 npm test
 ```
@@ -202,7 +202,7 @@ After the release commit is pushed, authenticate to npm and publish all versione
 
 ```bash
 npm whoami
-npm exec changeset publish
+npx @changesets/cli publish
 ```
 
 `changeset publish` builds packages through their `prepare` scripts, publishes the changed packages, and creates git tags. Push those tags if they were not pushed automatically:

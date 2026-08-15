@@ -1,8 +1,8 @@
 import { useRef, useState } from 'react';
 import { Session } from '@agentionai/marshall-engine';
-import type { AgentProfile, ClientInterface, Provider, McpServerConfig, SafetyAgentConfig, SafetyLevel } from '@agentionai/marshall-engine';
-import { saveConfig } from '../services/config-store.js';
-import { saveSettings, toSavedSafetyAgent } from '../services/settings.js';
+import type { AgentProfile, ClientInterface, McpServerConfig, SafetyAgentConfig, SafetyLevel } from '@agentionai/marshall-engine';
+import type { ConfigService } from '../services/config-service.js';
+import { toSavedSafetyAgent } from '../services/settings.js';
 
 /**
  * Owns the engine Session and the two model tiers it was built from.
@@ -10,16 +10,17 @@ import { saveSettings, toSavedSafetyAgent } from '../services/settings.js';
  * The Session is not React state: it is a long-lived object the engine holds
  * onto, and rebuilding it is an explicit act (the setup wizard finished, or
  * `/model off` dropped the fast tier), never a side effect of rendering.
+ *
+ * It owns no configuration. The saved hosts and keys used to be mirrored here
+ * in React state and updated alongside the write, which meant two answers to
+ * "what is stored" that agreed only as long as every writer remembered to
+ * update both. `ConfigService` is the single answer now.
  */
 export interface SessionController {
   session: Session | null;
   /** The deep tier currently in use. */
   activeProfile: AgentProfile;
   fastProfile?: AgentProfile;
-  /** Per-provider last-used host, for re-seeding the wizard on a switch. */
-  savedHosts: Record<string, string | undefined>;
-  /** Per-provider stored API key, so the wizard can be confirmed with enter. */
-  savedKeys: Record<string, string | undefined>;
   /** Rebuild the session on both tiers and persist them. */
   applyProfiles(deep: AgentProfile, fast: AgentProfile | undefined): void;
   /**
@@ -32,6 +33,8 @@ export interface SessionController {
 
 export interface UseSessionOptions {
   workspaceRoot: string;
+  /** The one owner of what is on disk. Every persist here goes through it. */
+  config: ConfigService;
   agentProfile: AgentProfile;
   fastProfile?: AgentProfile;
   contextAgentProfile?: AgentProfile;
@@ -44,8 +47,6 @@ export interface UseSessionOptions {
   swarm?: boolean;
   safetyLevel?: SafetyLevel;
   safetyAgent?: SafetyAgentConfig;
-  savedHosts?: Record<string, string | undefined>;
-  savedKeys?: Record<string, string | undefined>;
   /** Servers loaded from the global config, connected at session start. */
   mcpServers?: McpServerConfig[];
   client: ClientInterface;
@@ -56,7 +57,7 @@ export interface UseSessionOptions {
 
 export function useSession(options: UseSessionOptions): SessionController {
   const {
-    workspaceRoot, agentProfile, fastProfile: initialFast,
+    workspaceRoot, config, agentProfile, fastProfile: initialFast,
     contextAgentProfile, plannerAgentProfile, reviewerAgentProfile,
     enableGitHub, enableWebSearch, maxTokens, light, swarm,
     client, onProfilesChanged, SessionCtor = Session, safetyLevel, safetyAgent,
@@ -64,15 +65,6 @@ export function useSession(options: UseSessionOptions): SessionController {
 
   const [activeProfile, setActiveProfile] = useState<AgentProfile>(agentProfile);
   const [fastProfile, setFastProfile] = useState<AgentProfile | undefined>(initialFast);
-  // Starts from config and is updated as the user saves a new setup, so a later
-  // provider switch in the same session re-seeds that provider's own host
-  // instead of a single flat one.
-  const [savedHosts, setSavedHosts] = useState<Record<string, string | undefined>>(
-    options.savedHosts ?? {},
-  );
-  const [savedKeys, setSavedKeys] = useState<Record<string, string | undefined>>(
-    options.savedKeys ?? {},
-  );
 
   const build = (deep: AgentProfile, fast: AgentProfile | undefined) =>
     new SessionCtor({
@@ -100,38 +92,19 @@ export function useSession(options: UseSessionOptions): SessionController {
     sessionRef.current = agentProfile.model ? build(agentProfile, initialFast) : null;
   }
 
-  /**
-   * Persist both tiers. Fire and forget — a failed write costs the user a re-run
-   * of the wizard, not the session. The file shape lives in services/config-store
-   * so the startup reader and this writer cannot drift.
-   */
-  const persist = (deep: AgentProfile, fast: AgentProfile | undefined) => {
-    for (const profile of [deep, ...(fast ? [fast] : [])]) {
-      if (profile.host !== undefined) {
-        setSavedHosts(prev => ({ ...prev, [profile.provider as Provider]: profile.host }));
-      }
-      // Kept in step with the file we just wrote, so reopening the wizard in
-      // this same session offers the key that was just entered.
-      if (profile.apiKey) {
-        setSavedKeys(prev => ({ ...prev, [profile.provider as Provider]: profile.apiKey }));
-      }
-    }
-    void saveConfig(deep, fast).catch(() => {});
-  };
-
   const persistSafety = (level: SafetyLevel, agent?: SafetyAgentConfig) => {
     // YOLO (level 1) is session-only and is never written. Returning early
     // also leaves any previously pinned level alone, which is the point: yolo
     // is a decision about this session, not about the next one.
     if (level === 1) return;
-    void saveSettings(workspaceRoot, current => ({
+    void config.updateSettings(current => ({
       ...current,
       safetyLevel: level,
       // Passed through, not merged: dropping the judge is how a gate that no
-      // longer has one stops claiming it does. `saveSettings` removes the key
+      // longer has one stops claiming it does. `applySettings` removes the key
       // when this is undefined.
       safetyAgent: agent ? toSavedSafetyAgent(agent) : undefined,
-    })).catch(() => {});
+    }));
   };
 
   const applyProfiles = (deep: AgentProfile, fast: AgentProfile | undefined) => {
@@ -146,15 +119,17 @@ export function useSession(options: UseSessionOptions): SessionController {
     setActiveProfile(deep);
     setFastProfile(fast);
     onProfilesChanged(deep, fast);
-    persist(deep, fast);
+    // The write is what updates the wizard's idea of the stored host and key:
+    // the service re-reads the file and notifies, so reopening the wizard in
+    // this same session offers what was just entered without anything here
+    // keeping a second copy of it.
+    void config.saveProfiles(deep, fast);
   };
 
   return {
     session: sessionRef.current,
     activeProfile,
     fastProfile,
-    savedHosts,
-    savedKeys,
     applyProfiles,
     stageProfile: setActiveProfile,
     persistSafety,

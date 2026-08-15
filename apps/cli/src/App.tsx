@@ -6,6 +6,7 @@ import type { AgentProfile, Provider, Tier, McpServerConfig, SafetyLevel } from 
 import type { ApprovalDecision } from '@agentionai/marshall-tools';
 import { Setup } from './view/Setup.js';
 import { McpSetup } from './view/McpSetup.js';
+import { SettingsMenu } from './view/setupMenu/SettingsMenu.js';
 import type { McpScope } from './view/McpSetup.js';
 import { Banner, STARTUP_TAGLINES } from './view/Banner.js';
 import type { HeaderMeta } from './view/Banner.js';
@@ -38,9 +39,10 @@ import type { LoginSession } from './login.js';
 import { runSlashCommand } from './commands.js';
 import { describeUpdate, currentVersion } from './update-check.js';
 import type { UpdateInfo } from './update-check.js';
-import { saveMcpServers, saveProjectMcpSelection } from './services/config-store.js';
-import { saveSettings, projectSettings, toSafetyAgentConfig } from './services/settings.js';
-import type { RuntimeMode, Settings } from './services/settings.js';
+import { ConfigService } from './services/config-service.js';
+import { useConfig } from './hooks/useConfig.js';
+import { toSafetyAgentConfig } from './services/settings.js';
+import type { RuntimeMode } from './services/settings.js';
 import { completeSlash, SAFETY_LEVEL_LABELS } from './slashCommands.js';
 import { completeAtPath, expandFileMentions } from './fileCompletion.js';
 import type { Mode } from './mode.js';
@@ -62,28 +64,18 @@ export interface AppProps {
   enableWebSearch?: boolean;
   maxTokens?: number;
   /**
-   * Resolved non-secret settings: the runtime mode, the safety gate and its
-   * judge. Already merged from both config files and the CLI flags by
-   * services/settings.ts, which is the only thing that reads or writes them.
+   * The one owner of configuration: both files, their merge, and every write.
+   *
+   * Everything that used to arrive as a separate snapshot prop — the saved
+   * hosts, the saved keys, the provider list, the MCP servers, the resolved
+   * settings and the startup warnings — is read from here instead. Those props
+   * were copies taken at startup, and a copy is a thing that can disagree with
+   * the file after a write. See services/config-service.ts.
+   *
+   * Optional only so a test can render the App without one; it builds its own
+   * against `workspaceRoot` in that case.
    */
-  settings?: Settings;
-  /**
-   * Per-provider last-used host, loaded from the config `providers` array.
-   * Lets the setup wizard re-seed each provider's own host when the user
-   * switches providers, instead of reusing a single flat host.
-   */
-  savedHosts?: Record<string, string | undefined>;
-  /** Per-provider stored API keys, so the wizard's key step can be confirmed
-   *  with a bare enter instead of retyping a secret already on disk. */
-  savedKeys?: Record<string, string | undefined>;
-  customProviders?: Array<{ name: string; host?: string }>;
-  /** MCP servers from the global config, connected when the session starts. */
-  mcpServers?: McpServerConfig[];
-  /** MCP config that resolves to nothing — surfaced at startup and by `/mcp`. */
-  mcpWarnings?: string[];
-  /** Settings or credentials in the config that were ignored, and why. Shown
-   *  once at startup, since a gate that quietly changed level is worth saying. */
-  configWarnings?: string[];
+  config?: ConfigService;
   /**
    * The startup version check, started before render so the network round trip
    * overlaps with boot. A newer release becomes one row in the transcript.
@@ -118,13 +110,7 @@ export function App({
   enableGitHub = false,
   enableWebSearch = true,
   maxTokens,
-  settings = { runtime: 'default', safetyLevel: 2 },
-  savedHosts,
-  savedKeys,
-  customProviders,
-  mcpServers,
-  mcpWarnings,
-  configWarnings,
+  config: configProp,
   updateCheck,
   registerRedraw,
   animate = Boolean(process.stdout.isTTY),
@@ -137,6 +123,31 @@ export function App({
   traceRender('App');
   const { exit } = useApp();
   const { stdout } = useStdout();
+
+  // One service per workspace, and one snapshot of it per render. `snapshot`
+  // changes identity only when a file does, so a write re-renders and nothing
+  // else does.
+  const config = useMemo(
+    () => configProp ?? new ConfigService(workspaceRoot),
+    [configProp, workspaceRoot],
+  );
+  const savedConfig = useConfig(config);
+  const settings = savedConfig.settings;
+
+  // The stored endpoints as the views are allowed to see them: enough to name
+  // one and to show where it points, and deliberately not its key. A view needs
+  // to *identify* an endpoint; `config.credentialsFor` is how the wizard asks
+  // what is stored for the one the user landed on.
+  const endpoints = useMemo(
+    () => savedConfig.providers.map(({ provider, name, host }) => ({ provider, name, host })),
+    [savedConfig],
+  );
+  // Named endpoints get their own row in the provider list, since "openai-compatible"
+  // three times over tells the user nothing about which server is which.
+  const customProviders = useMemo(
+    () => endpoints.flatMap(e => (e.name ? [{ name: e.name, host: e.host }] : [])),
+    [endpoints],
+  );
 
   const [input, setInput] = useState('');
   const [pendingPrompts, setPendingPrompts] = useState<string[]>([]);
@@ -250,11 +261,12 @@ export function App({
   // level-3 judge comes up unreachable, and while an unreachable judge falls
   // back to asking the human rather than approving, that is not the gate that
   // was configured. `toSafetyAgentConfig` owns the precedence.
-  const { session, activeProfile, fastProfile, savedHosts: hosts, savedKeys: keys, applyProfiles, stageProfile, persistSafety } =
+  const { session, activeProfile, fastProfile, applyProfiles, stageProfile, persistSafety } =
     useSession({
-      workspaceRoot, agentProfile, fastProfile: initialFastProfile,
+      workspaceRoot, config, agentProfile, fastProfile: initialFastProfile,
       contextAgentProfile, plannerAgentProfile, reviewerAgentProfile,
-      enableGitHub, enableWebSearch, maxTokens, savedHosts, savedKeys, mcpServers,
+      enableGitHub, enableWebSearch, maxTokens,
+      mcpServers: savedConfig.mcpServers,
       client, SessionCtor,
       light: settings.runtime === 'light',
       // Both derived from the one saved mode, so a session cannot come up
@@ -262,7 +274,7 @@ export function App({
       swarm: settings.runtime === 'agentic',
       safetyLevel: settings.safetyLevel,
       safetyAgent: settings.safetyAgent
-        ? toSafetyAgentConfig(settings.safetyAgent, { mainProfile: agentProfile, savedKeys })
+        ? toSafetyAgentConfig(settings.safetyAgent, { mainProfile: agentProfile, keyFor: config.keyFor })
         : undefined,
       // Appended, not reset: the session keeps its history across a model
       // switch now, so wiping the visible conversation would misrepresent what
@@ -276,6 +288,13 @@ export function App({
   useEffect(() => {
     registerRedraw?.(() => transcript.replay());
   }, [registerRedraw, transcript]);
+
+  // A save that fails is a fact about this session, so it belongs in the
+  // transcript rather than in a swallowed `.catch`. The service is built before
+  // the UI exists, so it starts out reporting to stderr and is redirected here.
+  useEffect(() => {
+    config.reportErrorsTo(message => live.current.transcript.push('error', message));
+  }, [config]);
 
   // Prices, once, in the background — a turn that finishes before the catalogue
   // lands reports tokens without a cost and picks the cost up on the next one,
@@ -298,7 +317,7 @@ export function App({
   useEffect(() => {
     // A dangling project selection is actionable configuration guidance, not a
     // failed connection; keep it in the informational MCP status style.
-    for (const warning of [...(mcpWarnings ?? []), ...(configWarnings ?? [])]) {
+    for (const warning of savedConfig.warnings) {
       transcript.push('info', warning);
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -394,19 +413,35 @@ export function App({
 
   // ── mcp ────────────────────────────────────────────────────────────────────
   //
-  // Fire and forget, like the model config: a failed write costs the user
-  // re-adding the server next session, not this one.
+  // The engine session owns the *connections*; the config file only records the
+  // definitions. So the session is always read for what to persist, and it must
+  // have finished changing before it is read — see `removeMcpServer`.
   const persistMcp = (enableForProjectOnly?: string) => {
     if (!session) return;
     const servers = session.mcpServers().map(server =>
       server.name === enableForProjectOnly ? { ...server, enabled: false } : server);
-    void saveMcpServers(servers).catch(() => {});
-    if (enableForProjectOnly) {
-      void saveProjectMcpSelection(workspaceRoot, current => ({
-        ...current,
-        enable: [...new Set([...(current.enable ?? []), enableForProjectOnly])],
-      })).catch(() => {});
-    }
+    void config.saveMcpServers(servers);
+    if (enableForProjectOnly) void config.enableProjectMcpServer(enableForProjectOnly);
+  };
+
+  /**
+   * Disconnect a server and forget it, in that order.
+   *
+   * The order is the whole point: `removeMcpServer` is async, and persisting
+   * before it settles writes back the list that still contains the server —
+   * which is how a removed server came back on the next launch. `/mcp remove`
+   * has always awaited it; the settings menu called the same pair the other way
+   * round.
+   */
+  const removeMcpServer = (name: string) => {
+    if (!session) return;
+    session.removeMcpServer(name)
+      .then(removed => {
+        if (!removed) { transcript.push('error', `${name} is not a configured MCP server`); return; }
+        persistMcp();
+        transcript.push('info', `removed MCP server: ${name}`);
+      })
+      .catch((err: unknown) => transcript.push('error', err instanceof Error ? err.message : String(err)));
   };
 
   const handleMcpAdd = (server: McpServerConfig, scope: McpScope) => {
@@ -523,23 +558,24 @@ export function App({
         workspaceRoot, transcript, session, approvals, prefs, setMode, setSteering,
         headerMessage: () => headerMessage(activeProfile, fastProfile),
         onMcpChanged: persistMcp,
-        mcpWarnings,
+        mcpWarnings: savedConfig.mcpWarnings,
         applyProfiles, activeProfile, quit,
         onRuntimeModeChange: (mode, scope) => {
           setRuntimeMode(mode);
-          void saveSettings(workspaceRoot, current => ({ ...current, runtime: mode }), scope)
-            .then(() => {
+          void config.updateSettings(current => ({ ...current, runtime: mode }), scope)
+            .then(saved => {
               // A global write that this repo already overrides would otherwise
               // look like it did nothing the next time the user opens it here.
-              if (scope !== 'global') return;
-              const pinned = projectSettings(workspaceRoot).runtime;
+              if (!saved || scope !== 'global') return;
+              // Read after the write, from the service, so this is what the file
+              // says now rather than what it said when the App mounted.
+              const pinned = config.snapshot().projectSettings.runtime;
               if (pinned && pinned !== mode) {
                 transcript.push('info',
                   `note: this workspace pins runtime "${pinned}" in .marshall/config.json, `
                   + `which still wins here. Run /runtime ${mode} to change it too.`);
               }
-            })
-            .catch(() => {});
+            });
         },
         startLogin: startLoginCtor,
         onSafetyLevelChange: (level) => {
@@ -602,7 +638,53 @@ export function App({
   // count to zero and makes it re-emit the whole transcript on the way back.
   // That was the duplicate banner after a model switch.
   const wizard =
-    mode.type === 'mcp-setup' ? (
+    mode.type === 'settings-menu' ? (
+      <Box padding={1}>
+        <SettingsMenu
+          scope={mode.scope}
+          runtime={runtimeMode}
+          safetyLevel={safetyLevel}
+          deepModel={{ provider: activeProfile.provider, model: activeProfile.model }}
+          fastModel={fastProfile ? { provider: fastProfile.provider, model: fastProfile.model } : undefined}
+          providers={endpoints}
+          // The live connections, not the file: a server added this session is
+          // connected but not yet in the snapshot the menu was opened with.
+          mcpServers={session?.mcpServers() ?? savedConfig.mcpServers}
+          onMcpAdd={() => setMode({ type: 'mcp-setup' })}
+          onMcpRemove={server => removeMcpServer(server.name)}
+          onProviderAdd={() => setMode({ type: 'setup', tier: 'deep', chain: false })}
+          onProviderRemove={entry => {
+            // Only on a write that landed: the service reports the failure
+            // itself, and "removed" next to "could not save" is worse than
+            // either alone.
+            void config.removeProvider(entry).then(saved => {
+              if (saved) transcript.push('info', `removed provider: ${entry.name ?? entry.provider}`);
+            });
+          }}
+          onRuntimeChange={(next, scope) => {
+            setRuntimeMode(next);
+            session?.setRuntime(next);
+            void config.updateSettings(current => ({ ...current, runtime: next }), scope)
+              .then(saved => {
+                if (saved) transcript.push('info', `runtime: ${next} (${scope === 'global' ? 'global' : 'local'})`);
+              });
+          }}
+          onSafetyChange={level => {
+            setSafetyLevelState(level);
+            if (level === 3) setMode({ type: 'safety-setup' });
+            else {
+              session?.setSafetyLevel(level);
+              persistSafety(level, session?.safetyAgent);
+              transcript.push('info', `safety: ${level === 1 ? 'yolo (session only)' : 'default'}`);
+              setMode({ type: 'idle' });
+            }
+          }}
+          onModels={tier => setMode({ type: 'setup', tier, chain: false })}
+          onUpdate={() => transcript.push('info', `current version: ${currentVersion} — use /update to check for updates`)}
+          onExit={() => setMode({ type: 'idle' })}
+        />
+      </Box>
+    ) : mode.type === 'mcp-setup' ? (
       <Box padding={1}>
         <McpSetup
           existing={session?.mcpState().map(s => s.name) ?? []}
@@ -620,8 +702,7 @@ export function App({
           // The fast tier usually lives on the same server as deep, so seed it
           // from whichever profile is closest to what the user is about to pick.
           initial={seedProfile(mode.tier)}
-          savedHosts={hosts}
-          savedKeys={keys}
+          credentials={config.credentialsFor}
           onComplete={(p: Provider | null, m: string | null, h?: string, k?: string, n?: string) =>
             handleSetupComplete(mode.tier, mode.chain, p, m, h, k, n)}
           onExit={() => setMode({ type: 'idle' })}
@@ -632,8 +713,7 @@ export function App({
         <SetupCtor
           title="safety judge model"
           blurb='reviews each tool call before it runs — a "safe" verdict skips your approval, "unsafe" still asks you, with its reasoning attached'
-          savedHosts={hosts}
-          savedKeys={keys}
+          credentials={config.credentialsFor}
           onComplete={handleSafetySetupComplete}
           onExit={() => setMode({ type: 'idle' })}
         />

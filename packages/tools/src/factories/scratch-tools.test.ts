@@ -4,14 +4,18 @@ import { mkdtempSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createScratchTools } from './scratch-tools.js';
+import { createKeyedLock } from '../primitives/keyed-lock.js';
 import type { ToolConfig } from '../types.js';
 
 function tempRoot(): string {
   return mkdtempSync(join(tmpdir(), 'marshall-scratch-test-'));
 }
 
-function makeTools(root: string): Record<string, ReturnType<typeof createScratchTools>[number]> {
-  const config: ToolConfig = { workspaceRoot: root, approval: async () => 'approve' };
+function makeTools(
+  root: string,
+  fileLock?: ToolConfig['fileLock'],
+): Record<string, ReturnType<typeof createScratchTools>[number]> {
+  const config: ToolConfig = { workspaceRoot: root, approval: async () => 'approve', fileLock };
   return Object.fromEntries(createScratchTools(config).map((t) => [t.name, t]));
 }
 
@@ -123,4 +127,32 @@ test('scratch tools bypass approval entirely', async () => {
   const tools = Object.fromEntries(createScratchTools(config).map((t) => [t.name, t]));
   await tools.note_write.execute('a', 'b', { name: 'n', content: 'x' }, 'id');
   assert.equal(consulted, false, 'scratch tools must not require approval');
+});
+
+test('concurrent log_append calls preserve every entry', async () => {
+  const root = tempRoot();
+  const tools = makeTools(root);
+  await Promise.all(Array.from({ length: 20 }, (_, i) =>
+    tools.log_append.execute('a', 'b', { message: `entry-${i}` }, `id-${i}`),
+  ));
+  const content = readFileSync(join(root, '.marshall', 'session.log'), 'utf8');
+  for (let i = 0; i < 20; i++) assert.match(content, new RegExp(`entry-${i}`));
+});
+
+// Every background agent gets its own belt. A lock owned by the factory would
+// make each belt take a private one and serialise against nothing, which is
+// exactly the case the session's shared lock exists for — the append is a
+// read-modify-write, so two unsynchronised writers drop each other's entries.
+test('two belts sharing the session lock do not lose each other’s entries', async () => {
+  const root = tempRoot();
+  const fileLock = createKeyedLock();
+  const first = makeTools(root, fileLock);
+  const second = makeTools(root, fileLock);
+
+  await Promise.all(Array.from({ length: 20 }, (_, i) =>
+    (i % 2 ? second : first).log_append.execute('a', 'b', { message: `entry-${i}` }, `id-${i}`),
+  ));
+
+  const content = readFileSync(join(root, '.marshall', 'session.log'), 'utf8');
+  for (let i = 0; i < 20; i++) assert.match(content, new RegExp(`entry-${i}`));
 });

@@ -1,12 +1,12 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, statSync, existsSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import {
-  buildConfig, upsertProvider, loadConfig, savedDeepProfile, savedProviders, savedHosts, savedKeys,
-  saveConfig, configPath, globalConfigPath, savedMcpServers, resolveMcpServers, danglingMcpSelections,
-  projectSecretWarnings,
+  buildConfig, upsertProvider, loadConfig, savedDeepProfile, findProvider, providerCredentials,
+  providerKeyForHost, configPath, globalConfigPath, savedMcpServers, resolveMcpServers,
+  danglingMcpSelections, projectSecretWarnings, removeProvider,
 } from './config-store.js';
 import type { SavedConfig } from './config-store.js';
 import type { SavedProviderEntry } from './config-store.js';
@@ -70,6 +70,108 @@ describe('upsertProvider', () => {
   it('omits a host that is not set, rather than writing undefined', () => {
     assert.deepEqual(upsertProvider([], { provider: 'claude' }), [{ provider: 'claude' }]);
   });
+
+  it('keys named endpoints independently within one provider', () => {
+    const first = { provider: 'openai-compatible', name: 'LM Studio', host: 'http://lm' } as AgentProfile;
+    const second = { provider: 'openai-compatible', name: 'Ollama', host: 'http://ollama' } as AgentProfile;
+    const out = upsertProvider(upsertProvider([], first), second);
+    assert.deepEqual(out.map(e => e.name), ['LM Studio', 'Ollama']);
+  });
+});
+
+describe('removeProvider', () => {
+  const entries = (): SavedProviderEntry[] => [
+    { provider: 'claude' },
+    { provider: 'llamacpp', host: 'http://192.168.1.248:8080' },
+    { provider: 'openai-compatible', name: 'LM Studio', host: 'http://lm' },
+    { provider: 'openai-compatible', name: 'Ollama', host: 'http://ollama' },
+  ];
+
+  it('removes an unnamed entry', () => {
+    const out = removeProvider(entries(), { provider: 'llamacpp' });
+    assert.deepEqual(out.map(e => e.provider), ['claude', 'openai-compatible', 'openai-compatible']);
+  });
+
+  it('removes only the named endpoint, keeping its other-named siblings', () => {
+    const out = removeProvider(entries(), { provider: 'openai-compatible', name: 'LM Studio' });
+    assert.deepEqual(out, [
+      { provider: 'claude' },
+      { provider: 'llamacpp', host: 'http://192.168.1.248:8080' },
+      { provider: 'openai-compatible', name: 'Ollama', host: 'http://ollama' },
+    ]);
+  });
+
+  it('keeps an entry with the same provider but a different name', () => {
+    const out = removeProvider(entries(), { provider: 'openai-compatible', name: 'Ollama' });
+    assert.equal(out.some(e => e.name === 'LM Studio'), true);
+    assert.equal(out.some(e => e.name === 'Ollama'), false);
+  });
+
+  // Comparing provider and name as two separate conditions reads as though it
+  // does this and does not: with no name to match, every entry sharing the
+  // provider matched, so deleting the bare endpoint deleted the named ones too.
+  it('removing an unnamed entry leaves the named endpoints on that provider', () => {
+    const before = [
+      { provider: 'openai-compatible', host: 'http://plain' },
+      { provider: 'openai-compatible', name: 'LM Studio', host: 'http://lm' },
+    ];
+    assert.deepEqual(removeProvider(before, { provider: 'openai-compatible' }), [
+      { provider: 'openai-compatible', name: 'LM Studio', host: 'http://lm' },
+    ]);
+  });
+
+  it('does not mutate the array it was given', () => {
+    const before = entries();
+    removeProvider(before, { provider: 'openai-compatible', name: 'LM Studio' });
+    assert.equal(before.length, 4);
+  });
+});
+
+describe('providerCredentials', () => {
+  const entries = [
+    { provider: 'openai-compatible', host: 'http://plain', apiKey: 'plain-key' },
+    { provider: 'openai-compatible', name: 'LM Studio', host: 'http://lm', apiKey: 'lm-key' },
+    { provider: 'openai-compatible', name: 'Fresh' },
+  ];
+
+  it('finds the named endpoint rather than the provider’s first entry', () => {
+    assert.deepEqual(providerCredentials(entries, { provider: 'openai-compatible', name: 'LM Studio' }),
+      { host: 'http://lm', apiKey: 'lm-key' });
+  });
+
+  it('seeds a new endpoint’s host from the unnamed entry, to save retyping it', () => {
+    assert.equal(providerCredentials(entries, { provider: 'openai-compatible', name: 'Fresh' }).host,
+      'http://plain');
+  });
+
+  // A different endpoint name is a different server. Handing it a key stored for
+  // another one sends that credential somewhere it was never issued for.
+  it('never falls back to another endpoint’s key', () => {
+    assert.equal(providerCredentials(entries, { provider: 'openai-compatible', name: 'Fresh' }).apiKey,
+      undefined);
+  });
+});
+
+describe('providerKeyForHost', () => {
+  const entries = [
+    { provider: 'openai-compatible', apiKey: 'plain-key' },
+    { provider: 'openai-compatible', name: 'LM Studio', host: 'http://lm', apiKey: 'lm-key' },
+  ];
+
+  // The stored judge records provider and host but never an endpoint name, so
+  // this is the only way it can find the key belonging to a named endpoint.
+  it('matches a named endpoint by host', () => {
+    assert.equal(providerKeyForHost(entries, 'openai-compatible', 'http://lm'), 'lm-key');
+  });
+
+  it('falls back to the unnamed entry when no host matches', () => {
+    assert.equal(providerKeyForHost(entries, 'openai-compatible', 'http://elsewhere'), 'plain-key');
+  });
+
+  it('does not guess between named endpoints', () => {
+    const named = [{ provider: 'openai-compatible', name: 'LM Studio', host: 'http://lm', apiKey: 'lm-key' }];
+    assert.equal(providerKeyForHost(named, 'openai-compatible', 'http://elsewhere'), undefined);
+  });
 });
 
 describe('buildConfig', () => {
@@ -112,7 +214,7 @@ describe('project-local credentials', () => {
     assert.equal(config.apiKey, undefined);
     assert.equal(config.models?.deep?.apiKey, undefined);
     assert.equal(savedDeepProfile(config).model, 'x', 'the non-secret pin still applies');
-    assert.deepEqual(savedKeys(config), { openrouter: 'global-key' });
+    assert.equal(providerCredentials(config.providers, { provider: 'openrouter' }).apiKey, 'global-key');
   });
 
   it('reports what it ignored, rather than just failing to authenticate later', () => {
@@ -187,10 +289,10 @@ describe('loadConfig', () => {
     const root = ws();
     write(root, { providers: [{ provider: 'llamacpp', host: 'http://localhost:8080' }] });
 
-    const hosts = savedHosts(loadConfig(root));
-    const byProvider = savedProviders(loadConfig(root));
-    assert.equal(hosts.llamacpp, 'http://localhost:8080');
-    assert.equal(byProvider.openrouter?.apiKey, 'or-secret', 'the global-only provider survives the merge');
+    const config = loadConfig(root);
+    assert.equal(providerCredentials(config.providers, { provider: 'llamacpp' }).host, 'http://localhost:8080');
+    assert.equal(findProvider(config.providers, { provider: 'openrouter' })?.apiKey, 'or-secret',
+      'the global-only provider survives the merge');
   });
 
   it('lets a project-local entry override the same provider’s global one', () => {
@@ -198,7 +300,8 @@ describe('loadConfig', () => {
     const root = ws();
     write(root, { providers: [{ provider: 'llamacpp', host: 'http://project:8080' }] });
 
-    assert.equal(savedHosts(loadConfig(root)).llamacpp, 'http://project:8080');
+    assert.equal(providerCredentials(loadConfig(root).providers, { provider: 'llamacpp' }).host,
+      'http://project:8080');
   });
 });
 
@@ -212,72 +315,15 @@ describe('reading tiers back', () => {
     assert.deepEqual(savedDeepProfile({ provider: 'claude', model: 'opus' }), { provider: 'claude', model: 'opus' });
   });
 
-  it('indexes providers, ignoring malformed entries', () => {
-    const byProvider = savedProviders({
-      providers: [{ provider: 'llamacpp', host: 'h' }, {} as SavedProviderEntry],
-    });
-    assert.deepEqual(Object.keys(byProvider), ['llamacpp']);
+  it('ignores malformed entries when looking one up', () => {
+    const entries = [{} as SavedProviderEntry, { provider: 'llamacpp', host: 'h' }];
+    assert.deepEqual(findProvider(entries, { provider: 'llamacpp' }), { provider: 'llamacpp', host: 'h' });
+    assert.equal(findProvider(entries, { provider: 'claude' }), undefined);
   });
 
-  it('savedHosts skips providers with no host', () => {
-    const hosts = savedHosts({ providers: [{ provider: 'llamacpp', host: 'h' }, { provider: 'claude' }] });
-    assert.deepEqual(hosts, { llamacpp: 'h' });
-  });
-});
-
-describe('saveConfig', () => {
-  it('round-trips through the reader, via the global config', async () => {
-    await saveConfig(ROUTER, LOCAL);
-    const back = loadConfig(ws());
-    assert.equal(savedDeepProfile(back).model, 'deepseek/v4');
-    assert.deepEqual(savedHosts(back), { llamacpp: 'http://192.168.1.248:8080' });
-  });
-
-  it('preserves a provider entry written by an earlier session', async () => {
-    writeGlobal({ providers: [{ provider: 'ollama', host: 'http://localhost:11434' }] });
-    await saveConfig(ROUTER, undefined);
-    assert.equal(savedHosts(loadConfig(ws())).ollama, 'http://localhost:11434');
-  });
-
-  it('switching provider keeps the previous provider’s host', async () => {
-    await saveConfig(LOCAL, undefined);          // using llama.cpp
-    await saveConfig(ROUTER, undefined);         // switch to OpenRouter
-    const hosts = savedHosts(loadConfig(ws()));
-    assert.equal(hosts.llamacpp, 'http://192.168.1.248:8080', 'the llama.cpp host must survive the switch');
-  });
-
-  it('writes 0600, since the file can hold an API key', async () => {
-    await saveConfig(ROUTER, undefined);
-    assert.equal(statSync(globalConfigPath()).mode & 0o777, 0o600);
-  });
-
-  it('leaves the rest of the global file alone', async () => {
-    // Choosing a model used to rebuild the file from the tiers alone, which
-    // silently deleted every other section — a configured MCP server survived
-    // exactly one /model.
-    writeGlobal({
-      mcpServers: [{ name: 'gh', url: 'https://example.com/mcp', headers: { auth: 't' } }],
-      settings: { version: 1, mode: 'light' },
-    });
-    await saveConfig(ROUTER, undefined);
-
-    const back = JSON.parse(readFileSync(globalConfigPath(), 'utf8'));
-    assert.deepEqual(back.mcpServers, [{ name: 'gh', url: 'https://example.com/mcp', headers: { auth: 't' } }]);
-    assert.deepEqual(back.settings, { version: 1, mode: 'light' });
-    assert.equal(back.model, 'deepseek/v4', 'and still records the tier it was called with');
-  });
-
-  it('recovers from a corrupt existing file instead of throwing', async () => {
-    mkdirSync(dirname(globalConfigPath()), { recursive: true });
-    writeFileSync(globalConfigPath(), 'not json at all');
-    await saveConfig(ROUTER, undefined);
-    assert.equal(JSON.parse(readFileSync(globalConfigPath(), 'utf8')).provider, 'openrouter');
-  });
-
-  it('never writes to the project-local override', async () => {
-    const root = ws();
-    await saveConfig(ROUTER, undefined);
-    assert.equal(existsSync(configPath(root)), false);
+  it('reports no host for a provider that has none stored', () => {
+    const entries = [{ provider: 'llamacpp', host: 'h' }, { provider: 'claude' }];
+    assert.equal(providerCredentials(entries, { provider: 'claude' }).host, undefined);
   });
 });
 

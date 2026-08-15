@@ -6,6 +6,7 @@ import { join, relative, basename } from 'node:path';
 import { atomicWrite } from '../primitives/atomic-write.js';
 import { cappedRead, DEFAULT_MAX_FILE_BYTES } from '../primitives/capped-read.js';
 import { resolveInWorkspace } from '../primitives/resolve.js';
+import { createKeyedLock } from '../primitives/keyed-lock.js';
 import type { ToolConfig } from '../types.js';
 
 /**
@@ -27,6 +28,11 @@ export function createScratchTools(config: ToolConfig): Tool<string>[] {
   const notesDir = join(scratchRoot, 'notes');
   const sessionLog = join(scratchRoot, 'session.log');
   const maxFileBytes = limits.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
+  // The session's lock when there is one, exactly as the file tools take it. A
+  // lock owned by this factory is per-belt, and every background agent gets its
+  // own belt — so two agents appending to the one session log would each take a
+  // private lock and serialise against nothing, which is the case it exists for.
+  const logLock = config.fileLock ?? createKeyedLock();
 
   async function ensureDirs() {
     await mkdir(notesDir, { recursive: true });
@@ -121,11 +127,14 @@ export function createScratchTools(config: ToolConfig): Tool<string>[] {
         await ensureDirs();
         const timestamp = new Date().toISOString();
         const entry = `\n## ${timestamp}\n\n${String(message)}\n`;
-        // Read-then-append to avoid full file rewrite on large logs
-        const existing = existsSync(sessionLog)
-          ? await readFile(sessionLog, 'utf8')
-          : '';
-        await atomicWrite(sessionLog, existing + entry);
+        // Serialise the read-modify-write: atomicWrite alone cannot prevent two
+        // concurrent appenders from both reading the same old log contents.
+        await logLock(sessionLog, async () => {
+          const existing = existsSync(sessionLog)
+            ? await readFile(sessionLog, 'utf8')
+            : '';
+          await atomicWrite(sessionLog, existing + entry);
+        });
         return `Logged at ${timestamp}`;
       } catch (err) {
         return `Error: ${safe(err)}`;

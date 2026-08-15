@@ -26,11 +26,9 @@
 // provider/model/host only and is authenticated at load time from the global
 // config or the environment, exactly like the main model is.
 
-import { readFile, writeFile, mkdir, chmod } from 'node:fs/promises';
-import { dirname } from 'node:path';
 import { PROVIDER_DEFAULTS, resolveModel } from '@agentionai/marshall-engine';
 import type { AgentProfile, Provider, SafetyAgentConfig, SafetyAgentKind } from '@agentionai/marshall-engine';
-import { configPath, globalConfigPath, loadConfig, readJsonConfig } from './config-store.js';
+import { configPath, loadConfig, readJsonConfig } from './config-store.js';
 import type { SavedConfig } from './config-store.js';
 
 /**
@@ -259,8 +257,15 @@ export function toSavedSafetyAgent(agent: SafetyAgentConfig): SavedSafetyAgent {
 export interface JudgeAuth {
   /** The main agent, whose key the judge may share. */
   mainProfile: AgentProfile;
-  /** Per-provider keys from the global config, keyed by provider. */
-  savedKeys?: Record<string, string | undefined>;
+  /**
+   * The stored key for a provider at a host, or undefined.
+   *
+   * A lookup rather than a map, because the judge is identified by
+   * provider *and host* while the stored entries are identified by provider and
+   * endpoint name — matching those up is `providerKeyForHost`'s job, and a map
+   * handed over here would have to have been keyed correctly by the caller.
+   */
+  keyFor?: (provider: string, host?: string) => string | undefined;
 }
 
 /**
@@ -280,12 +285,13 @@ export interface JudgeAuth {
  *      environment variable, which is how a `.env` supplies it.
  */
 export function toSafetyAgentConfig(saved: SavedSafetyAgent, auth: JudgeAuth): SafetyAgentConfig {
-  const { mainProfile, savedKeys } = auth;
+  const { mainProfile, keyFor } = auth;
+  const stored = keyFor?.(saved.provider, saved.host);
   const sameProvider = mainProfile.provider === saved.provider;
   const sameHost = saved.host === undefined || saved.host === mainProfile.host;
   const apiKey = sameProvider && sameHost
-    ? mainProfile.apiKey ?? savedKeys?.[saved.provider]
-    : savedKeys?.[saved.provider];
+    ? mainProfile.apiKey ?? stored
+    : stored;
 
   return {
     profile: {
@@ -309,39 +315,25 @@ function compact(settings: SettingsFile): SettingsFile {
 }
 
 /**
- * The only writer.
+ * Apply a settings edit to one config file's contents.
+ *
+ * Pure: `ConfigService` hands it whatever is on disk and writes what comes
+ * back, which is what keeps the file mode, the `mkdir` and the serialisation in
+ * one place instead of one per writer.
  *
  * `update` is handed what the target file alone pins, not the merged view, so
  * `s => ({ ...s, runtime: 'light' })` records exactly one decision instead of
  * freezing every inherited default into the file. Returning a field as
  * `undefined` removes the pin.
- *
- * Everything else in the file is preserved, and the global file keeps its
- * `0600` because it holds credentials. Callers fire and forget: a failed write
- * costs the user a re-run of the command, not the session.
  */
-export async function saveSettings(
-  workspaceRoot: string,
+export function applySettings(
+  existing: SavedConfig,
   update: (current: SettingsFile) => SettingsFile,
-  scope: SettingsScope = 'project',
-): Promise<void> {
-  const path = scope === 'global' ? globalConfigPath() : configPath(workspaceRoot);
-  await mkdir(dirname(path), { recursive: true });
-
-  let existing: SavedConfig = {};
-  try {
-    existing = JSON.parse(await readFile(path, 'utf8')) as SavedConfig;
-  } catch { /* no file yet, or unreadable — start from empty */ }
-
+): SavedConfig {
   const next = compact({ ...update(readSettings(existing)), version: SETTINGS_VERSION });
   // `light` is deleted rather than left behind: it has just been folded into
   // `settings.runtime`, and a file carrying both would answer the same question
   // two ways depending on which build read it.
   const { light: _absorbed, ...rest } = existing;
-  const json = JSON.stringify({ ...rest, settings: next }, null, 2) + '\n';
-  await writeFile(path, json, scope === 'global' ? { mode: 0o600 } : {});
-  // `mode` on writeFile only applies when the file is created, and the global
-  // config normally already exists. Tighten it explicitly, so a file that was
-  // once created loosely does not stay that way while holding an API key.
-  if (scope === 'global') await chmod(path, 0o600);
+  return { ...rest, settings: next };
 }

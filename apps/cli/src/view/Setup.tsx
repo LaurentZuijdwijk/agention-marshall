@@ -7,6 +7,7 @@ import React, { useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { PROVIDER_DEFAULTS } from '@agentionai/marshall-engine';
 import type { Provider, Tier } from '@agentionai/marshall-engine';
+import type { ProviderRef } from '../services/config-store.js';
 import { C, G } from './theme.js';
 import { Title, Hint, BackableTextInput } from './WizardChrome.js';
 import { CUSTOM, ModelSelect } from './ModelPicker.js';
@@ -71,7 +72,7 @@ function ProviderSelect({ onSelect, onBack, offerSameAsDeep, customProviders }: 
 type Step =
   | { name: 'provider' }
   | { name: 'endpoint-name'; provider: Provider; host: string; apiKey?: string; endpointName?: string }
-  | { name: 'host'; provider: Provider }
+  | { name: 'host'; provider: Provider; endpointName?: string }
   | { name: 'model'; provider: Provider; host?: string; apiKey?: string; endpointName?: string }
   | { name: 'custom'; provider: Provider; host?: string; apiKey?: string; endpointName?: string }
   | { name: 'key'; provider: Provider; host?: string };
@@ -79,14 +80,17 @@ type Step =
 export interface SetupProps {
   initial?: { provider?: Provider; model?: string; host?: string };
   /**
-   * Last-used host per provider (from the config `providers` array). When the
-   * user switches providers mid-wizard, the host field re-seeds to that
-   * provider's own saved host rather than reusing one flat host.
+   * What is stored for one endpoint: its last-used host, so switching providers
+   * mid-wizard re-seeds that provider's own address rather than reusing one flat
+   * host, and whether it already has a key, so the key step can be confirmed
+   * with a bare enter instead of retyping a secret.
+   *
+   * A lookup, not two maps. The wizard asks about the endpoint it is on and the
+   * config layer answers; it does not get handed a table it has to key
+   * correctly, which is what let named endpoints fall through to the wrong
+   * entry.
    */
-  savedHosts?: Record<Provider, string | undefined>;
-  /** Stored API key per provider. Presence is what lets the key step be
-   *  confirmed with a bare enter instead of retyping a secret. */
-  savedKeys?: Record<string, string | undefined>;
+  credentials?: (ref: ProviderRef) => { host?: string; apiKey?: string };
   customProviders?: Array<{ name: string; host?: string }>;
   /**
    * Which tier is being chosen. `fast` gets a "same as deep" escape and
@@ -164,14 +168,14 @@ export function resolveKeyInput(typed: string, stored?: string): string | undefi
  * wrong server and the wizard reported it as unreachable.
  */
 export function seedHost(
-  provider: Provider,
-  savedHosts?: Record<string, string | undefined>,
+  ref: ProviderRef,
+  credentials?: (ref: ProviderRef) => { host?: string },
   initial?: { provider?: Provider; host?: string },
 ): string {
-  const providerDefault = PROVIDER_DEFAULTS[provider];
+  const providerDefault = PROVIDER_DEFAULTS[ref.provider as Provider];
   const builtIn = 'host' in providerDefault ? providerDefault.host : '';
-  const sameProvider = initial?.provider === provider ? initial?.host : undefined;
-  return savedHosts?.[provider] ?? sameProvider ?? builtIn ?? '';
+  const sameProvider = initial?.provider === ref.provider ? initial?.host : undefined;
+  return credentials?.(ref).host ?? sameProvider ?? builtIn ?? '';
 }
 
 /** What each tier is *for*, so the choice isn't guesswork. */
@@ -180,7 +184,7 @@ const TIER_BLURB: Record<Tier, string> = {
   fast: 'reads files, searches and summarises for the deep model',
 };
 
-export function Setup({ initial, tier = 'deep', title, blurb, deepLabel, savedHosts, savedKeys, customProviders, onComplete, onExit }: SetupProps) {
+export function Setup({ initial, tier = 'deep', title, blurb, deepLabel, credentials, customProviders, onComplete, onExit }: SetupProps) {
   const [step, setStep] = useState<Step>({ name: 'provider' });
   traceRender('Setup', `step=${step.name}`);
   const [hostInput, setHostInput] = useState('');
@@ -189,13 +193,22 @@ export function Setup({ initial, tier = 'deep', title, blurb, deepLabel, savedHo
   const [customInput, setCustomInput] = useState('');
   const [keyInput, setKeyInput] = useState('');
 
-  const defaultHostFor = (provider: Provider): string => seedHost(provider, savedHosts, initial);
+  // The endpoint being configured. `name` defaults to the row the user picked
+  // on the provider step, which is what makes a named endpoint look up its own
+  // stored host and key; it is passed explicitly only where that state has not
+  // been set yet, in the provider step's own handler.
+  const refFor = (provider: Provider, name = selectedEndpointName): ProviderRef =>
+    ({ provider, ...(name ? { name } : {}) });
+
+  const defaultHostFor = (provider: Provider, name?: string): string =>
+    seedHost(refFor(provider, name), credentials, initial);
 
   // Environment keys are already available to the session. Only prompt when
   // neither the environment nor the global saved-key selection has a value.
-  const keyFor = (provider: Provider): string | undefined => {
+  const keyFor = (provider: Provider, name?: string): string | undefined => {
     const envKey = PROVIDER_DEFAULTS[provider].envKey;
-    return savedKeys?.[provider] || (envKey ? process.env[envKey] : undefined) || undefined;
+    return credentials?.(refFor(provider, name)).apiKey
+      || (envKey ? process.env[envKey] : undefined) || undefined;
   };
   const needsKey = (provider: Provider): boolean => Boolean(
     (provider === 'openai-compatible' || provider === 'llamacpp')
@@ -232,8 +245,8 @@ export function Setup({ initial, tier = 'deep', title, blurb, deepLabel, savedHo
             if (p === SAME_AS_DEEP) { onComplete(null, null); return; }
             if (providerHasHost(p)) {
               setSelectedEndpointName(selectedName);
-              setHostInput(defaultHostFor(p));
-              setStep({ name: 'host', provider: p });
+              setHostInput(defaultHostFor(p, selectedName));
+              setStep({ name: 'host', provider: p, endpointName: selectedName });
             } else {
               const stored = keyFor(p);
               if (needsKey(p)) {
@@ -301,7 +314,7 @@ export function Setup({ initial, tier = 'deep', title, blurb, deepLabel, savedHo
           host={host ?? defaultHostFor(provider)}
           apiKey={step.apiKey}
           onSelect={(val) => {
-            if (val === CUSTOM) setStep({ name: 'custom', provider, host, apiKey: step.apiKey });
+            if (val === CUSTOM) setStep({ name: 'custom', provider, host, apiKey: step.apiKey, endpointName });
             else onComplete(provider, val, host, step.apiKey, endpointName);
           }}
           onBack={() => (providerHasHost(provider) ? setStep({ name: 'host', provider }) : setStep({ name: 'provider' }))}
@@ -350,9 +363,9 @@ export function Setup({ initial, tier = 'deep', title, blurb, deepLabel, savedHo
         onChange={setCustomInput}
         onSubmit={(val) => {
           const m = val.trim();
-          if (m) onComplete(provider, m, host, step.apiKey);
+          if (m) onComplete(provider, m, host, step.apiKey, step.endpointName);
         }}
-        onBack={() => setStep({ name: 'model', provider, host, apiKey: step.apiKey })}
+        onBack={() => setStep({ name: 'model', provider, host, apiKey: step.apiKey, endpointName: step.endpointName })}
         placeholder={PROVIDER_DEFAULTS[provider].model}
       />
       <Hint>{`enter confirms ${G.bullet} esc back`}</Hint>

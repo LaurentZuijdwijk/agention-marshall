@@ -82,6 +82,25 @@ describe('slashCommands', () => {
       assert.equal(completeSlash('/mod'), 'el');
     });
 
+    it('opens the local settings menu by default', () => {
+      assert.deepEqual(resolveSlashCommand('/setup'), { type: 'setup', scope: 'project' });
+      assert.deepEqual(resolveSlashCommand('/setup local'), { type: 'setup', scope: 'project' });
+    });
+
+    it('opens the global settings menu when requested', () => {
+      assert.deepEqual(resolveSlashCommand('/setup global'), { type: 'setup', scope: 'global' });
+    });
+
+    it('rejects invalid setup scopes', () => {
+      assert.equal(resolveSlashCommand('/setup workspace').type, 'usage');
+      assert.equal(resolveSlashCommand('/setup global extra').type, 'usage');
+    });
+
+    it('completes setup scopes', () => {
+      assert.equal(completeSlash('/setup '), 'local');
+      assert.equal(completeSlash('/setup g'), 'lobal');
+    });
+
     it('returns safety with no level for bare /safety', () => {
       const result = resolveSlashCommand('/safety');
       assert.equal(result.type, 'safety');

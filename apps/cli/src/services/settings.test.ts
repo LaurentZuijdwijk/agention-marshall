@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'n
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import {
-  readSettings, resolveSettings, loadSettings, saveSettings, projectSettings,
+  readSettings, resolveSettings, loadSettings, applySettings, projectSettings,
   settingsWarnings, toSavedSafetyAgent, toSafetyAgentConfig, SETTINGS_VERSION,
 } from './settings.js';
 import { configPath, globalConfigPath } from './config-store.js';
@@ -165,65 +165,42 @@ describe('loadSettings', () => {
   });
 });
 
-describe('saveSettings', () => {
-  it('writes only what was asked for, not every resolved default', () => {
-    const root = ws();
-    return saveSettings(root, current => ({ ...current, runtime: 'light' })).then(() => {
-      // Pinning a safety level here would freeze a default into a committed
-      // file and quietly stop tracking any later change to it.
-      assert.deepEqual(readProjectFile(root).settings, { version: 1, runtime: 'light' });
-    });
+
+describe('applySettings', () => {
+  const JUDGE_PIN = { provider: 'openrouter', model: 'judge' };
+
+  it('records only what was asked for, not every resolved default', () => {
+    // Pinning a safety level here would freeze a default into a committed file
+    // and quietly stop tracking any later change to it.
+    const out = applySettings({}, current => ({ ...current, runtime: 'light' }));
+    assert.deepEqual(out.settings, { version: SETTINGS_VERSION, runtime: 'light' });
   });
 
-  it('preserves the rest of the project file', async () => {
-    const root = ws();
-    write(root, { provider: 'llamacpp', mcp: { enable: ['local'] } });
-    await saveSettings(root, current => ({ ...current, runtime: 'light' }));
-
-    assert.deepEqual(readProjectFile(root), {
+  it('preserves the rest of the file', () => {
+    const out = applySettings(
+      { provider: 'llamacpp', mcp: { enable: ['local'] } },
+      current => ({ ...current, runtime: 'light' }),
+    );
+    assert.deepEqual(out, {
       provider: 'llamacpp',
       mcp: { enable: ['local'] },
-      settings: { version: 1, runtime: 'light' },
+      settings: { version: SETTINGS_VERSION, runtime: 'light' },
     });
   });
 
-  it('folds the legacy light flag in and deletes it, so the file has one answer', async () => {
-    const root = ws();
-    write(root, { light: true });
-    await saveSettings(root, current => ({ ...current, runtime: 'default' }));
-
-    const file = readProjectFile(root);
-    assert.equal(file.light, undefined, 'an older build must not read the opposite from the same file');
-    assert.deepEqual(file.settings, { version: 1, runtime: 'default' });
+  it('folds the legacy light flag in and deletes it, so the file has one answer', () => {
+    const out = applySettings({ light: true }, current => ({ ...current, runtime: 'default' }));
+    assert.equal(out.light, undefined, 'an older build must not read the opposite from the same file');
+    assert.deepEqual(out.settings, { version: SETTINGS_VERSION, runtime: 'default' });
   });
 
-  it('removes a pin when the update returns undefined', async () => {
-    const root = ws();
-    write(root, { settings: { version: 1, safetyLevel: 3, safetyAgent: JUDGE } });
-    await saveSettings(root, current => ({ ...current, safetyLevel: 2, safetyAgent: undefined }));
-
+  it('removes a pin when the update returns undefined', () => {
     // Otherwise a judge could never be dropped without hand-editing the file.
-    assert.deepEqual(readProjectFile(root).settings, { version: 1, safetyLevel: 2 });
-  });
-
-  it('writes globally when asked, keeping 0600 because that file holds keys', async () => {
-    const root = ws();
-    writeGlobal({ providers: [{ provider: 'openrouter', apiKey: 'k' }] });
-    await saveSettings(root, current => ({ ...current, runtime: 'light' }), 'global');
-
-    const global = JSON.parse(readFileSync(globalConfigPath(), 'utf8'));
-    assert.deepEqual(global.settings, { version: 1, runtime: 'light' });
-    assert.deepEqual(global.providers, [{ provider: 'openrouter', apiKey: 'k' }]);
-    assert.equal(statSync(globalConfigPath()).mode & 0o777, 0o600);
-    assert.equal(projectSettings(root).runtime, undefined, 'and leaves the project file alone');
-  });
-
-  it('starts from empty rather than throwing on an unreadable file', async () => {
-    const root = ws();
-    mkdirSync(join(root, '.marshall'), { recursive: true });
-    writeFileSync(configPath(root), '{ not json');
-    await saveSettings(root, current => ({ ...current, runtime: 'light' }));
-    assert.deepEqual(readProjectFile(root).settings, { version: 1, runtime: 'light' });
+    const out = applySettings(
+      { settings: { version: SETTINGS_VERSION, safetyLevel: 3, safetyAgent: JUDGE_PIN } },
+      current => ({ ...current, safetyLevel: 2, safetyAgent: undefined }),
+    );
+    assert.deepEqual(out.settings, { version: SETTINGS_VERSION, safetyLevel: 2 });
   });
 });
 
@@ -255,7 +232,7 @@ describe('judge conversion', () => {
 
   it('takes a different provider’s key from the global config instead', () => {
     const agent = toSafetyAgentConfig({ provider: 'claude', model: 'j' }, {
-      mainProfile: main, savedKeys: { claude: 'claude-key' },
+      mainProfile: main, keyFor: provider => (provider === 'claude' ? 'claude-key' : undefined),
     });
     assert.equal(agent.profile.apiKey, 'claude-key');
   });

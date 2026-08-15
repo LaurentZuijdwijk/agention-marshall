@@ -194,10 +194,12 @@ export class CompressionManager {
       this.threshold = threshold;
       this.log(`COMPRESSION_READY summariser=${summaryProfile.provider}/${resolveModel(summaryProfile)} threshold=${threshold}`);
     } catch (err) {
-      // Skip compression if the summariser can't be created. Left registered:
-      // a later switch to a reachable model makes it work again. `ready`
-      // is already true at this point, so without this log a failed creation here
-      // disables compression for the rest of the session with no visible trace.
+      // Skip compression if the summariser can't be created. Reset `ready` so a
+      // later attempt (the next ensure, or a switch to a reachable model via
+      // invalidateModel) retries instead of short-circuiting on the stale flag.
+      // Without this, `ready` stays true while `threshold` stays null, so the
+      // failure disables compression for the rest of the session silently.
+      this.ready = false;
       this.log(`COMPRESSION_UNAVAILABLE summariser=${summaryProfile.provider}/${resolveModel(summaryProfile)} ${describeAgentError('summarizer', summaryProfile, err)} details=${providerErrorDiagnostics(err)}`);
       return;
     }

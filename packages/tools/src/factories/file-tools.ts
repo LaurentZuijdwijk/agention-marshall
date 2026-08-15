@@ -20,6 +20,11 @@ const SKIP_DIRS = new Set([
 const MAX_SEARCH_RESULTS = 200;
 const MAX_SEARCH_FILE_BYTES = 256 * 1024;
 
+// A hash of capped content is not sufficient to authorize a whole-file write:
+// the unseen tail could have changed. Keep completeness alongside the shared
+// read state so it survives factories recreated for the same session.
+const completeReadsByMap = new WeakMap<Map<string, string>, Set<string>>();
+
 async function* walkFiles(dir: string): AsyncGenerator<string> {
   const info = await stat(dir);
   if (info.isFile()) {
@@ -71,6 +76,7 @@ function buildReadFile(
   maxFileBytes: number,
   readFiles: Map<string, string>,
   dedupeCache?: DedupeCache,
+  completeSnapshots?: Set<string>,
 ): Tool<string> {
   return new Tool<string>({
     name: 'read_file',
@@ -93,6 +99,15 @@ function buildReadFile(
         // The hash, not just the fact of the read: write_file compares against
         // it to catch an overwrite built from content that is no longer current.
         readFiles.set(resolved, hashContent(content));
+        // cappedRead appends this marker when bytes beyond the cap were not
+        // observed. Such a snapshot must never authorize replacing the file.
+        // Use byte size rather than looking for the marker: a real file may
+        // legitimately end with the marker text.
+        const complete = (await stat(resolved)).size <= maxFileBytes;
+        const completeReads = completeSnapshots ?? completeReadsByMap.get(readFiles) ?? new Set<string>();
+        if (!completeSnapshots) completeReadsByMap.set(readFiles, completeReads);
+        if (complete) completeReads.add(resolved);
+        else completeReads.delete(resolved);
 
         const totalLines = content.split('\n').length;
         const isFullRead = !startLine && !endLine;
@@ -240,11 +255,18 @@ export function createFileTools(config: ToolConfig, dedupeCache?: DedupeCache): 
   // Shared set: read_file populates it; write_file/edit_file check it. Supplied
   // by the session when it should outlive this belt — see ToolConfig.readFiles.
   const readFiles = config.readFiles ?? new Map<string, string>();
+  const completeReads = completeReadsByMap.get(readFiles) ?? new Set<string>();
+  completeReadsByMap.set(readFiles, completeReads);
 
   /** The file as read_file would see it, hashed — same read path, so a large
    *  file's truncation does not make the two incomparable. */
-  const fileHash = async (resolved: string): Promise<string> =>
-    hashContent(await cappedRead(resolved, maxFileBytes));
+  const fileHash = async (resolved: string): Promise<string> => {
+    const content = await cappedRead(resolved, maxFileBytes);
+    const complete = (await stat(resolved)).size <= maxFileBytes;
+    if (complete) completeReads.add(resolved);
+    else completeReads.delete(resolved);
+    return hashContent(content);
+  };
 
   // Serialises the mutating tools per path. The model batches tool calls, and
   // both write_file and edit_file read the file before writing it back, so
@@ -253,7 +275,7 @@ export function createFileTools(config: ToolConfig, dedupeCache?: DedupeCache): 
   // ToolConfig.fileLock.
   const withFileLock = config.fileLock ?? createKeyedLock();
 
-  const read_file = buildReadFile(workspaceRoot, maxFileBytes, readFiles, dedupeCache);
+  const read_file = buildReadFile(workspaceRoot, maxFileBytes, readFiles, dedupeCache, completeReads);
   const list_dir = buildListDir(workspaceRoot);
   const search = buildSearch(workspaceRoot, maxSearchResults);
 
@@ -289,6 +311,13 @@ export function createFileTools(config: ToolConfig, dedupeCache?: DedupeCache): 
               return (
                 `Error: ${relative(workspaceRoot, resolved)} exists but has not been read this session. ` +
                 `Call read_file first so you have the current content before overwriting it.`
+              );
+            }
+            if (!completeReads.has(resolved)) {
+              return (
+                `Error: ${relative(workspaceRoot, resolved)} was only partially read because it exceeds the ` +
+                `read limit. Read the complete file (increase maxFileBytes) before replacing it wholesale; ` +
+                `use edit_file for a targeted change.`
               );
             }
             const actual = await fileHash(resolved);

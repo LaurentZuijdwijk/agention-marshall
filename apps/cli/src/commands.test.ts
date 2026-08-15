@@ -218,6 +218,16 @@ describe('runSlashCommand', () => {
     assert.deepEqual(modes, [], 'must not strand the UI in running mode');
   });
 
+  it('opens the scoped settings menu for /setup', () => {
+    const { deps, modes } = setup();
+    runSlashCommand('/setup', deps);
+    runSlashCommand('/setup global', deps);
+    assert.deepEqual(modes, [
+      { type: 'settings-menu', scope: 'project' },
+      { type: 'settings-menu', scope: 'global' },
+    ]);
+  });
+
   it('opens the wizard on the tier /model names', () => {
     const { deps, modes } = setup();
     runSlashCommand('/model', deps);

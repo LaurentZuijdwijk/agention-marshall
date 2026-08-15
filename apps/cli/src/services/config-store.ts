@@ -1,7 +1,6 @@
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { readFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { join } from 'node:path';
 import type { AgentProfile, McpServerConfig } from '@agentionai/marshall-engine';
 
 // ── the on-disk shape ─────────────────────────────────────────────────────────
@@ -10,6 +9,14 @@ import type { AgentProfile, McpServerConfig } from '@agentionai/marshall-engine'
 // setup wizard) used to describe this shape separately, in two files, which
 // is how a saved llama.cpp host could survive a write from one side and be
 // dropped by the other.
+//
+// This module is pure: it describes the shape, merges the two layers and
+// answers questions about a config value it was handed. It does not write. One
+// service owns every write and every cache of what is on disk — see
+// services/config-service.ts. Before that split there were five independent
+// read-modify-write functions across two files, each with its own idea of the
+// file mode and whether the directory existed, and two of them could interleave
+// and drop each other's changes.
 //
 // Fields are optional and loosely typed on purpose: this is untrusted file
 // content, and an older or hand-edited file must not crash startup.
@@ -31,6 +38,8 @@ import type { AgentProfile, McpServerConfig } from '@agentionai/marshall-engine'
 // anything resolves).
 
 export interface SavedProfile {
+  /** Named endpoint within a provider (for openai-compatible servers). */
+  name?: string;
   provider?: string;
   model?: string;
   host?: string;
@@ -44,6 +53,22 @@ export interface SavedProviderEntry {
   provider: string;
   host?: string;
   apiKey?: string;
+}
+
+/**
+ * Which stored endpoint is meant.
+ *
+ * A provider is not an identity on its own: `openai-compatible` can be three
+ * different servers at once, told apart by `name`. Passed as a value rather
+ * than as a `"provider:name"` string, because a string key invites each call
+ * site to build and parse it in its own slightly different way — which is
+ * exactly how a lookup ends up silently missing every named endpoint. The one
+ * place that stringifies a ref is `providerKey`, and it exists for map keys and
+ * equality, never as a parameter type.
+ */
+export interface ProviderRef {
+  provider: string;
+  name?: string;
 }
 
 /** A remote MCP server as stored. `headers` can hold a bearer token, which is
@@ -85,7 +110,7 @@ export interface SavedConfig extends SavedProfile {
   /**
    * Pre-settings way of asking for the lean tool belt. Still read, so existing
    * config files keep working; `settings.mode` is where it lives now, and the
-   * first write through `saveSettings` folds this key into it.
+   * first write through `applySettings` folds this key into it.
    */
   light?: boolean;
   providers?: SavedProviderEntry[];
@@ -162,14 +187,15 @@ function mergeProviders(
   project: SavedProviderEntry[],
 ): SavedProviderEntry[] {
   const byProvider = new Map<string, SavedProviderEntry>();
-  for (const entry of global) if (entry?.provider) byProvider.set(entry.provider, entry);
+  for (const entry of global) if (entry?.provider) byProvider.set(providerKey(entry), entry);
   // Field by field, not entry by entry: a project pinning one provider's *host*
   // should not also erase the key stored globally for that same provider. Since
   // the project layer cannot supply a key at all (see `stripProjectSecrets`),
   // whole-entry replacement could only ever delete credentials, never set them.
   for (const entry of project) {
     if (!entry?.provider) continue;
-    byProvider.set(entry.provider, { ...byProvider.get(entry.provider), ...entry });
+    const key = providerKey(entry);
+    byProvider.set(key, { ...byProvider.get(key), ...entry });
   }
   return [...byProvider.values()];
 }
@@ -252,13 +278,71 @@ export function savedDeepProfile(config: SavedConfig): SavedProfile {
   return config.models?.deep ?? config;
 }
 
-/** Per-provider entries keyed by provider, for seeding the setup wizard. */
-export function savedProviders(config: SavedConfig): Record<string, SavedProviderEntry> {
-  const byProvider: Record<string, SavedProviderEntry> = {};
-  for (const entry of config.providers ?? []) {
-    if (entry?.provider) byProvider[entry.provider] = entry;
+/** One ref as a map key. Equality only — nothing parses this back apart. */
+export function providerKey(ref: ProviderRef): string {
+  return ref.name ? `${ref.provider}:${ref.name}` : ref.provider;
+}
+
+export function sameProvider(a: ProviderRef, b: ProviderRef): boolean {
+  return providerKey(a) === providerKey(b);
+}
+
+/** The stored entry for exactly this endpoint, or undefined. */
+export function findProvider(
+  entries: SavedProviderEntry[] | undefined,
+  ref: ProviderRef,
+): SavedProviderEntry | undefined {
+  return (entries ?? []).find(entry => entry?.provider && sameProvider(entry, ref));
+}
+
+/**
+ * What the wizard should pre-fill for `ref`.
+ *
+ * The host falls back to the provider's unnamed entry, because a URL is a
+ * suggestion the user sees and confirms on screen, and starting a second
+ * endpoint from the first one's address saves retyping it.
+ *
+ * The key deliberately does not fall back. A different endpoint name is a
+ * different server, and seeding it with a credential stored for another one
+ * sends that key somewhere it was never issued for — the same rule
+ * `toSafetyAgentConfig` applies to the judge, for the same reason. A new named
+ * endpoint asks for its own key instead.
+ */
+export function providerCredentials(
+  entries: SavedProviderEntry[] | undefined,
+  ref: ProviderRef,
+): { host?: string; apiKey?: string } {
+  const exact = findProvider(entries, ref);
+  const unnamed = ref.name ? findProvider(entries, { provider: ref.provider }) : undefined;
+  return {
+    host: exact?.host ?? unnamed?.host,
+    apiKey: exact?.apiKey,
+  };
+}
+
+/**
+ * The key for a profile identified by provider and host rather than by name.
+ *
+ * The stored judge (`services/settings.ts`) is the case this exists for: it
+ * records provider/model/host and never a name, so it cannot be looked up by
+ * ref. Matching on host first is what lets a judge pointed at a named endpoint
+ * find that endpoint's key, while still refusing to hand it a key belonging to
+ * some other server on the same provider.
+ */
+export function providerKeyForHost(
+  entries: SavedProviderEntry[] | undefined,
+  provider: string,
+  host?: string,
+): string | undefined {
+  const candidates = (entries ?? []).filter(entry => entry?.provider === provider && entry.apiKey);
+  if (host !== undefined) {
+    const byHost = candidates.find(entry => entry.host === host);
+    if (byHost) return byHost.apiKey;
   }
-  return byProvider;
+  // No host to match on, or none matched: only the provider's own unnamed entry
+  // is safe to fall back to. Picking one of several named endpoints would be a
+  // guess, and the thing being guessed at is a credential.
+  return candidates.find(entry => !entry.name)?.apiKey;
 }
 
 /**
@@ -354,31 +438,11 @@ export function loadMcpServers(workspaceRoot: string): McpServerConfig[] {
   return resolveMcpServers(global, project);
 }
 
-/**
- * Stored API keys, keyed by provider.
- *
- * The counterpart to `savedHosts`, and needed for the same reason: the wizard
- * has to know a key already exists for the provider being chosen, or it asks
- * for one the user has already given.
- */
-export function savedKeys(config: SavedConfig): Record<string, string | undefined> {
-  return Object.fromEntries(
-    (config.providers ?? [])
-      .filter(e => e?.provider && e.apiKey)
-      .map(e => [e.provider, e.apiKey]),
-  );
-}
-
-/** Just the hosts, which is all the App needs to re-seed a provider switch. */
-export function savedHosts(config: SavedConfig): Record<string, string | undefined> {
-  return Object.fromEntries(
-    (config.providers ?? [])
-      .filter(e => e?.provider && e.host !== undefined)
-      .map(e => [e.provider, e.host]),
-  );
-}
-
-// ── writing ───────────────────────────────────────────────────────────────────
+// ── transforms ────────────────────────────────────────────────────────────────
+//
+// Pure, and applied by `ConfigService.write` to whatever is currently on disk.
+// Keeping them here rather than in the service is what makes the merge rules
+// testable without a filesystem.
 
 /** Drop undefined/empty fields so they never land in the file as nulls. */
 function strip(profile: AgentProfile): SavedProfile {
@@ -390,6 +454,23 @@ function strip(profile: AgentProfile): SavedProfile {
     ...(profile.apiKey ? { apiKey: profile.apiKey } : {}),
     ...(profile.reasoningEffort !== undefined ? { reasoningEffort: profile.reasoningEffort } : {}),
   };
+}
+
+/**
+ * Drop exactly one endpoint, leaving every other one alone.
+ *
+ * Compared by ref, not by provider: removing the unnamed `openai-compatible`
+ * entry must not take `openai-compatible:LM Studio` with it. Comparing the two
+ * fields separately reads as though it does the same thing and does not, which
+ * is how deleting one endpoint deleted every sibling that shared its provider.
+ *
+ * Pure — returns a new array.
+ */
+export function removeProvider(
+  providers: SavedProviderEntry[],
+  ref: ProviderRef,
+): SavedProviderEntry[] {
+  return providers.filter(entry => !sameProvider(entry, ref));
 }
 
 /**
@@ -411,7 +492,7 @@ export function upsertProvider(
     ...(profile.host !== undefined ? { host: profile.host } : {}),
     ...(profile.apiKey ? { apiKey: profile.apiKey } : {}),
   };
-  const index = providers.findIndex(e => e.provider === profile.provider);
+  const index = providers.findIndex(e => sameProvider(e, profile));
   if (index === -1) return [...providers, entry];
   const next = [...providers];
   next[index] = entry;
@@ -446,71 +527,19 @@ export function buildConfig(
 }
 
 /**
- * Persist both tiers to the global config, preserving the entries of providers
- * not involved.
+ * Set the MCP server list, leaving everything else in the file untouched.
  *
- * Written 0600 because it can hold an API key. Always the global file, never
- * the project-local override — the setup wizard is saving credentials, and
- * those don't belong in a repo. Rejections are the caller's to handle; the App
- * treats a failed save as non-fatal.
+ * Not routed through `buildConfig`: that function describes the *model* config,
+ * and going through it would mean every server change also rewrites the tiers.
  */
-export async function saveConfig(
-  deep: AgentProfile,
-  fast: AgentProfile | undefined,
-): Promise<void> {
-  const path = globalConfigPath();
-  await mkdir(globalConfigDir(), { recursive: true });
-
-  let existing: SavedConfig = {};
-  try {
-    existing = JSON.parse(await readFile(path, 'utf8')) as SavedConfig;
-  } catch { /* no file yet, or unreadable — start from empty */ }
-
-  await writeFile(path, JSON.stringify(buildConfig(deep, fast, existing), null, 2), { mode: 0o600 });
+export function withMcpServers(config: SavedConfig, servers: McpServerConfig[]): SavedConfig {
+  return { ...config, mcpServers: servers };
 }
 
-/**
- * Persist the MCP server list to the global config, leaving everything else in
- * the file untouched.
- *
- * A read-modify-write rather than a rebuild via `buildConfig`: that function
- * describes the *model* config, and routing MCP through it would mean every
- * server change also rewrites the tiers. Same 0600 as the rest — these entries
- * carry bearer tokens.
- */
-export async function saveMcpServers(servers: McpServerConfig[]): Promise<void> {
-  const path = globalConfigPath();
-  await mkdir(globalConfigDir(), { recursive: true });
-
-  let existing: SavedConfig = {};
-  try {
-    existing = JSON.parse(await readFile(path, 'utf8')) as SavedConfig;
-  } catch { /* no file yet, or unreadable — start from empty */ }
-
-  const next: SavedConfig = { ...existing, mcpServers: servers };
-  await writeFile(path, JSON.stringify(next, null, 2), { mode: 0o600 });
-}
-
-/**
- * Record a project's MCP selection in `.marshall/config.json`.
- *
- * Written to the *project*, unlike every other writer here, because that is the
- * point: this file says which servers this checkout uses, and it carries no
- * credentials, so it is safe to commit. Existing keys are preserved — a repo
- * may well pin its model here too.
- */
-export async function saveProjectMcpSelection(
-  workspaceRoot: string,
+/** Set the project's MCP selection, preserving anything else the repo pins. */
+export function withProjectMcp(
+  config: SavedConfig,
   update: (current: SavedProjectMcp) => SavedProjectMcp,
-): Promise<void> {
-  const path = configPath(workspaceRoot);
-  await mkdir(dirname(path), { recursive: true });
-
-  let existing: SavedConfig = {};
-  try {
-    existing = JSON.parse(await readFile(path, 'utf8')) as SavedConfig;
-  } catch { /* no file yet, or unreadable — start from empty */ }
-
-  const next: SavedConfig = { ...existing, mcp: update(existing.mcp ?? {}) };
-  await writeFile(path, JSON.stringify(next, null, 2) + '\n');
+): SavedConfig {
+  return { ...config, mcp: update(config.mcp ?? {}) };
 }
