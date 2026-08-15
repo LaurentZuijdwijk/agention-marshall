@@ -11,6 +11,7 @@ import {
   routingSummary,
   resolveSearchProfile,
   resolveMaxTokens,
+  isOpenAiReasoningModel,
   DEFAULT_MAX_TOKENS,
 } from './config.js';
 import type { EngineConfig, AgentProfile } from './config.js';
@@ -309,6 +310,23 @@ test('a session-wide cap flattens that difference — which is why nobody sets o
 
 test('claude still gets a cap, since Anthropic rejects requests without one', () => {
   assert.equal(resolveMaxTokens({ provider: 'claude' }), DEFAULT_MAX_TOKENS);
+});
+
+test('a reasoning model still gets a real cap despite being a hosted provider', () => {
+  // gpt-5/o-series count thinking inside output_tokens; the SDK's OpenAiAgent
+  // falls back to 1024 when the field is omitted, which a reasoning run spends
+  // reasoning and then dies "Response incomplete: max_output_tokens".
+  assert.equal(resolveMaxTokens({ provider: 'openai', model: 'gpt-5.6-luna' }), DEFAULT_MAX_TOKENS);
+  // OpenRouter keeps the `openai/` prefix on the model id — must still match.
+  assert.equal(resolveMaxTokens({ provider: 'openrouter', model: 'openai/gpt-5.6-luna' }), DEFAULT_MAX_TOKENS);
+});
+
+test('isOpenAiReasoningModel tolerates the provider prefix', () => {
+  assert.equal(isOpenAiReasoningModel('gpt-5.6-luna'), true);
+  assert.equal(isOpenAiReasoningModel('openai/gpt-5.6-luna'), true);
+  assert.equal(isOpenAiReasoningModel('o4-mini'), true);
+  assert.equal(isOpenAiReasoningModel('gpt-4.1'), false);
+  assert.equal(isOpenAiReasoningModel('gpt-50'), false);
 });
 
 test('an explicit cap wins everywhere', () => {

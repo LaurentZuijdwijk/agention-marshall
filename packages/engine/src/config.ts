@@ -428,12 +428,20 @@ const DEFAULT_MAX_TOKENS_BY_PROVIDER: Partial<Record<Provider, number>> = {
  *
  * An explicit positive `configured` always wins. Pass 0 to force omission,
  * which is still overridden for providers that require the field.
+ *
+ * Hosted providers normally return `undefined` so the model's own maximum
+ * applies — but the SDK's OpenAiAgent falls back to 1024 when the field is
+ * omitted, and a reasoning model spends that budget on thinking before emitting
+ * any visible text, dying with "Response incomplete: max_output_tokens".
+ * Reasoning-flagged models therefore get a real default cap to think in.
  */
 export function resolveMaxTokens(profile: AgentProfile, configured?: number): number | undefined {
   if (configured !== undefined) {
     return configured > 0 ? configured : REQUIRED_MAX_TOKENS[profile.provider];
   }
-  return DEFAULT_MAX_TOKENS_BY_PROVIDER[profile.provider];
+  const byProvider = DEFAULT_MAX_TOKENS_BY_PROVIDER[profile.provider];
+  if (byProvider !== undefined) return byProvider;
+  return isOpenAiReasoningModel(profile.model ?? '') ? DEFAULT_MAX_TOKENS : undefined;
 }
 
 /** Cheapest/fastest model per provider — used for the compression summariser. */
@@ -514,4 +522,17 @@ export function resolveApiKey(profile: AgentProfile): string {
 
 export function resolveModel(profile: AgentProfile): string {
   return profile.model ?? PROVIDER_DEFAULTS[profile.provider].model;
+}
+
+/**
+ * True for gpt-5 / o-series "reasoning" models, provider-prefix tolerant.
+ *
+ * These models reason by default and reject sampling-control parameters (the
+ * OpenAI Responses API answers "Unsupported parameter: 'temperature'"), and
+ * count their thinking inside `output_tokens`. Matching accepts the bare name
+ * (`gpt-5.6-luna`, `o4-mini`) or the provider-prefixed form OpenRouter uses
+ * (`openai/gpt-5.6-luna`).
+ */
+export function isOpenAiReasoningModel(model: string): boolean {
+  return /(?:\/|^)(gpt-5|o1|o3|o4|o5)(?:[.\/-]|$)/i.test(model);
 }

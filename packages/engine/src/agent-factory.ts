@@ -5,22 +5,11 @@ import type { BaseAgent } from '@agentionai/agents/core';
 import type { BuiltInTool } from '@agentionai/agents/core';
 import { OpenAICompatibleAgent } from '@agentionai/agents';
 import type { OpenAICompatibleConfig } from '@agentionai/agents';
-import { resolveAuth, resolveModel, resolveMaxTokens, PROVIDER_DEFAULTS } from './config.js';
+import { resolveAuth, resolveModel, resolveMaxTokens, isOpenAiReasoningModel, PROVIDER_DEFAULTS } from './config.js';
 import type { AgentProfile } from './config.js';
 import type { AgentToolset } from './agent-jobs.js';
 
 const PROJECT_MEMORY_HEADER = '\n\n## Project memory (AGENTS.md)\n\n';
-
-/**
- * gpt-5 / o-series models reason by default and reject sampling-control
- * parameters: the OpenAI Responses API answers "Unsupported parameter:
- * 'temperature' is not supported with this model", so a call that sets
- * `temperature` (the safety judge sends 0 for determinism) 400s against them.
- * Detect the family so those params can be omitted rather than sent and rejected.
- */
-function isOpenAiReasoningModel(model: string): boolean {
-  return /^(gpt-5|o1|o3|o4|o5)(\b|[-/])/i.test(model);
-}
 
 /** OpenRouter uses the generic chat-completions protocol, not llama.cpp. */
 class OpenRouterAgent extends OpenAICompatibleAgent {
@@ -317,9 +306,6 @@ export async function createAgent(
     prompt +
     (extraInstructions ?? '') +
     (projectMemory ? PROJECT_MEMORY_HEADER + projectMemory : '');
-  // Omitted entirely when the provider doesn't require it, so the model's own
-  // ceiling applies instead of an arbitrary cap that truncates long answers.
-  const cap = resolveMaxTokens(profile, maxTokens);
   // Reasoning models (gpt-5 / o-series) ignore temperature — OpenAI rejects it
   // outright ("Unsupported parameter"). The judgment is model-based, not
   // provider-based: an `openai/gpt-5.6-luna` profile over OpenRouter hits the
@@ -329,6 +315,11 @@ export async function createAgent(
   const reasons =
     (profile.provider === 'openai' && profile.reasoningEffort !== undefined) ||
     isOpenAiReasoningModel(model);
+  // maxTokens is omitted for hosted OpenAI so the model's own ceiling applies.
+  // `resolveMaxTokens` backstops reasoning models (see its doc) — otherwise the
+  // SDK's OpenAiAgent defaults to 1024, which a gpt-5/o-series model spends on
+  // thinking, then emits nothing and dies "Response incomplete: max_output_tokens".
+  const cap = resolveMaxTokens(profile, maxTokens);
   const base = {
     id: name.toLowerCase(),
     name,
