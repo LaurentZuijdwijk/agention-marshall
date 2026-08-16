@@ -360,15 +360,17 @@ export function createFileTools(config: ToolConfig, dedupeCache?: DedupeCache): 
         if (!readFiles.has(resolved)) {
           return (
             `Error: ${relative(workspaceRoot, resolved)} has not been read this session. ` +
-            `Call read_file first.`
+            `Call read_file first to load its current contents before editing.`
           );
         }
         return await withFileLock(resolved, async () => {
           const original = await readFile(resolved, 'utf8');
           const old = String(oldString);
           const count = original.split(old).length - 1;
-          if (count === 0) return `Error: oldString not found in ${path}.`;
-          if (count > 1) return `Error: oldString appears ${count} times in ${path}. Be more specific.`;
+          if (count === 0) {
+            return `Error: oldString not found in ${path}. It must match the file exactly, including whitespace.`;
+          }
+          if (count > 1) return `Error: oldString appears ${count} times in ${path}. Include more surrounding text to make it unique.`;
 
           await atomicWrite(resolved, original.replace(old, String(newString)));
           // Deliberately no hash precondition here: edit_file re-reads and

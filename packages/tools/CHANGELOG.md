@@ -1,5 +1,11 @@
 # @agentionai/marshall-tools
 
+## Unreleased
+
+### Patch Changes
+
+- Make `edit_file` failure feedback more actionable by explaining that files must be read first, matches must include exact whitespace, and ambiguous matches need more surrounding context.
+
 ## 0.6.4
 
 ### Patch Changes

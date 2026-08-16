@@ -193,6 +193,21 @@ test('edit_file requires a prior read', async () => {
   const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
   const result = await byName.edit_file.execute('a', 'b', { path: 'target.txt', oldString: 'world', newString: 'there' }, 'id');
   assert.match(result, /has not been read this session/);
+  assert.match(result, /current contents before editing/);
+});
+
+test('edit_file explains missing and ambiguous matches', async () => {
+  const root = tempRoot();
+  writeFileSync(join(root, 'target.txt'), 'hello world\\nworld');
+  const tools = createFileTools(makeConfig({ workspaceRoot: root }));
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+  await byName.read_file.execute('a', 'b', { path: 'target.txt' }, 'id');
+
+  const missing = await byName.edit_file.execute('a', 'b', { path: 'target.txt', oldString: 'missing', newString: 'there' }, 'id');
+  assert.match(missing, /must match the file exactly, including whitespace/);
+
+  const ambiguous = await byName.edit_file.execute('a', 'b', { path: 'target.txt', oldString: 'world', newString: 'there' }, 'id');
+  assert.match(ambiguous, /Include more surrounding text to make it unique/);
 });
 
 // The belt is rebuilt every turn, so a factory-owned read set makes "read it
