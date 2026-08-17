@@ -8,6 +8,9 @@ export interface KeyBindings {
   hasCompletion: boolean;
   acceptCompletion(): void;
   toggleReasoning(): void;
+  /** Ctrl-E while a turn is running: tell a llama.cpp coder agent to end its
+   *  reasoning phase early. A no-op on every other provider. */
+  skipReasoning(): void;
   /** Ctrl-V while the prompt is accepting input: attach the clipboard image. */
   attachImage(): void;
   quit(): void;
@@ -39,6 +42,16 @@ export function useKeyBindings(bindings: KeyBindings): void {
   // OpenRouter thinking models; silent no-op elsewhere).
   useInput((input, key) => {
     if (key.ctrl && input === 'r') bindings.toggleReasoning();
+  });
+
+  // Ctrl-E tells a llama.cpp coder agent to end its reasoning phase early —
+  // useful when a local model is thinking for too long. Running only: idle
+  // there is nothing in flight to signal, and every other provider's
+  // `skipReasoning()` is already a no-op, so gating here is just about not
+  // firing something meaningless. Not Ctrl-T: several terminals intercept it
+  // (transpose-chars, tab controls) before it ever reaches raw stdin.
+  useInput((input, key) => {
+    if (key.ctrl && input === 'e' && mode.type === 'running') bindings.skipReasoning();
   });
 
   // Ctrl-V reads the image off the system clipboard. It is a separate key from

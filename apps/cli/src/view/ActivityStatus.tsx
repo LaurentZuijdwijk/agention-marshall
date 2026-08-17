@@ -79,7 +79,7 @@ export interface ActivityMetrics {
  * waiting for a human, and that is the honest reading of "how fast is this
  * going", which is the question the row answers.
  */
-export function ActivityStatus({ state, metrics, pending = 0, blocked = false }: {
+export function ActivityStatus({ state, metrics, pending = 0, blocked = false, canSkipReasoning = false }: {
   state: ActivityState;
   metrics?: ActivityMetrics;
   pending?: number;
@@ -88,6 +88,12 @@ export function ActivityStatus({ state, metrics, pending = 0, blocked = false }:
    * agent is not working, so the spinner stops: see Spinner's `animate`.
    */
   blocked?: boolean;
+  /**
+   * Only llama.cpp coder agents support ending their reasoning phase early
+   * (see `Session.skipReasoning`) — the hint would be meaningless noise on
+   * every other provider, so it only shows here, not baked into `Spinner`.
+   */
+  canSkipReasoning?: boolean;
 }) {
   if (state === 'idle' && pending === 0) return null;
   const label = state[0].toUpperCase() + state.slice(1);
@@ -128,6 +134,9 @@ export function ActivityStatus({ state, metrics, pending = 0, blocked = false }:
         </Text>
       )}
       {state !== 'idle' && <Text color={C.faint}>  {G.bullet}  {metric}</Text>}
+      {state === 'thinking' && canSkipReasoning && (
+        <Text color={C.faint}>  {G.bullet}  ctrl-e to skip thinking</Text>
+      )}
       {pending > 0 && <Text color={C.warn}>  {G.bullet}  {pending} prompt{pending === 1 ? '' : 's'} queued</Text>}
     </Box>
   );

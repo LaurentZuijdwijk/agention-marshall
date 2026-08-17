@@ -297,6 +297,11 @@ export function App({
       if (!on) transcript.takeReasoning();
       transcript.push('info', on ? 'reasoning shown (ctrl-r to hide)' : 'reasoning hidden');
     },
+    skipReasoning: () => {
+      if (activeProfile?.provider !== 'llamacpp') return;
+      transcript.push('info', 'sent skip-reasoning signal to llama.cpp');
+      session?.skipReasoning();
+    },
     attachImage: () => {
       const result = readClipboardImageCtor();
       if ('error' in result) {
@@ -570,7 +575,13 @@ export function App({
       )}
 
       {!booting && (
-        <ActivityStatus state={activity} metrics={metrics} pending={pendingPrompts.length} blocked={modal} />
+        <ActivityStatus
+          state={activity}
+          metrics={metrics}
+          pending={pendingPrompts.length}
+          blocked={modal}
+          canSkipReasoning={activeProfile?.provider === 'llamacpp'}
+        />
       )}
 
       {wizard}

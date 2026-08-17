@@ -23,6 +23,7 @@ export const PROVIDERS: Array<{ value: Provider; hint: string }> = [
   { value: 'openai',     hint: 'OPENAI_API_KEY'    },
   { value: 'gemini',     hint: 'GEMINI_API_KEY'     },
   { value: 'mistral',    hint: 'MISTRAL_API_KEY'    },
+  { value: 'cerebras',   hint: 'CEREBRAS_API_KEY'   },
   { value: 'openai-compatible', hint: 'custom OpenAI-compatible endpoint' },
 ];
 
@@ -33,6 +34,7 @@ export const MODEL_PRESETS: Record<Provider, string[]> = {
   gemini:     ['gemini-2.0-flash', 'gemini-1.5-pro'],
   mistral:    ['mistral-large-latest', 'mistral-small-latest', 'codestral-latest'],
   ollama:     ['llama3.2', 'codellama', 'qwen2.5', 'deepseek-r1'],
+  cerebras:   ['llama-3.3-70b', 'qwen-3-32b', 'llama3.1-8b'],
   llamacpp:   [],
   openrouter: [],
   'openai-compatible': [],
@@ -108,8 +110,9 @@ const HOSTED_CATALOGUES: Partial<Record<Provider, (key: string) => { url: string
     url: '',
     headers: key ? { Authorization: `Bearer ${key}` } : {},
   } as { url: string; headers: Record<string, string> }),
-  openai:  key => ({ url: 'https://api.openai.com/v1/models',    headers: { Authorization: `Bearer ${key}` } }),
-  mistral: key => ({ url: 'https://api.mistral.ai/v1/models',    headers: { Authorization: `Bearer ${key}` } }),
+  openai:   key => ({ url: 'https://api.openai.com/v1/models',    headers: { Authorization: `Bearer ${key}` } }),
+  mistral:  key => ({ url: 'https://api.mistral.ai/v1/models',    headers: { Authorization: `Bearer ${key}` } }),
+  cerebras: key => ({ url: 'https://api.cerebras.ai/v1/models',   headers: { Authorization: `Bearer ${key}` } }),
   claude:  key => ({ url: 'https://api.anthropic.com/v1/models', headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01' } }),
   // Gemini authenticates in the query string, so it needs no headers at all.
   gemini:  key => ({ url: `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(key)}`, headers: {} }),

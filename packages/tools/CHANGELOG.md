@@ -1,5 +1,15 @@
 # @agentionai/marshall-tools
 
+## 0.6.5
+
+### Patch Changes
+
+- Bump `@agentionai/agents` to `1.10.3`, and add `Session.skipReasoning()`, which
+  tells a llama.cpp coder or side-agent to end its reasoning phase early via
+  llama.cpp's `/v1/chat/completions/control` endpoint, without aborting the turn.
+  Bound to Ctrl-E in the CLI, shown as "ctrl-e to skip thinking" in the status
+  row while a llama.cpp agent is reasoning. A no-op on every other provider.
+
 ## Unreleased
 
 ### Patch Changes

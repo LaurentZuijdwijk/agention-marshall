@@ -4,7 +4,7 @@ import type { Limits, CommandPolicy } from '@agentionai/marshall-tools';
 import type { McpServerConfig } from './mcp.js';
 import type { AgentToolset } from './agent-jobs.js';
 
-export type Provider = 'claude' | 'openai' | 'gemini' | 'mistral' | 'ollama' | 'llamacpp' | 'openrouter' | 'openai-compatible';
+export type Provider = 'claude' | 'openai' | 'gemini' | 'mistral' | 'ollama' | 'llamacpp' | 'openrouter' | 'cerebras' | 'openai-compatible';
 
 export interface AgentProfile {
   /** User-visible name for an OpenAI-compatible endpoint. */
@@ -446,10 +446,11 @@ export function resolveMaxTokens(profile: AgentProfile, configured?: number): nu
 
 /** Cheapest/fastest model per provider — used for the compression summariser. */
 export const CHEAP_MODELS: Partial<Record<Provider, string>> = {
-  claude:  'claude-haiku-4-5-20251001',
-  openai:  'gpt-4o-mini',
-  gemini:  'gemini-2.0-flash',
-  mistral: 'mistral-small-latest',
+  claude:   'claude-haiku-4-5-20251001',
+  openai:   'gpt-4o-mini',
+  gemini:   'gemini-2.0-flash',
+  mistral:  'mistral-small-latest',
+  cerebras: 'llama3.1-8b',
   'openai-compatible': 'default',
 };
 
@@ -466,6 +467,7 @@ export const PROVIDER_DEFAULTS = {
   ollama:     { model: 'llama3.2',             envKey: null, host: 'http://localhost:11434' },
   llamacpp:   { model: 'default',              envKey: null, host: 'http://localhost:8080'  },
   openrouter: { model: 'anthropic/claude-sonnet-4.6', envKey: 'OPENROUTER_API_KEY' as const, host: 'https://openrouter.ai/api/v1' },
+  cerebras:   { model: 'llama-3.3-70b',        envKey: 'CEREBRAS_API_KEY' as const, host: 'https://api.cerebras.ai/v1' },
   'openai-compatible': { model: 'default', envKey: null, host: 'http://localhost:8000/v1' },
 } as const satisfies Record<Provider, { model: string; envKey: string | null; host?: string }>;
 

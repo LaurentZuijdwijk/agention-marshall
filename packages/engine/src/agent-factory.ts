@@ -18,6 +18,14 @@ class OpenAICompatibleAgentImpl extends OpenAICompatibleAgent {
   }
 }
 
+/** Cerebras — an OpenAI-compatible endpoint with its own default host/key, so
+ *  it gets a named error string instead of the generic one above. */
+class CerebrasAgentImpl extends OpenAICompatibleAgent {
+  protected getVendorName(): string {
+    return 'Cerebras';
+  }
+}
+
 /**
  * App attribution for OpenRouter — the URL is the identifier the rankings and
  * per-app analytics key on, the title is only the display name, and neither
@@ -380,6 +388,14 @@ export async function createAgent(
           baseURL: routerHost,
           defaultHeaders: { ...OPENROUTER_ATTRIBUTION },
         } as OpenRouterConfig, history);
+      }
+      case 'cerebras': {
+        const cerebrasHost = profile.host ?? PROVIDER_DEFAULTS.cerebras.host;
+        return new CerebrasAgentImpl({
+          ...base,
+          baseURL: cerebrasHost,
+          vendor: 'openai',
+        }, history);
       }
       case 'openai-compatible': {
         const compatibleHost = profile.host ?? PROVIDER_DEFAULTS['openai-compatible'].host;

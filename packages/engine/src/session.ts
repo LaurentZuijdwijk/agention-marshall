@@ -132,6 +132,13 @@ function throwIfAborted(signal: AbortSignal): void {
   if (signal.aborted) throw new DOMException('Task interrupted by user', 'AbortError');
 }
 
+/** Structural check for `LlamaCppAgent.skipReasoning()` — every other agent
+ *  (and `null`, when nothing is running) fails it and `skipReasoning()`
+ *  becomes a no-op. */
+function hasSkipReasoning(agent: BaseAgent<string, string> | null): agent is BaseAgent<string, string> & { skipReasoning(): Promise<void> } {
+  return !!agent && typeof (agent as { skipReasoning?: unknown }).skipReasoning === 'function';
+}
+
 /**
  * Await `work`, but reject immediately if `signal` fires first.
  *
@@ -197,6 +204,11 @@ export class Session {
   /** Local llama.cpp models are loaded by the first agent construction only. */
   private llamaModelLoaded = false;
   private controller: AbortController | null = null;
+  /** The agent driving the turn currently in flight, set alongside `controller`
+   *  — not by `beginTurn` itself, since the agent doesn't exist yet at that
+   *  point. Lets `skipReasoning()` reach the live agent without `run()` or
+   *  `runSideAgent()` having to plumb it through. */
+  private currentAgent: BaseAgent<string, string> | null = null;
   private currentTask: string | null = null;
   private steeringContext: string | null = null;
   private pendingPlan: string | null = null;
@@ -885,6 +897,7 @@ export class Session {
   private endTurn(): void {
     this.currentTask = null;
     this.controller = null;
+    this.currentAgent = null;
     this.maybeResume();
   }
 
@@ -1047,6 +1060,7 @@ export class Session {
         systemPrompt: buildSystemPrompt({ scratch: !light, background: !light }),
       });
       if (coderProfile.provider === 'llamacpp') this.llamaModelLoaded = true;
+      this.currentAgent = agent;
 
       // Shared with /plan and /review. The per-run file/shell tools die with the
       // run, but the context/search/planner/reviewer tools and the masking
@@ -1206,6 +1220,7 @@ export class Session {
         extraInstructions: contextTool ? SURVEY_TOOL_GUIDANCE : undefined,
         name: eventType,
       });
+      this.currentAgent = agent;
 
       // /plan and /review used to run completely silently — no tool calls, no
       // results — so a long review looked like a hang. Tagged with the agent
@@ -1271,6 +1286,23 @@ export class Session {
   interrupt(): void {
     if (this.currentTask) this.steeringContext = this.currentTask;
     this.controller?.abort();
+  }
+
+  /**
+   * Tells the agent driving the current turn to end its reasoning phase
+   * early, without aborting the turn itself. Only llama.cpp agents support
+   * this (a `skipReasoning` method, checked structurally so this doesn't need
+   * `@agentionai/agents/llamacpp` imported for providers that never have it);
+   * every other provider, and idle sessions, make this a silent no-op.
+   */
+  async skipReasoning(): Promise<void> {
+    if (!hasSkipReasoning(this.currentAgent)) {
+      this.log(`SKIP_REASONING no-op (currentAgent=${this.currentAgent ? this.currentAgent.constructor.name : 'null'})`);
+      return;
+    }
+    this.log('SKIP_REASONING sending');
+    await this.currentAgent.skipReasoning();
+    this.log('SKIP_REASONING sent');
   }
 
   async clear(): Promise<string> {

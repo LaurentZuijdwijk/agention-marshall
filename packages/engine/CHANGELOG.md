@@ -1,5 +1,51 @@
 # @agentionai/marshall-engine
 
+## 0.18.0
+
+### Minor Changes
+
+- Bump `@agentionai/agents` to `1.10.3`, and add `Session.skipReasoning()`, which
+  tells a llama.cpp coder or side-agent to end its reasoning phase early via
+  llama.cpp's `/v1/chat/completions/control` endpoint, without aborting the turn.
+  Bound to Ctrl-E in the CLI, shown as "ctrl-e to skip thinking" in the status
+  row while a llama.cpp agent is reasoning. A no-op on every other provider.
+
+### Patch Changes
+
+- Updated dependencies
+  - @agentionai/marshall-tools@0.6.5
+
+## 0.17.0
+
+### Minor Changes
+
+- Cerebras is now a first-class provider (`cerebras`), alongside claude/openai/gemini/mistral/ollama/llamacpp/openrouter. It defaults to `https://api.cerebras.ai/v1` and `CEREBRAS_API_KEY`, shows up in the `/model` setup wizard with a live model catalogue, and defaults to `llama-3.3-70b`. Previously it had to be configured manually as a named `openai-compatible` endpoint.
+- e8c002e: `spawn_agent`'s `tier` argument is gone; delegating to the fast tier is now
+  `agent_name: "fast"`, the same field used for a saved named agent. Previously
+  `tier` (`fast`/`deep`) and `agent_name` were separate, mutually-exclusive
+  arguments — a model could still ask for a bare `deep`-tier spawn. That option
+  is removed: an ad-hoc spawn is now always `"fast"` or a configured named
+  agent, matching the guidance that delegated work should either be mechanical
+  (fast) or handed to a persona built for it.
+
+### Patch Changes
+
+- e8c002e: Fix a turn interrupted mid-tool-call (during approval or execution) leaving
+  an unanswered tool call in history. A provider that requires every call to be
+  answered rejected the _next_ request outright ("No tool output found for
+  function call ..."), and because that 400 carried no context-length wording,
+  it was misread as context overflow and sent through a compression pass that
+  could never fix it. Interrupting now patches the dangling call with a
+  synthetic cancelled result before the next turn can see it, and the
+  misdiagnosis is closed off directly with a classifier that recognises this
+  error shape instead of guessing.
+- e8c002e: Raise the default safety-judge output cap from 1200 to 4096 tokens. Local
+  hybrid-thinking GGUF models (and other reasoning-tuned judges) can emit a
+  chain-of-thought preamble well past 1200 tokens before their verdict, which
+  threw `MaxTokensExceededError` instead of ever producing a decision.
+  `safetyAgent.maxOutputTokens` still overrides this per judge for models that
+  need more.
+
 ## 0.16.2
 
 ### Patch Changes

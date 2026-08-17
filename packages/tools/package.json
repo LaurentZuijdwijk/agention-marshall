@@ -1,6 +1,6 @@
 {
   "name": "@agentionai/marshall-tools",
-  "version": "0.6.4",
+  "version": "0.6.5",
   "type": "module",
   "exports": {
     ".": {
@@ -21,7 +21,7 @@
     "test": "node --import tsx/esm --test 'src/**/*.test.ts'"
   },
   "dependencies": {
-    "@agentionai/agents": "1.8.0"
+    "@agentionai/agents": "1.10.3"
   },
   "devDependencies": {
     "@types/node": "^25.0.0",

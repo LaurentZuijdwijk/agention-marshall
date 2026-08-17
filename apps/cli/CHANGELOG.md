@@ -1,5 +1,50 @@
 # @agentionai/marshall-cli
 
+## 0.21.0
+
+### Minor Changes
+
+- Bump `@agentionai/agents` to `1.10.3`, and add `Session.skipReasoning()`, which
+  tells a llama.cpp coder or side-agent to end its reasoning phase early via
+  llama.cpp's `/v1/chat/completions/control` endpoint, without aborting the turn.
+  Bound to Ctrl-E in the CLI, shown as "ctrl-e to skip thinking" in the status
+  row while a llama.cpp agent is reasoning. A no-op on every other provider.
+
+### Patch Changes
+
+- Updated dependencies
+  - @agentionai/marshall-engine@0.18.0
+  - @agentionai/marshall-tools@0.6.5
+
+## 0.20.0
+
+### Minor Changes
+
+- Cerebras is now a first-class provider (`cerebras`), alongside claude/openai/gemini/mistral/ollama/llamacpp/openrouter. It defaults to `https://api.cerebras.ai/v1` and `CEREBRAS_API_KEY`, shows up in the `/model` setup wizard with a live model catalogue, and defaults to `llama-3.3-70b`. Previously it had to be configured manually as a named `openai-compatible` endpoint.
+- e8c002e: Add `/config repair`, which fixes the two config problems that are
+  unambiguous rather than merely stale: a pre-tier flat model choice, and an
+  `apiKey` that leaked into the committed project file (re-homed into the
+  global providers list, where secrets belong).
+
+  Config reads and writes were also rewritten for reliability: writes now
+  validate strictly (unknown provider fields rejected, local providers require
+  a non-empty host) while reads stay lenient so a malformed file degrades
+  per-field instead of crashing startup; every write is read-fingerprint →
+  transform → verify → atomic rename, so a concurrent write from another
+  instance is detected and retried instead of silently lost; and a missing or
+  unwritable `$HOME`/`$XDG_CONFIG_HOME` no longer crashes first run.
+
+### Patch Changes
+
+- e8c002e: Reasoning is now shown by default, so a reasoning model's thinking is visible
+  from the first run instead of needing Ctrl-R to discover it exists. Ctrl-R
+  still toggles it off.
+- Updated dependencies
+- Updated dependencies [e8c002e]
+- Updated dependencies [e8c002e]
+- Updated dependencies [e8c002e]
+  - @agentionai/marshall-engine@0.17.0
+
 ## 0.19.3
 
 ### Patch Changes

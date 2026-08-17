@@ -78,6 +78,7 @@ time with `/model`.
 | `openai` | `OPENAI_API_KEY` |
 | `gemini` | `GEMINI_API_KEY` |
 | `mistral` | `MISTRAL_API_KEY` |
+| `cerebras` | `CEREBRAS_API_KEY` |
 
 No GPU at home? OpenRouter is the next best thing. The ~340-entry catalogue
 is filtered down to models that can actually call tools (DeepSeek, Qwen, Kimi,
