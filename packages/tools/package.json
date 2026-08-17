@@ -21,7 +21,7 @@
     "test": "node --import tsx/esm --test 'src/**/*.test.ts'"
   },
   "dependencies": {
-    "@agentionai/agents": "1.7.0-beta.0"
+    "@agentionai/agents": "1.8.0"
   },
   "devDependencies": {
     "@types/node": "^25.0.0",

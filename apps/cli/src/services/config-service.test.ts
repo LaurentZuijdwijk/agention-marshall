@@ -1,6 +1,6 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, statSync, existsSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, statSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { ConfigService } from './config-service.js';
@@ -361,5 +361,103 @@ describe('credential lookups', () => {
       { host: 'http://lm', apiKey: 'lm-key' });
     // How the stored judge, which knows a host but never a name, finds its key.
     assert.equal(config.keyFor('openai-compatible', 'http://lm'), 'lm-key');
+  });
+});
+
+describe('concurrent writers', () => {
+  // The queue only serialises this process. Another marshall instance (or a
+  // hand edit) writes straight to the file, so a save must notice the file
+  // changed under it and re-apply its transform to the fresh content — which
+  // keeps the other writer's entry instead of clobbering it.
+  it('re-applies the transform when another writer lands between read and write', async () => {
+    const root = ws();
+    const config = new ConfigService(root);
+    await config.saveProfiles(LOCAL, undefined);
+
+    const other = { provider: 'claude', apiKey: 'claude-key' };
+    let first = true;
+    // The stand-in for the other instance: a write straight to the global
+    // file, fired from inside our own transform — i.e. exactly between the
+    // service's read and its write.
+    await config.updateSettings(current => {
+      if (first) {
+        first = false;
+        const global = readGlobal();
+        writeGlobal({ ...global, providers: [...(global.providers ?? []), other] });
+      }
+      return { ...current, runtime: 'standard' as const };
+    }, 'global');
+
+    const global = readGlobal();
+    assert.deepEqual(global.providers, [
+      { provider: 'llamacpp', host: 'http://192.168.1.248:8080' },
+      other,
+    ], 'both writers landed: the other instance is not clobbered, ours is not lost');
+    assert.equal(global.settings?.runtime, 'standard');
+  });
+
+  it('gives up with a reported error when the file keeps changing, rather than clobbering', async () => {
+    const root = ws();
+    const errors: string[] = [];
+    const config = new ConfigService(root, {}, message => errors.push(message));
+    writeGlobal({ providers: [] });
+
+    // A field that survives the lenient parser — the fingerprint is over the
+    // parsed config, so a change it would strip (an unknown key, formatting)
+    // is not a change at all, and must not trigger a retry.
+    let n = 0;
+    const ok = await config.updateSettings(current => {
+      n++;
+      writeGlobal({ providers: [{ provider: 'claude', apiKey: `k-${n}` }] });
+      return current;
+    }, 'global');
+
+    assert.equal(ok, false);
+    assert.match(errors[0], /keeps changing/);
+    assert.equal(readGlobal().providers[0].provider, 'claude',
+      "the file holds the other writer's content, not a stale ours");
+  });
+});
+
+describe('atomic writes', () => {
+  it('leaves no temp file behind after a write', async () => {
+    const root = ws();
+    await new ConfigService(root).saveProfiles(ROUTER, undefined);
+    assert.deepEqual(readdirSync(dirname(globalConfigPath())).filter(f => f.includes('.tmp')), []);
+  });
+
+  // The strict write schema: the app produced this value, so a local provider
+  // with no host is a bug to report, not an entry to file away.
+  it('refuses to persist a provider entry the strict schema rejects', async () => {
+    const root = ws();
+    const errors: string[] = [];
+    const config = new ConfigService(root, {}, message => errors.push(message));
+
+    const broken: AgentProfile = { provider: 'llamacpp', model: 'qwen' };
+    const ok = await config.saveProfiles(broken, undefined);
+
+    assert.equal(ok, false);
+    assert.match(errors[0], /llamacpp needs a host/);
+    assert.equal(readGlobal().providers, undefined, 'the global file was not written');
+    assert.equal(existsSync(configPath(root)), false, 'nor was a project file created out of nothing');
+  });
+});
+
+describe('refresh', () => {
+  // Display data re-reads on demand; what the session runs on stays pinned.
+  // This is the display half: a change made outside the process is invisible
+  // to the memo until something asks for the current truth.
+  it('picks up a change made outside the process', async () => {
+    const root = ws();
+    const config = new ConfigService(root);
+    await config.saveProfiles(LOCAL, undefined);
+    assert.equal(config.snapshot().providers.length, 1);
+
+    const global = readGlobal();
+    writeGlobal({ ...global, providers: [...(global.providers ?? []), { provider: 'claude', apiKey: 'k' }] });
+    assert.equal(config.snapshot().providers.length, 1, 'the memo still holds what this process last saw');
+
+    config.refresh();
+    assert.equal(config.snapshot().providers.length, 2, 'refresh re-reads the file');
   });
 });

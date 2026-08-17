@@ -37,23 +37,67 @@ import type { AgentProfile, McpServerConfig } from '@agentionai/marshall-engine'
 // gitignored `.env` (see startup/workspace.ts, which loads those before
 // anything resolves).
 
-export interface SavedProfile {
-  /** Named endpoint within a provider (for openai-compatible servers). */
-  name?: string;
-  provider?: string;
-  model?: string;
-  host?: string;
-  apiKey?: string;
-  reasoningEffort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+// ── shape validation ─────────────────────────────────────────────────────────
+//
+// Every schema field that can be individually wrong (a string field handed a
+// number, an enum handed a value it doesn't recognise) catches back to
+// `undefined` rather than failing its parent object — a hand-edited file with
+// one bad field should lose that field, not everything around it. The same
+// idea extends to collections via `lenientArray`: one malformed entry drops
+// out, its siblings survive. This is the same "untrusted content, never
+// crash startup" rule the module comment above has always described; the
+// schemas make it mechanical instead of ad hoc, and give every reader here a
+// real type instead of a blind `as SavedConfig` cast.
+
+import { z } from 'zod';
+
+const REASONING_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+
+/** A field that degrades to `undefined` instead of failing its object when
+ *  the value present doesn't fit — the per-field half of the tolerance
+ *  described above. */
+function lenient<T extends z.ZodTypeAny>(schema: T) {
+  return schema.optional().catch(undefined);
 }
 
-/** Last-used connection details for one provider, kept across switches. */
-export interface SavedProviderEntry {
-  name?: string;
-  provider: string;
-  host?: string;
-  apiKey?: string;
+/** A field that parses as a list of `T`, dropping whichever entries don't fit
+ *  rather than discarding the whole list for one bad one — the collection
+ *  half of the same tolerance, and the schema-level version of what
+ *  `savedMcpServers` already did by hand for its one array. Absent stays
+ *  absent; present-but-not-an-array also degrades to absent, since there is
+ *  no partial reading of "the providers field is the string 'oops'". */
+function lenientArray<T>(item: z.ZodType<T>) {
+  // The trailing `.optional()` matters beyond runtime: without it the field's
+  // inferred type is "always present, value possibly undefined" rather than
+  // "key may be absent" — `.transform()` always produces *a* value as far as
+  // TS is concerned, so a config object that never mentioned `providers` at
+  // all would otherwise fail to type-check against `SavedConfig`.
+  return lenient(z.array(z.unknown())).transform(list =>
+    list === undefined ? undefined : list.flatMap(entry => {
+      const result = item.safeParse(entry);
+      return result.success ? [result.data] : [];
+    })).optional();
 }
+
+const SavedProfileSchema = z.object({
+  /** Named endpoint within a provider (for openai-compatible servers). */
+  name: lenient(z.string()),
+  provider: lenient(z.string()),
+  model: lenient(z.string()),
+  host: lenient(z.string()),
+  apiKey: lenient(z.string()),
+  reasoningEffort: lenient(z.enum(REASONING_EFFORTS)),
+});
+export type SavedProfile = z.infer<typeof SavedProfileSchema>;
+
+/** Last-used connection details for one provider, kept across switches. */
+const SavedProviderEntrySchema = z.object({
+  name: lenient(z.string()),
+  provider: z.string(),
+  host: lenient(z.string()),
+  apiKey: lenient(z.string()),
+});
+export type SavedProviderEntry = z.infer<typeof SavedProviderEntrySchema>;
 
 /**
  * Which stored endpoint is meant.
@@ -65,6 +109,9 @@ export interface SavedProviderEntry {
  * exactly how a lookup ends up silently missing every named endpoint. The one
  * place that stringifies a ref is `providerKey`, and it exists for map keys and
  * equality, never as a parameter type.
+ *
+ * Never read from a file — always built in code as a lookup key — so this
+ * stays a plain interface rather than a schema.
  */
 export interface ProviderRef {
   provider: string;
@@ -73,12 +120,13 @@ export interface ProviderRef {
 
 /** A remote MCP server as stored. `headers` can hold a bearer token, which is
  *  the other reason this file is written 0600 and lives outside the repo. */
-export interface SavedMcpServer {
-  name?: string;
-  url?: string;
-  headers?: Record<string, string>;
-  enabled?: boolean;
-}
+const SavedMcpServerSchema = z.object({
+  name: lenient(z.string()),
+  url: lenient(z.string()),
+  headers: lenient(z.record(z.string(), z.string())),
+  enabled: lenient(z.boolean()),
+});
+export type SavedMcpServer = z.infer<typeof SavedMcpServerSchema>;
 
 /**
  * The project file's MCP section — safe to commit.
@@ -90,34 +138,15 @@ export interface SavedMcpServer {
  * be. This section can only select from what the global config defines, or
  * declare a server that needs no credentials at all.
  */
-export interface SavedProjectMcp {
+const SavedProjectMcpSchema = z.object({
   /** Turn on globally-defined servers that are `enabled: false` by default. */
-  enable?: string[];
+  enable: lenient(z.array(z.string())),
   /** Turn off servers this project should not see. Beats `enable`. */
-  disable?: string[];
+  disable: lenient(z.array(z.string())),
   /** Servers only this project uses. `headers` is stripped — see resolveMcpServers. */
-  servers?: SavedMcpServer[];
-}
-
-export interface SavedConfig extends SavedProfile {
-  models?: { deep?: SavedProfile; fast?: SavedProfile };
-  /**
-   * Versioned, non-secret runtime settings. Deliberately `unknown`: this is
-   * untrusted file content, and `services/settings.ts` owns both the shape and
-   * the validation. Nothing else should read into it.
-   */
-  settings?: unknown;
-  /**
-   * Pre-settings way of asking for the lean tool belt. Still read, so existing
-   * config files keep working; `settings.mode` is where it lives now, and the
-   * first write through `applySettings` folds this key into it.
-   */
-  light?: boolean;
-  providers?: SavedProviderEntry[];
-  mcpServers?: SavedMcpServer[];
-  mcp?: SavedProjectMcp;
-  agents?: SavedAgentEntry[];
-}
+  servers: lenientArray(SavedMcpServerSchema),
+});
+export type SavedProjectMcp = z.infer<typeof SavedProjectMcpSchema>;
 
 /**
  * A user-defined agent the coder can delegate to by name — a persona
@@ -126,16 +155,110 @@ export interface SavedConfig extends SavedProfile {
  * committable; the host and key that make it reachable are resolved from the
  * global `providers` list when the agent actually runs.
  */
-export interface SavedAgentEntry {
-  name: string;
-  provider: string;
-  model: string;
-  description?: string;
+const SavedAgentEntrySchema = z.object({
+  name: z.string(),
+  provider: z.string(),
+  model: z.string(),
+  description: lenient(z.string()),
   /** Fixed for this persona rather than chosen by the coder at every spawn —
    *  a "tester" that must never get `full` shouldn't have to be trusted not
    *  to ask for it. Unset means the coder still picks one per spawn, exactly
    *  like an agent spawned by tier alone. */
-  toolset?: 'readonly' | 'edit' | 'full';
+  toolset: lenient(z.enum(['readonly', 'edit', 'full'])),
+});
+export type SavedAgentEntry = z.infer<typeof SavedAgentEntrySchema>;
+
+const SavedConfigShape = SavedProfileSchema.extend({
+  models: lenient(z.object({
+    deep: lenient(SavedProfileSchema),
+    fast: lenient(SavedProfileSchema),
+  })),
+  /**
+   * Versioned, non-secret runtime settings. Deliberately `unknown`: this is
+   * untrusted file content, and `services/settings.ts` owns both the shape and
+   * the validation. Nothing else should read into it.
+   */
+  settings: z.unknown().optional(),
+  /**
+   * Pre-settings way of asking for the lean tool belt. Still read, so existing
+   * config files keep working; `settings.mode` is where it lives now, and the
+   * first write through `applySettings` folds this key into it.
+   */
+  light: lenient(z.boolean()),
+  providers: lenientArray(SavedProviderEntrySchema),
+  mcpServers: lenientArray(SavedMcpServerSchema),
+  mcp: lenient(SavedProjectMcpSchema),
+  agents: lenientArray(SavedAgentEntrySchema),
+});
+type SavedConfigShape = z.infer<typeof SavedConfigShape>;
+
+/**
+ * `lenientArray`'s `.transform()` can only ever set its own key to `undefined`
+ * on a bad or missing value, never omit the key outright — a transform always
+ * produces *some* value as far as the object schema around it is concerned.
+ * A round trip through JSON drops every such key the same way `JSON.stringify`
+ * already will when this is written back to disk, so a config with no
+ * `providers` array parses to exactly `{}`, not `{ providers: undefined }` —
+ * which otherwise diverges from a config that never mentioned the key at all,
+ * breaking equality checks (tests, `deepMerge`) that don't distinguish them.
+ */
+const SavedConfigSchema = SavedConfigShape.transform(config =>
+  JSON.parse(JSON.stringify(config)) as SavedConfigShape);
+export type SavedConfig = SavedConfigShape;
+
+// ── write-time validation ─────────────────────────────────────────────────────
+//
+// The schemas above are deliberately lenient — they read untrusted file
+// content and must degrade, never fail. Writes get the opposite treatment: the
+// app produced the value, so anything wrong with it is a bug, and it belongs
+// in the transcript, not in the file. `ConfigService` runs `validateForWrite`
+// over every candidate before it reaches disk.
+
+/** Providers that talk to a server the user names: no host, no endpoint. */
+const LOCAL_PROVIDERS = ['ollama', 'llamacpp', 'openai-compatible'];
+
+const StrictProviderEntrySchema = z.object({
+  name: z.string().min(1).optional(),
+  provider: z.string().min(1),
+  host: z.string().min(1).optional(),
+  apiKey: z.string().min(1).optional(),
+}).strict().superRefine((entry, ctx) => {
+  if (LOCAL_PROVIDERS.includes(entry.provider) && !entry.host) {
+    ctx.addIssue({ code: 'custom', message: `${entry.provider} needs a host` });
+  }
+});
+
+/**
+ * Check the sections this app owns for writing — the provider list and the MCP
+ * definitions — and report the problems in one line, `undefined` when the
+ * candidate is safe to persist.
+ *
+ * Only entries the write actually changed: `previous`, when given, is the
+ * on-disk value the transform started from, and an entry that is reference-
+ * identical between the two was carried through untouched rather than written
+ * by this save. Rejecting a save over content the app did not touch — a
+ * legacy flat profile, a key an older version wrote, a hand-edited entry that
+ * predates this validation — would make an old file impossible to update at
+ * all, which is exactly the failure mode this comparison exists to avoid.
+ */
+export function validateForWrite(config: SavedConfig, previous?: SavedConfig): string | undefined {
+  const problems: string[] = [];
+  const priorProviders: readonly unknown[] = previous?.providers ?? [];
+  for (const entry of config.providers ?? []) {
+    if (priorProviders.includes(entry)) continue;
+    const result = StrictProviderEntrySchema.safeParse(entry);
+    if (!result.success) {
+      const issue = result.error.issues[0];
+      const where = issue && issue.path.length > 0 ? `${issue.path.join('.')} ` : '';
+      problems.push(`providers: ${where}${issue?.message ?? 'invalid entry'}`);
+    }
+  }
+  const priorServers: readonly unknown[] = previous?.mcpServers ?? [];
+  for (const server of config.mcpServers ?? []) {
+    if (priorServers.includes(server)) continue;
+    if (!server.name || !server.url) problems.push('mcpServers: every server needs a name and a url');
+  }
+  return problems.length > 0 ? problems.join('; ') : undefined;
 }
 
 /** Directory holding the global config, honouring `$XDG_CONFIG_HOME`. */
@@ -154,22 +277,43 @@ export function configPath(workspaceRoot: string): string {
   return join(workspaceRoot, '.marshall', 'config.json');
 }
 
+/**
+ * Read and validate one config file. Never throws — a missing file, invalid
+ * JSON, or a value that isn't even an object all behave like no file, same as
+ * before the schema existed. What's new is between those two: a file that
+ * *is* a JSON object but has fields of the wrong shape used to pass through
+ * untouched (`as SavedConfig`, no check at all) and fail wherever something
+ * downstream first read the bad field. Now `SavedConfigSchema` catches that
+ * at the boundary, one field or array entry at a time, so the fields that
+ * were actually fine still load.
+ */
 export function readJsonConfig(path: string): SavedConfig {
   if (!existsSync(path)) return {};
   try {
     const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
-    return parsed && typeof parsed === 'object' ? parsed as SavedConfig : {};
+    if (!isPlainObject(parsed)) return {};
+    const result = SavedConfigSchema.safeParse(parsed);
+    return result.success ? result.data : {};
   } catch {
     return {};
   }
 }
 
-/** First run: create an empty global config so there's always something to edit or point at. */
+/** First run: create an empty global config so there's always something to edit or point at.
+ *
+ *  A failure to create it — a read-only `$HOME` or `$XDG_CONFIG_HOME` — must
+ *  not take first run down: reads already treat a missing global file as
+ *  empty, and the first actual *write* reports the same unwritable home
+ *  through the service's `onError`, where the user can act on it. */
 function ensureGlobalConfig(): void {
   const path = globalConfigPath();
   if (existsSync(path)) return;
-  mkdirSync(globalConfigDir(), { recursive: true });
-  writeFileSync(path, JSON.stringify({}, null, 2) + '\n', { mode: 0o600 });
+  try {
+    mkdirSync(globalConfigDir(), { recursive: true });
+    writeFileSync(path, JSON.stringify({}, null, 2) + '\n', { mode: 0o600 });
+  } catch {
+    // Unwritable config home: carry on without the file, as documented above.
+  }
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -221,25 +365,78 @@ function mergeProviders(
 }
 
 /**
- * Every place a credential could hide in a project file.
+ * Merge the two files' `models` sections whole-profile, not field by field.
+ *
+ * `deepMerge` recurses into plain objects, so a global `models.deep` left over
+ * from before the project/global split (or from a provider this workspace no
+ * longer uses) would still contribute any field the project's `models.deep`
+ * doesn't itself set — a project profile with no `host` at all (openrouter
+ * has none) silently inheriting a `host` from a *different* provider's global
+ * entry, still pointed at whatever machine that one was for. The result talks
+ * to the right provider's API path with the wrong provider's model in the
+ * body, and fails in whatever way the wrong host answers. `deep`/`fast` are
+ * each one profile, never a composite of two providers' settings, so the
+ * project's version — if it has one — replaces the global one outright,
+ * exactly like `savedDeepProfile` already assumes when it reads `models.deep`
+ * as a single object rather than something still waiting to be merged.
+ */
+function mergeModels(
+  global: SavedConfig['models'],
+  project: SavedConfig['models'],
+): SavedConfig['models'] | undefined {
+  if (!global && !project) return undefined;
+  const deep = project?.deep ?? global?.deep;
+  const fast = project?.fast ?? global?.fast;
+  return { ...(deep ? { deep } : {}), ...(fast ? { fast } : {}) };
+}
+
+/** One secret found in a project file: where, and — when the profile it came
+ *  from named a provider — enough to re-home it as a proper provider entry.
+ *  A bare top-level `apiKey` with nothing else on the object is stripped the
+ *  same as any other, but has no provider to file it under, so `repairConfig`
+ *  can only drop that one rather than move it. */
+interface FoundSecret {
+  where: string;
+  providerEntry?: SavedProviderEntry;
+}
+
+/**
+ * Every place a credential could hide in a project file, stripped out and
+ * handed back alongside what was found.
  *
  * The module comment has always said the project file must not hold an
  * `apiKey`; this is what makes that true rather than aspirational. A key in a
  * committed file is a leak for everyone who clones the repo, and "it worked, so
  * nobody noticed" is exactly how it stays there. Stripped rather than rejected,
  * so a file that is otherwise fine still pins its model.
+ *
+ * `found` carries the credential (as a ready-to-adopt provider entry), not
+ * just its location: `stripProjectSecrets` below only needs the location, for
+ * the warning shown on every load, but `repairConfig`'s one-time fix needs the
+ * value itself, to actually move it into the global providers list rather
+ * than just discarding it.
  */
-function stripProjectSecrets(project: SavedConfig): { config: SavedConfig; found: string[] } {
-  const found: string[] = [];
+function extractProjectSecrets(project: SavedConfig): { config: SavedConfig; found: FoundSecret[] } {
+  const found: FoundSecret[] = [];
   const scrub = <T extends SavedProfile>(profile: T | undefined, where: string): T | undefined => {
     if (!profile?.apiKey) return profile;
-    found.push(where);
+    found.push({
+      where,
+      ...(profile.provider ? {
+        providerEntry: {
+          ...(profile.name ? { name: profile.name } : {}),
+          provider: profile.provider,
+          ...(profile.host !== undefined ? { host: profile.host } : {}),
+          apiKey: profile.apiKey,
+        },
+      } : {}),
+    });
     const { apiKey: _dropped, ...rest } = profile;
     return rest as T;
   };
 
-  const providers = project.providers?.map(entry =>
-    scrub(entry, `providers[${entry?.provider ?? '?'}]`) as SavedProviderEntry);
+  const providers = project.providers?.map((entry, i) =>
+    scrub(entry, `providers[${entry?.provider ?? i}]`) as SavedProviderEntry);
   const models = project.models && {
     ...project.models,
     deep: scrub(project.models.deep, 'models.deep'),
@@ -252,6 +449,13 @@ function stripProjectSecrets(project: SavedConfig): { config: SavedConfig; found
     ...(providers ? { providers } : {}),
   };
   return { config, found };
+}
+
+/** The load-time view: just where a secret was, for `projectSecretWarnings`
+ *  — it reports and moves on, it never needs the value itself. */
+function stripProjectSecrets(project: SavedConfig): { config: SavedConfig; found: string[] } {
+  const { config, found } = extractProjectSecrets(project);
+  return { config, found: found.map(f => f.where) };
 }
 
 /**
@@ -270,7 +474,12 @@ export function loadConfig(workspaceRoot: string): SavedConfig {
   const { config: project } = stripProjectSecrets(readJsonConfig(projectPath));
   const merged = deepMerge(global, project);
   const providers = mergeProviders(global.providers ?? [], project.providers ?? []);
-  return providers.length > 0 ? { ...merged, providers } : merged;
+  const models = mergeModels(global.models, project.models);
+  return {
+    ...merged,
+    ...(providers.length > 0 ? { providers } : {}),
+    ...(models ? { models } : {}),
+  };
 }
 
 /**
@@ -309,11 +518,153 @@ export function savedDeepProfile(config: SavedConfig): SavedProfile {
  * saved again. Worth telling the user rather than leaving them to notice by
  * accident, in the same spirit as `settingsWarnings`.
  */
+function hasLegacyFlatProfile(config: SavedConfig): boolean {
+  return !config.models?.deep && Boolean(config.provider && config.model);
+}
+
 export function legacyProfileWarnings(config: SavedConfig): string[] {
-  if (config.models?.deep) return [];
-  if (!config.provider && !config.model) return [];
+  if (!hasLegacyFlatProfile(config)) return [];
   return ['the saved model is in the older, pre-workspace format, shared by every project '
-    + 'on this machine — run /model to save it again and pin it to this workspace.'];
+    + 'on this machine — run /model to save it again and pin it to this workspace, or run '
+    + '/config repair to fix it now.'];
+}
+
+/**
+ * Split a raw file's flat top-level `provider`/`model`/`host`/`apiKey` (the
+ * pre-tier format) into the current shape: `models.deep` for the selection,
+ * plus a provider entry for whatever credential/host went with it.
+ *
+ * The entry comes back separately rather than folded into the returned
+ * config, because where it belongs depends on which file this was — the
+ * global file can keep it under `providers`, but a project file must never
+ * hold one at all (see the module comment), so `repairConfig` always routes
+ * it to the global side regardless of which file it was found in.
+ */
+function splitLegacyProfile(
+  raw: SavedConfig,
+): { config: SavedConfig; providerEntry?: SavedProviderEntry } {
+  if (!hasLegacyFlatProfile(raw)) return { config: raw };
+  const { provider, model, host, apiKey, reasoningEffort, ...rest } = raw;
+  const deep: SavedProfile = {
+    provider, model,
+    ...(host !== undefined ? { host } : {}),
+    ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
+  };
+  const providerEntry: SavedProviderEntry | undefined = provider && (apiKey || host !== undefined)
+    ? { provider, ...(host !== undefined ? { host } : {}), ...(apiKey ? { apiKey } : {}) }
+    : undefined;
+  return { config: { ...rest, models: { ...rest.models, deep } }, providerEntry };
+}
+
+/** Update-or-insert one entry by provider ref, leaving every other one alone
+ *  — `upsertProvider`'s logic, but for a raw entry rather than a live
+ *  `AgentProfile`, which is what `repairConfig` has to work with: values read
+ *  back from a file, not a profile the wizard just resolved. */
+function upsertProviderEntry(
+  providers: SavedProviderEntry[],
+  entry: SavedProviderEntry,
+): SavedProviderEntry[] {
+  const index = providers.findIndex(e => sameProvider(e, entry));
+  if (index === -1) return [...providers, entry];
+  const next = [...providers];
+  // Field by field, not entry by entry: an adopted entry is only what its
+  // source file held — a leaked key, typically — and whole-entry replacement
+  // would delete whatever else the global file already stored for that
+  // endpoint, its host usually. The fields the entry does carry are exactly
+  // the ones meant to win, so merging them over the existing entry is the
+  // same rule `mergeProviders` applies across the two files.
+  next[index] = { ...next[index], ...entry };
+  return next;
+}
+
+export interface ConfigRepairResult {
+  /** The global file's new contents — absent when nothing about it changed. */
+  global?: SavedConfig;
+  /** The project file's new contents — absent when nothing about it changed,
+   *  including when there was no project file to begin with. */
+  project?: SavedConfig;
+  /** One line per fix applied, in the order they ran — for the confirmation
+   *  message. Empty means there was nothing to repair. */
+  actions: string[];
+}
+
+/**
+ * Compute the fixed shape of both raw files, without writing anything —
+ * `ConfigService.repairConfig` is the only thing that persists the result.
+ * Kept pure and exported so what a repair would do is testable, and so a
+ * caller can decide not to write when `actions` comes back empty.
+ *
+ * Handles the two config shapes that are unambiguously wrong rather than
+ * merely stale, and safe to fix without asking:
+ *
+ *   - The pre-tier flat format (`legacyProfileWarnings`) — migrated into
+ *     `models.deep` + a provider entry, in whichever file(s) still have it.
+ *   - A project file holding an `apiKey` (`projectSecretWarnings`) — moved
+ *     into the global providers list rather than merely dropped, so nothing
+ *     the user typed in is lost.
+ *
+ * Deliberately does *not* touch a global `models.deep`/`models.fast` that a
+ * project's own selection merely shadows (see `mergeModels`) — that entry is
+ * still a legitimate fallback for every *other* workspace on the machine that
+ * has no project file of its own, so there is no version of "clean it up"
+ * that isn't also a guess at whether this machine still wants it.
+ */
+export function repairConfig(rawGlobal: SavedConfig, rawProject: SavedConfig | undefined): ConfigRepairResult {
+  const actions: string[] = [];
+  let global = rawGlobal;
+  let project = rawProject;
+  let providers = global.providers ?? [];
+  let providersChanged = false;
+
+  const adopt = (entry: SavedProviderEntry) => {
+    providers = upsertProviderEntry(providers, entry);
+    providersChanged = true;
+  };
+
+  if (hasLegacyFlatProfile(global)) {
+    const split = splitLegacyProfile(global);
+    global = split.config;
+    if (split.providerEntry) adopt(split.providerEntry);
+    actions.push('migrated the global config\'s pre-tier provider/model keys into models.deep'
+      + (split.providerEntry ? ' and providers' : ''));
+  }
+
+  if (project && hasLegacyFlatProfile(project)) {
+    const split = splitLegacyProfile(project);
+    project = split.config;
+    if (split.providerEntry) {
+      adopt(split.providerEntry);
+      actions.push('moved the project config\'s pre-tier model choice into models.deep, '
+        + 'and its credential into the global providers list');
+    } else {
+      actions.push('migrated the project config\'s pre-tier provider/model keys into models.deep');
+    }
+  }
+
+  if (project) {
+    const { config, found } = extractProjectSecrets(project);
+    if (found.length > 0) {
+      project = config;
+      const moved = found.filter(f => f.providerEntry);
+      for (const secret of moved) adopt(secret.providerEntry!);
+      const droppedCount = found.length - moved.length;
+      actions.push(`removed ${found.length} API key${found.length === 1 ? '' : 's'} from the project `
+        + `config (${found.map(f => f.where).join(', ')})`
+        + (moved.length > 0 ? `; ${moved.length} moved into the global providers list` : '')
+        // A key with no provider on the same profile (a bare top-level `apiKey`)
+        // has nowhere to be re-homed to, so it can only be dropped — worth
+        // saying plainly rather than letting "moved" imply it went somewhere.
+        + (droppedCount > 0 ? `; ${droppedCount} had no provider to file it under and was dropped` : ''));
+    }
+  }
+
+  if (providersChanged) global = { ...global, providers };
+
+  return {
+    ...(global !== rawGlobal ? { global } : {}),
+    ...(project !== rawProject ? { project } : {}),
+    actions,
+  };
 }
 
 /** One ref as a map key. Equality only — nothing parses this back apart. */

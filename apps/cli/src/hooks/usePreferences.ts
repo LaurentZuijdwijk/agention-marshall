@@ -8,7 +8,7 @@ export interface Preferences {
   showReasoning: boolean;
 }
 
-const DEFAULTS: Preferences = { stream: true, showReasoning: false };
+const DEFAULTS: Preferences = { stream: true, showReasoning: true };
 
 export interface PreferencesController extends Preferences {
   /** Flip one toggle and return its new value, for the message that follows. */

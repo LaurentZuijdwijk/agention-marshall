@@ -11,6 +11,7 @@ import { parseCliArgs, helpText } from './startup/args.js';
 import { resolveWorkspaceRoot, loadEnvFiles } from './startup/workspace.js';
 import { resolveProfiles, StartupError } from './startup/profiles.js';
 import { installCrashLogging } from './startup/crash-log.js';
+import { installHttpTrace } from './startup/http-trace.js';
 import { maybeRespawnForHeap } from './startup/heap-size.js';
 import { installResizeRedraw } from './view/resize.js';
 
@@ -34,6 +35,7 @@ if (flags.help) {
 
 const workspaceRoot = resolveWorkspaceRoot(flags.workspace);
 loadEnvFiles(workspaceRoot);
+installHttpTrace(workspaceRoot);
 
 // One owner for everything on disk: the two config files, their merge, and
 // every write back to them. Constructed here and handed down, so nothing

@@ -60,4 +60,28 @@ describe('discoverModels', () => {
     assert.deepEqual(catalogue.models.map(model => model.id), MODEL_PRESETS.ollama);
     assert.deepEqual(catalogue.note, ['http://127.0.0.1:1 unreachable — showing defaults']);
   });
+
+  // OpenRouter's richer listing needs a key to construct the client at all,
+  // but the catalogue itself is public — a picker with no key entered yet
+  // must still show every model, just without the extra fields that need one.
+  it('falls back to the public OpenRouter endpoint when no key is configured', async () => {
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () => ({
+      ok: true,
+      json: async () => ({
+        data: [
+          { id: 'openai/gpt-5.6-luna', architecture: { output_modalities: ['text'] } },
+          { id: 'anthropic/claude-sonnet-4-6', architecture: { output_modalities: ['text'] } },
+        ],
+      }),
+    })) as typeof globalThis.fetch;
+    try {
+      const catalogue = await discoverModels('openrouter', '', undefined);
+      assert.deepEqual(catalogue.models.map(model => model.id), [
+        'openai/gpt-5.6-luna', 'anthropic/claude-sonnet-4-6',
+      ]);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
 });

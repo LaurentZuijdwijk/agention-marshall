@@ -1,7 +1,9 @@
 import { join, dirname } from 'node:path';
 import { readFile, readdir, rm, appendFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { History, AgentEvent, BaseAgent } from '@agentionai/agents/core';
+import {
+  History, AgentEvent, BaseAgent, isToolUseContent, isToolResultContent, toolResult,
+} from '@agentionai/agents/core';
 import { toolResultMaskingPlugin } from '@agentionai/agents/history/plugins';
 import type { ToolResultMaskingPlugin } from '@agentionai/agents/history/plugins';
 import {
@@ -36,7 +38,10 @@ import { runAgent } from './streaming.js';
 import { formatTrace, traceMode } from './history-trace.js';
 import { checkAttachments, buildInput } from './images.js';
 import type { ImageAttachment } from './images.js';
-import { describeAgentError, providerErrorDiagnostics, isBadRequestError, isContextLengthError } from './errors.js';
+import {
+  describeAgentError, providerErrorDiagnostics, isBadRequestError, isContextLengthError, isModelNotFoundError,
+  isDanglingToolCallError,
+} from './errors.js';
 import { resolveRoleProfile, resolveModel, routingSummary, resolveSearchProfile } from './config.js';
 import type {
   EngineConfig, AgentProfile, Role, SafetyLevel, SafetyAgentConfig, RuntimeMode, NamedAgent,
@@ -185,6 +190,10 @@ export class Session {
   private readonly toolBelt: ToolBelt;
   private readonly logPath: string;
   private readonly logDirReady: Promise<void>;
+  /** When this process's Session was constructed — logged alongside a provider
+   *  error so "only the first request after a cold start fails" is something
+   *  the log shows directly, instead of something inferred from timestamps. */
+  private readonly startedAtMs = Date.now();
   /** Local llama.cpp models are loaded by the first agent construction only. */
   private llamaModelLoaded = false;
   private controller: AbortController | null = null;
@@ -566,6 +575,44 @@ export class Session {
     return true;
   }
 
+  /**
+   * Interrupting a turn can land while a tool call is in flight: the library
+   * writes the assistant's tool_use to history as soon as the model finishes
+   * sending it, then awaits the tool — so an abort during approval or
+   * execution leaves that call in history with no matching tool_result ever
+   * added. A provider that requires every call to be answered rejects the
+   * *next* request outright (OpenAI's Responses API: "No tool output found
+   * for function call ..."), and because that comes back as a bare 400 with
+   * no context-length wording, it used to be misread as a maybe-overflow and
+   * sent through compression, which does nothing for a broken pairing.
+   *
+   * Called right after an interrupt, before the next turn can see this
+   * history — patches the pairing directly instead of guessing at the error
+   * it would otherwise cause.
+   */
+  private repairDanglingToolCalls(): void {
+    const entries = this.history.entries;
+    const answered = new Set<string>();
+    for (const entry of entries) {
+      for (const block of entry.content) {
+        if (isToolResultContent(block)) answered.add(block.tool_use_id);
+      }
+    }
+
+    const dangling: string[] = [];
+    for (const entry of entries) {
+      if (entry.role !== 'assistant') continue;
+      for (const block of entry.content) {
+        if (isToolUseContent(block) && !answered.has(block.id)) dangling.push(block.id);
+      }
+    }
+    if (dangling.length === 0) return;
+
+    this.history.addMessage('user', dangling.map(id =>
+      toolResult(id, '[Cancelled: interrupted by the user before this call finished.]', true)));
+    this.log(`INTERRUPT_REPAIRED_DANGLING_TOOL_CALLS ${dangling.join(',')}`);
+  }
+
   // ── background jobs ─────────────────────────────────────────────────────────
 
   /**
@@ -863,10 +910,12 @@ export class Session {
 
   /** Reports a turn that failed for a reason other than being interrupted —
    *  same shape for the coder and every side agent, just under the role that
-   *  was running. */
-  private reportAgentError(role: string, profile: AgentProfile, err: unknown): void {
+   *  was running. `diag` is the coder path's turn/uptime tag (see `run`) —
+   *  optional because side agents (context/planner/reviewer/summariser) don't
+   *  carry one, and a blank one there is more honest than a made-up value. */
+  private reportAgentError(role: string, profile: AgentProfile, err: unknown, diag?: string): void {
     const message = describeAgentError(role, profile, err);
-    this.log(`ERROR ${message} details=${providerErrorDiagnostics(err)}`);
+    this.log(`ERROR ${message}${diag ? ` ${diag}` : ''} details=${providerErrorDiagnostics(err)}`);
     this.client.onOutput({ type: 'error', message });
   }
 
@@ -959,7 +1008,13 @@ export class Session {
     const startMs = Date.now();
     // Opened before the agent exists, so anything this turn delegates lands in
     // the right turn's column even if the coder itself never reports.
-    const usageKey = `coder@${this.usage.startTurn()}`;
+    const turnNumber = this.usage.startTurn();
+    const usageKey = `coder@${turnNumber}`;
+    // Diagnostic tag for a provider error below: whether this was the very
+    // first request this process made, and how long the process had been up
+    // when it happened — a "cold start" pattern (turn=1, small uptime) reads
+    // very differently in the log from the same error mid-session.
+    const diag = `turn=${turnNumber} uptimeMs=${Date.now() - this.startedAtMs}`;
 
     const attached = images.length > 0
       ? ` +${images.length} image${images.length > 1 ? 's' : ''}`
@@ -1003,8 +1058,9 @@ export class Session {
       agent.on(AgentEvent.ERROR, (err: unknown) => {
         if (signal.aborted) return;
         const message = err instanceof Error ? err.message : String(err);
-        const recoverable = isBadRequestError(err) || isContextLengthError(message);
-        this.log(`AGENT_ERROR recoverable=${recoverable} ${JSON.stringify(message)} details=${providerErrorDiagnostics(err)}`);
+        const recoverable = !isModelNotFoundError(message) && !isDanglingToolCallError(message)
+          && (isBadRequestError(err) || isContextLengthError(message));
+        this.log(`AGENT_ERROR ${diag} recoverable=${recoverable} ${JSON.stringify(message)} details=${providerErrorDiagnostics(err)}`);
         // Every agent error also rejects the promise `stream()` is awaiting (see
         // createAgent's comment on the safety-net listener), so a recoverable
         // error reaches the try/catch below regardless of whether it's reported
@@ -1037,8 +1093,9 @@ export class Session {
         response = await stream(buildInput(effectiveTask, images));
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        const shouldRecover = isBadRequestError(err) || isContextLengthError(message);
-        this.log(`STREAM_ERROR shouldRecover=${shouldRecover} aborted=${signal.aborted} ${JSON.stringify(message)}`);
+        const shouldRecover = !isModelNotFoundError(message) && !isDanglingToolCallError(message)
+          && (isBadRequestError(err) || isContextLengthError(message));
+        this.log(`STREAM_ERROR ${diag} shouldRecover=${shouldRecover} aborted=${signal.aborted} ${JSON.stringify(message)}`);
         if (!shouldRecover || signal.aborted) throw err;
 
         // Our own token estimate is unreliable for code-heavy content (see
@@ -1063,7 +1120,7 @@ export class Session {
         // a release being reported as a full context window over 921 tokens.
         // Show what the provider actually said instead of guessing.
         if (!compressed && !isContextLengthError(message)) {
-          this.log(`BAD_REQUEST_NOT_CONTEXT ${JSON.stringify(message)}`);
+          this.log(`BAD_REQUEST_NOT_CONTEXT ${diag} ${JSON.stringify(message)}`);
           throw err;
         }
 
@@ -1081,9 +1138,12 @@ export class Session {
     } catch (err) {
       if (this.controller?.signal.aborted) {
         this.reportInterrupted(task, startMs);
-        try { this.history.addText('user', `[Task was interrupted by the user: "${task}"]`); } catch {}
+        try {
+          this.repairDanglingToolCalls();
+          this.history.addText('user', `[Task was interrupted by the user: "${task}"]`);
+        } catch {}
       } else if (!errorReported) {
-        this.reportAgentError('coder', coderProfile, err);
+        this.reportAgentError('coder', coderProfile, err, diag);
       }
     } finally {
       detachToolResult?.();

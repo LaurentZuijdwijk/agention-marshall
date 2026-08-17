@@ -24,10 +24,11 @@
   "dependencies": {
     "@agentionai/marshall-engine": "*",
     "@agentionai/marshall-tools": "*",
-    "dotenv": "^16.6.1",
     "chalk": "^5.3.0",
+    "dotenv": "^16.6.1",
     "ink": "^7.1.1",
-    "react": "^19.2.0"
+    "react": "^19.2.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^25.9.1",

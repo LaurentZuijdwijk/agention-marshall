@@ -26,6 +26,43 @@ export function isContextLengthError(message: string): boolean {
 }
 
 /**
+ * The provider rejected the model itself, not the size of the request.
+ *
+ * A 400 with no explicit context-length wording is otherwise treated as a
+ * *maybe* overflow and sent through compression before being shown — see the
+ * comment in `Session.run`. That guess is wrong here: no amount of shrinking
+ * history fixes a model ID the provider doesn't recognise, so trying anyway
+ * only spends a compression pass (and the popped last message that goes with
+ * it) before landing on the same error. Checked ahead of the context guess
+ * rather than folded into it, since the two are mutually exclusive — a
+ * request rejected for its model was never evaluated against the context
+ * window at all.
+ */
+export function isModelNotFoundError(message: string): boolean {
+  return /no endpoints found|unknown model|invalid model|no such model|\bmodel\b.{0,60}(not found|does not exist)/i
+    .test(message);
+}
+
+/**
+ * The provider rejected the request because a tool call earlier in history was
+ * never answered — not because the prompt was too long.
+ *
+ * Structurally this looks exactly like every other unlabelled 400: no
+ * context-length wording, so without this check it falls through to the
+ * *maybe overflow* guess and spends a compression pass shrinking a history
+ * that was never too big — see the comment in `Session.run`. The actual fix
+ * is structural (`Session.repairDanglingToolCalls`, which patches an
+ * interrupted turn's orphaned tool call before the next request can carry
+ * it), and this exists only as a backstop: if a dangling call ever gets
+ * through some other way, it should be reported for what it is rather than
+ * misdiagnosed as a full context window.
+ */
+export function isDanglingToolCallError(message: string): boolean {
+  return /no (?:tool )?output found for (?:function|tool) call|tool_call_id.{0,60}not found|missing (?:a )?(?:tool|function) (?:result|output|response)/i
+    .test(message);
+}
+
+/**
  * True for "you are asking too often, or too much this month".
  *
  * Worth its own branch because the raw text is the worst of any provider error:

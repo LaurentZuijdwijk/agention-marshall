@@ -176,6 +176,9 @@ function completion(turn: ScriptedTurn, model: string) {
     object: 'chat.completion',
     created: Math.floor(Date.now() / 1000),
     model,
+    // Required (though nullable) by @openrouter/sdk's response schema — every
+    // other consumer just ignores the extra field.
+    system_fingerprint: null,
     choices: [{
       index: 0,
       message: {

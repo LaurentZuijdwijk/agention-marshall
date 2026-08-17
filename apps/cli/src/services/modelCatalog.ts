@@ -5,7 +5,7 @@
 // the picker can be tested without rendering Ink.
 
 import {
-  parseLlamaCppModels, applyLlamaCppProps, parseOllamaModels, parseOpenRouterModels,
+  parseLlamaCppModels, applyLlamaCppProps, parseOllamaModels, parseOpenRouterModels, listOpenRouterModels,
 } from '@agentionai/marshall-engine';
 import type { Provider, ModelInfo } from '@agentionai/marshall-engine';
 
@@ -136,11 +136,17 @@ async function fetchHostedModels(provider: Provider, apiKey?: string, host?: str
   }
 }
 
-/** OpenRouter's catalogue is public; a key only personalises the listing. */
+/**
+ * OpenRouter's catalogue is public, but the richer listing — context length,
+ * pricing, tool/vision support — comes from `OpenRouterAgent.listModels()`,
+ * which needs a key to construct the client at all. Without one, fall back to
+ * the plain public endpoint: fewer fields, but still the whole catalogue, so
+ * the picker isn't empty before a key has been entered.
+ */
 async function fetchOpenRouterModels(pinned: string[], apiKey?: string): Promise<ModelInfo[]> {
   try {
+    if (apiKey) return await listOpenRouterModels(apiKey, undefined, pinned);
     const listed = await fetch('https://openrouter.ai/api/v1/models', {
-      headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
     return listed.ok ? parseOpenRouterModels(await listed.json(), pinned) : [];

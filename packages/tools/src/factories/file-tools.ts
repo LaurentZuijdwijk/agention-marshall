@@ -20,6 +20,10 @@ const SKIP_DIRS = new Set([
 const MAX_SEARCH_RESULTS = 200;
 const MAX_SEARCH_FILE_BYTES = 256 * 1024;
 
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 // A hash of capped content is not sufficient to authorize a whole-file write:
 // the unseen tail could have changed. Keep completeness alongside the shared
 // read state so it survives factories recreated for the same session.
@@ -172,7 +176,9 @@ function buildSearch(workspaceRoot: string, maxSearchResults: number): Tool<stri
   return new Tool<string>({
     name: 'search',
     description:
-      'Search for a regex pattern across files in the workspace. ' +
+      'Search for a regex pattern across files in the workspace. Plain-text searches ' +
+      'also match case and identifier-separator variants (for example, "file-tools" ' +
+      'matches "file_tools", "fileTools", "File Tools", and the run-together "filetools"). ' +
       'Returns matches as "file:line: content".',
     inputSchema: {
       type: 'object',
@@ -193,17 +199,49 @@ function buildSearch(workspaceRoot: string, maxSearchResults: number): Tool<stri
       try {
         const resolved = resolveInWorkspace(workspaceRoot, String(path));
         let regex: RegExp;
+        const requestedPattern = String(pattern);
         try {
-          regex = new RegExp(String(pattern), 'g');
+          // Keep explicit regexes exact; make ordinary identifier/name searches
+          // forgiving because agents and humans routinely vary case and separators.
+          // `\w` already excludes every regex metacharacter this needs to rule
+          // out, so the class alone is the whole check.
+          const isPlainName = /^[\w\s-]+$/.test(requestedPattern);
+          if (isPlainName) {
+            // The joiner is `*`, not `+`: a bare case change ("fileTools") has no
+            // separator character at all, so demanding one would miss it. The same
+            // `*` also lets "file-tools" match a run-together "filetools" — looser
+            // than the four conventions named above, but still a plausible way to
+            // type the identifier, and not worth the regex complexity of telling
+            // "no separator" apart from "case-changed" under a case-insensitive match.
+            // A pattern made entirely of separators (e.g. "-") splits to no
+            // words at all; joining an empty list gives the empty regex,
+            // which matches every position on every line. Fall back to a
+            // literal search for the pattern itself rather than let that
+            // through.
+            const words = requestedPattern.split(/[\s_-]+/).filter(Boolean).map(escapeRegex);
+            regex = new RegExp(words.length > 0 ? words.join('[\\s_-]*') : escapeRegex(requestedPattern), 'gi');
+          } else {
+            regex = new RegExp(requestedPattern, 'g');
+          }
         } catch (err) {
           return `Error: Invalid regex: ${safe(err)}`;
         }
         const glob = fileGlob ? String(fileGlob) : null;
+        const matchesFileGlob = (filePath: string): boolean => {
+          if (!glob) return true;
+          const name = basename(filePath);
+          // Accept the shell-style suffix form agents commonly send ("*.ts"),
+          // as well as the documented substring form (".ts").
+          if (glob.startsWith('*.')) return name.endsWith(glob.slice(1));
+          return name.includes(glob);
+        };
         const results: string[] = [];
+        let searchedFiles = 0;
         let truncated = false;
 
         for await (const filePath of walkFiles(resolved)) {
-          if (glob && !basename(filePath).includes(glob)) continue;
+          if (!matchesFileGlob(filePath)) continue;
+          searchedFiles++;
           let content: string;
           try { content = await cappedRead(filePath, MAX_SEARCH_FILE_BYTES); } catch { continue; }
           const lines = content.split('\n');
@@ -220,7 +258,10 @@ function buildSearch(workspaceRoot: string, maxSearchResults: number): Tool<stri
           if (truncated) break;
         }
 
-        if (results.length === 0) return 'No matches found.';
+        if (results.length === 0) {
+          const scope = glob ? ` (fileGlob ${JSON.stringify(glob)}, ${searchedFiles} files searched)` : ` (${searchedFiles} files searched)`;
+          return `No matches found${scope}.`;
+        }
         if (truncated) results.length = maxSearchResults;
         return results.join('\n') + (truncated ? `\n[...truncated at ${maxSearchResults} matches...]` : '');
       } catch (err) {

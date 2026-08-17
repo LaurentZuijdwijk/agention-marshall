@@ -25,12 +25,13 @@
     "test": "node --import tsx/esm --test 'src/**/*.test.ts'"
   },
   "dependencies": {
-    "@agentionai/agents": "1.7.0-beta.0",
+    "@agentionai/agents": "1.8.0",
     "@agentionai/marshall-tools": "*",
     "@anthropic-ai/sdk": "^0.71.2",
     "@google/generative-ai": "^0.24.0",
     "@mistralai/mistralai": "^1.13.0",
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "@openrouter/sdk": "^1.2.37",
     "openai": "^6.42.0"
   },
   "devDependencies": {

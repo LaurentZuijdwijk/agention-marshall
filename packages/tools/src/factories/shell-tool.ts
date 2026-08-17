@@ -50,7 +50,7 @@ export function createShellTool(config: ToolConfig) {
   const run_shell_spec: ToolSpec = {
     name: 'run_shell',
     description:
-      'Run a shell command inside the workspace directory. ' +
+      'Run a shell command in the workspace directory (cwd is already set). Prefer relative paths; known intentional absolute paths are allowed. Do not invent machine-specific paths. Use pwd to verify cwd if needed. ' +
       'The command runs with a scrubbed environment, a 120 s timeout, and ' +
       'capped output. Returns stdout, stderr, and exit code. Long suites ' +
       '(full test runs, builds) should be scoped down or paged to fit.' +
@@ -58,7 +58,10 @@ export function createShellTool(config: ToolConfig) {
     inputSchema: {
       type: 'object',
       properties: {
-        command: { type: 'string', description: 'Shell command to run (passed to sh -c)' },
+        command: {
+           type: 'string',
+           description: 'Shell command passed to sh -c in the workspace directory. Prefer relative paths; known intentional absolute paths are allowed. Do not invent machine-specific paths.'
+         },
         ...(jobs
           ? {
               background: {

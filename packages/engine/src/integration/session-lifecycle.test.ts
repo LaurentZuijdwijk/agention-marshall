@@ -154,6 +154,60 @@ test('interrupting a side-agent turn mid-request reports it and keeps the prompt
     'the abandoned prompt is kept, so the next message can course-correct instead of starting over');
 });
 
+// The library writes the assistant's tool_use to history as soon as it finishes
+// streaming, then awaits the tool — so an interrupt that lands during approval
+// or execution leaves that call answered nowhere *until* whatever it was
+// waiting on eventually settles in the background. A provider that requires
+// every call to be answered rejects the *next* request outright if it goes out
+// first, and that 400 carries no context-length wording, so past regressions
+// have mistaken it for a full context window and burned a compression pass
+// that could never fix it. The approval below is deliberately slower than the
+// follow-up turn's own setup, so the follow-up's request is built while the
+// call is still genuinely unanswered — the exact window the repair has to
+// close before the next request can carry it.
+test('interrupting mid-tool-call leaves no unanswered call for the next turn', async (t) => {
+  const root = tempRoot();
+  const fake = await startFakeProvider(
+    { toolCalls: [{ name: 'run_shell', arguments: { command: 'echo hi' }, id: 'call_slow' }] },
+    { text: 'the next thing' },
+  );
+  t.after(() => fake.close());
+
+  const events: OutputEvent[] = [];
+  const client: ClientInterface = {
+    onOutput: (event) => { events.push(event); },
+    requestApproval: async () => {
+      await new Promise(resolve => setTimeout(resolve, 300));
+      return 'approve';
+    },
+  };
+  const session = makeSession(root, fake, client);
+  t.after(() => session.dispose());
+
+  const running = session.run('run something that needs approval');
+  // Fired once the model's tool_use is complete and already in history — well
+  // before the slow approval above has a chance to resolve.
+  await waitFor(() => events.some(e => e.type === 'tool-call'), 5000, 'the tool call to be dispatched');
+  session.interrupt();
+  await running;
+
+  assert.ok(events.some(e => e.type === 'interrupted'), 'the client is told the turn was interrupted');
+  assert.equal(session.hasSteering, true);
+
+  await session.run('a follow-up task');
+  const sent = fake.requests.at(-1)?.messages ?? [];
+  const calledIds = sent
+    .flatMap(m => {
+      const calls = (m as { tool_calls?: unknown }).tool_calls;
+      return Array.isArray(calls) ? calls as { id: string }[] : [];
+    })
+    .map(c => c.id);
+  const answeredIds = new Set(sent.filter(m => m.role === 'tool').map(m => m.tool_call_id));
+  for (const id of calledIds) {
+    assert.ok(answeredIds.has(id), `tool call ${id} sent with no matching result in the same request`);
+  }
+});
+
 test('a background job finishing while idle wakes the agent', async (t) => {
   const root = tempRoot();
   const fake = await startFakeProvider(

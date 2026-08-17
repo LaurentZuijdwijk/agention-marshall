@@ -742,3 +742,44 @@ describe('/safety', () => {
     assert.equal(pushed[0].role, 'error');
   });
 });
+
+describe('/config', () => {
+  it('reports each fix applied', async () => {
+    const { deps, pushed } = setup({ repairConfig: async () => ['migrated the global config'] });
+    runSlashCommand('/config repair', deps);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(pushed[0].role, 'info');
+    assert.match(pushed[0].content, /fixed: migrated the global config/);
+  });
+
+  it('says so when there was nothing to fix', async () => {
+    const { deps, pushed } = setup({ repairConfig: async () => [] });
+    runSlashCommand('/config repair', deps);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(pushed[0].role, 'info');
+    assert.match(pushed[0].content, /nothing to repair/);
+  });
+
+  it('reports an error rather than throwing when the repair itself fails', async () => {
+    const { deps, pushed } = setup({ repairConfig: async () => { throw new Error('disk full'); } });
+    runSlashCommand('/config repair', deps);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(pushed[0].role, 'error');
+    assert.match(pushed[0].content, /disk full/);
+  });
+
+  it('rejects a malformed argument with usage', () => {
+    const { deps, pushed } = setup();
+    runSlashCommand('/config frobnicate', deps);
+    assert.equal(pushed[0].role, 'error');
+    assert.match(pushed[0].content, /usage: \/config/);
+  });
+
+  it('reports unavailable rather than crashing when the App has not wired it up', async () => {
+    const { deps, pushed } = setup({ repairConfig: undefined });
+    runSlashCommand('/config repair', deps);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(pushed[0].role, 'error');
+    assert.match(pushed[0].content, /unavailable/);
+  });
+});

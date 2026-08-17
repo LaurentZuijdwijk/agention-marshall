@@ -15,7 +15,7 @@ export type { ImageAttachment } from './images.js';
 export { checkAttachments, decodedBytes, IMAGE_MIME_TYPES, MAX_IMAGE_BYTES } from './images.js';
 export type { ModelInfo } from './models.js';
 export {
-  parseLlamaCppModels, applyLlamaCppProps, parseOllamaModels, parseOpenRouterModels,
+  parseLlamaCppModels, applyLlamaCppProps, parseOllamaModels, parseOpenRouterModels, listOpenRouterModels,
   formatContext, formatParams, formatBytes, formatPrice,
 } from './models.js';
 export { Session } from './session.js';

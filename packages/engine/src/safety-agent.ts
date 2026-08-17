@@ -353,13 +353,15 @@ export interface SafetyVerdict {
  * Default output cap for the judge's response.
  *
  * Higher than a terse JSON verdict needs on its own: guard/reasoning-tuned
- * models (NVIDIA's Nemotron content-safety family in particular) routinely
- * emit a chain-of-thought preamble before the verdict, and a cap sized for
- * just the JSON cuts that off mid-generation — which throws
- * `MaxTokensExceededError`, not a parse failure `parseSafetyVerdict` could
- * shrug off. `SafetyAgentConfig.maxOutputTokens` overrides this per judge.
+ * models (NVIDIA's Nemotron content-safety family, and hybrid-thinking local
+ * GGUF models served through llama.cpp) routinely emit a chain-of-thought
+ * preamble before the verdict, and a cap sized for just the JSON cuts that
+ * off mid-generation — which throws `MaxTokensExceededError`, not a parse
+ * failure `parseSafetyVerdict` could shrug off. 1200 still wasn't enough for
+ * some local reasoners' preambles in practice, hence the size here.
+ * `SafetyAgentConfig.maxOutputTokens` overrides this per judge.
  */
-export const DEFAULT_SAFETY_MAX_TOKENS = 1200;
+export const DEFAULT_SAFETY_MAX_TOKENS = 4096;
 
 /** Run the configured model over one tool call and return its verdict. */
 export async function runSafetyJudge(

@@ -306,17 +306,18 @@ export class ToolBelt {
       brief: {
         type: 'string',
         description:
-          'Self-contained instructions: what to change, where, what "done" looks like, and ' +
+          'Self-contained reasonably detailed instructions: what to change, where, what "done" looks like, and ' +
           'anything it must not touch. The agent sees nothing else — not this conversation, ' +
           'not your plan, not the other agents.',
       },
-      tier: {
+      agent_name: {
         type: 'string',
-        enum: ['fast', 'deep'],
+        enum: ['fast', ...namedAgents.map(a => a.name)],
         description:
-          'fast for mechanical or fully-specified work; deep for work needing judgement. ' +
-          'Fast agents are cheaper and quicker, so prefer them when the brief leaves little open.' +
-          (namedAgents.length > 0 ? ' Give this or agent_name, not both.' : ''),
+          'The agent persona to delegate to. Use "fast" for mechanical or fully specified work; ' +
+          (namedAgents.length > 0
+            ? `or use one of the configured profiles for specific work: ${namedAgents.map(a => this.describeNamedAgentOption(a)).join(', ')}.`
+            : ''),
       },
       toolset: {
         type: 'string',
@@ -329,45 +330,29 @@ export class ToolBelt {
             : ''),
       },
     };
-    // Only advertised once at least one is configured, so a project that
-    // hasn't used `/team` sees this tool's schema exactly as it always has.
-    if (namedAgents.length > 0) {
-      properties.agent_name = {
-        type: 'string',
-        enum: namedAgents.map(a => a.name),
-        description: 'Delegate to one of this project\'s configured agents instead of a bare ' +
-          `tier — give this or tier, not both: ${namedAgents.map(a => this.describeNamedAgentOption(a)).join(', ')}.`,
-      };
-    }
-
     const spawn: ToolSpec = {
       name: 'spawn_agent',
       description: SPAWN_TOOL_DESCRIPTION,
       inputSchema: {
         type: 'object',
         properties,
-        // `toolset` drops out of `required` once any agent is named, the same
-        // way `tier` already does — a pinned agent supplies its own, and
-        // `resolveSpawnTarget` is what actually enforces "give one" for every
-        // other case, since a JSON schema can't say "required unless X".
-        required: namedAgents.length > 0 ? ['brief'] : ['brief', 'tier', 'toolset'],
+        required: ['brief', 'agent_name', 'toolset'],
       },
-      execute: async ({ brief, tier, toolset, agent_name }) => {
+      execute: async ({ brief, agent_name, toolset }) => {
         const target = this.resolveSpawnTarget(
-          tier as Tier | undefined, agent_name as string | undefined, toolset as AgentToolset | undefined,
+          agent_name as string | undefined, toolset as AgentToolset | undefined,
         );
         if (typeof target === 'string') return target;
 
         const job = jobs.start({
           brief: String(brief),
-          tier: tier as Tier | undefined,
-          agentName: agent_name as string | undefined,
+          agentName: agent_name as string,
           toolset: target.toolset,
           timeoutMs: this.deps.getConfig().agentTimeoutMs,
           label: target.label,
           run: ({ id, signal }) => this.runSpawnedAgent({
-            id, signal, brief: String(brief), tier: tier as Tier | undefined,
-            agentName: agent_name as string | undefined, toolset: target.toolset,
+            id, signal, brief: String(brief),
+            agentName: agent_name as string, profile: target.profile, toolset: target.toolset,
           }),
         });
         this.deps.log(`SWARM ${job.id} START ${job.agentName ?? job.tier} ${job.toolset} ${job.label} ${JSON.stringify(job.brief.slice(0, 200))}`);
@@ -385,15 +370,13 @@ export class ToolBelt {
         parent.approval,
         (input) => {
           const target = this.resolveSpawnTarget(
-            input.tier as Tier | undefined, input.agent_name as string | undefined, input.toolset as AgentToolset | undefined,
+            input.agent_name as string | undefined, input.toolset as AgentToolset | undefined,
           );
-          // A malformed call (both/neither tier and agent_name, or an unknown
-          // name) still has to show *something* at the gate — the model's raw
-          // input is the best available answer, since there is no resolved
-          // toolset to fall back to.
+          // An unknown name still has to show something at the gate; the raw
+          // model input is the best available answer.
           const label = typeof target === 'string' ? target : target.label;
           const toolsetLabel = typeof target === 'string' ? String(input.toolset) : target.toolset;
-          const who = input.agent_name ? `"${String(input.agent_name)}" agent` : `${String(input.tier)} agent`;
+          const who = `"${String(input.agent_name)}" agent`;
           return {
             toolName: 'spawn_agent',
             description: `Start a ${who} (${toolsetLabel}) — ${label}`,
@@ -472,18 +455,19 @@ export class ToolBelt {
    * caller passed — that is the whole point of pinning it: a "tester" fixed
    * to `edit` should not be trusted to ask for `full` instead, so its own
    * setting is authoritative rather than a default the caller can override.
+   *
+   * A named agent is looked up before falling back to the built-in `fast`
+   * sentinel: nothing stops `/team add` from naming a custom agent "fast",
+   * and a user's own configured agent must not be shadowed by the tier of
+   * the same name.
    */
   private resolveSpawnTarget(
-    tier: Tier | undefined,
     agentName: string | undefined,
     toolset: AgentToolset | undefined,
   ): { profile: AgentProfile; label: string; toolset: AgentToolset } | string {
-    if (Boolean(tier) === Boolean(agentName)) {
-      return 'Give exactly one of tier or agent_name.';
-    }
-    if (agentName) {
-      const named = resolveNamedAgent(this.deps.getConfig(), agentName);
-      if (!named) return this.unknownNamedAgent(agentName);
+    if (!agentName) return 'Give an agent_name.';
+    const named = resolveNamedAgent(this.deps.getConfig(), agentName);
+    if (named) {
       const resolvedToolset = named.toolset ?? toolset;
       if (!resolvedToolset) return `"${agentName}" has no fixed toolset — give one: readonly, edit or full.`;
       return {
@@ -492,8 +476,15 @@ export class ToolBelt {
         toolset: resolvedToolset,
       };
     }
-    if (!toolset) return 'Give a toolset: readonly, edit or full.';
-    return { profile: resolveTierProfile(this.deps.getConfig(), tier as Tier), label: this.swarmLabel(tier as Tier), toolset };
+    if (agentName === 'fast') {
+      if (!toolset) return 'Give a toolset: readonly, edit or full.';
+      return {
+        profile: resolveTierProfile(this.deps.getConfig(), 'fast'),
+        label: this.swarmLabel('fast'),
+        toolset,
+      };
+    }
+    return this.unknownNamedAgent(agentName);
   }
 
   private unknownNamedAgent(name: string): string {
@@ -565,14 +556,14 @@ export class ToolBelt {
     id: string;
     signal: AbortSignal;
     brief: string;
-    tier?: Tier;
-    agentName?: string;
+    agentName: string;
+    profile: AgentProfile;
     toolset: AgentToolset;
   }): Promise<string> {
     const config = this.deps.getConfig();
-    const named = opts.agentName ? resolveNamedAgent(config, opts.agentName) : undefined;
-    const profile = named?.profile ?? resolveTierProfile(config, opts.tier ?? 'deep');
-    const role: SwarmRole = opts.agentName ? `swarm:agent:${opts.agentName}` : `swarm:${opts.tier ?? 'deep'}`;
+    const named = resolveNamedAgent(config, opts.agentName);
+    const profile = opts.profile;
+    const role: SwarmRole = opts.agentName === 'fast' ? 'swarm:fast' : `swarm:agent:${opts.agentName}`;
     const label = `${profile.provider}/${resolveModel(profile)}`;
 
     const toolConfig: ToolConfig = {

@@ -92,6 +92,12 @@ export interface CommandDeps {
    *  each agent's credential and to call `Session.setNamedAgents`), which
    *  this module deliberately doesn't have; the App owns both. */
   onAgentsChanged?(agents: SavedAgentEntry[]): void;
+  /** Fix the config problems `/config repair` knows how to fix — resolves the
+   *  list of fixes applied, empty when there was nothing to do, `null` when
+   *  the write itself failed (already reported separately). Needs
+   *  `ConfigService`, which this module deliberately doesn't have; the App
+   *  owns it, same as `onAgentsChanged`. */
+  repairConfig?(): Promise<string[] | null>;
 }
 
 function describeJob(job: BackgroundJob): string {
@@ -272,6 +278,24 @@ export function runSlashCommand(input: string, deps: CommandDeps): void {
       const next = current.filter(a => a.name !== command.name);
       deps.onAgentsChanged?.(next);
       transcript.push('info', `removed ${command.name}`);
+      return;
+    }
+
+    case 'config': {
+      const repair = deps.repairConfig;
+      if (!repair) {
+        transcript.push('error', 'config repair is unavailable');
+        return;
+      }
+      repair()
+        .then(actions => {
+          // `null` means the write itself failed — already reported via onError.
+          if (actions === null) return;
+          transcript.push('info', actions.length === 0
+            ? 'nothing to repair'
+            : actions.map(action => `fixed: ${action}`).join('\n'));
+        })
+        .catch((err: unknown) => transcript.push('error', err instanceof Error ? err.message : String(err)));
       return;
     }
 

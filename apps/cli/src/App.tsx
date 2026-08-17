@@ -418,6 +418,7 @@ export function App({
         },
         agents: savedConfig.agents,
         onAgentsChanged: wizardActions.applyAgents,
+        repairConfig: () => config.repair(),
       });
       return;
     }

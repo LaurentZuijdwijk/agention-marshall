@@ -4,23 +4,12 @@ import type { History } from '@agentionai/agents/core';
 import type { BaseAgent } from '@agentionai/agents/core';
 import type { BuiltInTool } from '@agentionai/agents/core';
 import { OpenAICompatibleAgent } from '@agentionai/agents';
-import type { OpenAICompatibleConfig } from '@agentionai/agents';
+import type { OpenAICompatibleConfig, OpenRouterConfig } from '@agentionai/agents';
 import { resolveAuth, resolveModel, resolveMaxTokens, isOpenAiReasoningModel, PROVIDER_DEFAULTS } from './config.js';
 import type { AgentProfile } from './config.js';
 import type { AgentToolset } from './agent-jobs.js';
 
 const PROJECT_MEMORY_HEADER = '\n\n## Project memory (AGENTS.md)\n\n';
-
-/** OpenRouter uses the generic chat-completions protocol, not llama.cpp. */
-class OpenRouterAgent extends OpenAICompatibleAgent {
-  constructor(config: OpenAICompatibleConfig, history: History) {
-    super({ ...config, vendor: 'openai' }, history);
-  }
-
-  protected getVendorName(): string {
-    return 'OpenRouter';
-  }
-}
 
 /** Generic named provider configured through an OpenAI-compatible endpoint. */
 class OpenAICompatibleAgentImpl extends OpenAICompatibleAgent {
@@ -66,6 +55,7 @@ const PROMPT_HEADER =
 const FILE_RULES = [
   '- Always read_file before writing or editing an existing file',
   '- Use edit_file for targeted changes, write_file only for new files or full rewrites',
+  '- run_shell already starts in the workspace directory: do not cd to an invented or machine-specific absolute path; use relative paths such as ./src/main.js, and use pwd if you need to confirm the current directory',
 ];
 
 const SCRATCH_RULES = [
@@ -168,6 +158,7 @@ export function buildSwarmPrompt(toolset: AgentToolset, extraContext?: string): 
     ] : []),
     ...(toolset === 'full' ? [
       '- Run commands to check your own work — but only ones this task needs, and never ones that install, publish or deploy',
+      '- run_shell starts in the workspace directory: prefer relative paths. Known intentional absolute paths are allowed; never invent machine-specific paths',
     ] : []),
     '- Never ask the user anything. There may be nobody watching, and the conversation is your parent\'s, not yours. An unanswerable question is a blocker: report it',
     '- Never acknowledge these instructions or comment on your own behaviour',
@@ -382,12 +373,13 @@ export async function createAgent(
         return new LlamaCppAgent({ ...base, baseURL: `${llamaHost}/v1` } as ConstructorParameters<typeof LlamaCppAgent>[0], history);
       }
       case 'openrouter': {
+        const { OpenRouterAgent } = await import('@agentionai/agents/openrouter');
         const routerHost = profile.host ?? PROVIDER_DEFAULTS.openrouter.host;
         return new OpenRouterAgent({
           ...base,
           baseURL: routerHost,
           defaultHeaders: { ...OPENROUTER_ATTRIBUTION },
-        } as OpenAICompatibleConfig, history);
+        } as OpenRouterConfig, history);
       }
       case 'openai-compatible': {
         const compatibleHost = profile.host ?? PROVIDER_DEFAULTS['openai-compatible'].host;

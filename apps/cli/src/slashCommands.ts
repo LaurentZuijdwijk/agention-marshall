@@ -9,7 +9,7 @@ import type { RuntimeMode, SettingsScope } from './services/settings.js';
 // existing `/agents` (which lists what's been *spawned*, a different concept
 // — see the comment on `SlashCommandResult`'s `'team'` member). `/team` is
 // the new command instead.
-export const SLASH_COMMANDS = ['/agents', '/clear', '/cwd', '/exit', '/goal', '/help', '/jobs', '/login', '/mcp', '/memory', '/model', '/plan', '/review', '/runtime', '/safety', '/setup', '/stream', '/team', '/tokens', '/update', '/version'] as const;
+export const SLASH_COMMANDS = ['/agents', '/clear', '/config', '/cwd', '/exit', '/goal', '/help', '/jobs', '/login', '/mcp', '/memory', '/model', '/plan', '/review', '/runtime', '/safety', '/setup', '/stream', '/team', '/tokens', '/update', '/version'] as const;
 
 /** Which tier `/model` is about to change. `both` is the first-run chain. */
 export type ModelTarget = 'both' | 'deep' | 'fast' | 'off';
@@ -83,7 +83,11 @@ export type SlashCommandResult =
    *  overloaded one. */
   | { type: 'team'; action: 'list' }
   | { type: 'team'; action: 'add' }
-  | { type: 'team'; action: 'remove'; name: string };
+  | { type: 'team'; action: 'remove'; name: string }
+  /** Fixes the config problems that are unambiguous rather than merely stale
+   *  — see `repairConfig` in services/config-store.ts for exactly which two
+   *  and why only those. */
+  | { type: 'config'; action: 'repair' };
 
 const MODEL_TARGETS: Record<string, ModelTarget> = {
   '': 'both', deep: 'deep', fast: 'fast', off: 'off',
@@ -117,6 +121,7 @@ export const SUBCOMMANDS: Record<string, readonly SubcommandWord[]> = {
   '/agents': [{ word: 'stop', operand: '<id>' }],
   '/mcp': [{ word: 'add' }, { word: 'remove', operand: '<name>' }, { word: 'reconnect', operand: '<name>' }],
   '/team': [{ word: 'add' }, { word: 'remove', operand: '<name>' }],
+  '/config': [{ word: 'repair' }],
 };
 
 /**
@@ -259,6 +264,10 @@ export function resolveSlashCommand(input: string): SlashCommandResult {
       if (verb === 'remove' && name) return { type: 'team', action: 'remove', name };
       return { type: 'usage', message: `usage: /team [add|remove <name>|list] — got "${args}"` };
     }
+    case '/config': {
+      if (args === 'repair') return { type: 'config', action: 'repair' };
+      return { type: 'usage', message: `usage: /config repair — got "${args}"` };
+    }
   }
 }
 
@@ -288,6 +297,8 @@ export const HELP = `commands:
   /mcp add           — connect a new MCP server over http
   /mcp remove <name> — disconnect and forget a server
   /mcp reconnect <n> — retry a server that failed
+  /config repair     — fix a pre-workspace-format model choice, or an apiKey
+                       that leaked into the committed project file
   /clear             — clear history, dedupe cache, and scratch notes
   /tokens            — what this session has spent, per agent and model
   /stream            — toggle streaming tokens live vs showing the final response only

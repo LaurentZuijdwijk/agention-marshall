@@ -151,6 +151,12 @@ export function useWizardActions({
     apiKey?: string,
     name?: string,
   ) => {
+    // A choice is either complete (provider and model together) or the fast
+    // tier's "same as deep" (neither). One without the other is a wizard-step
+    // bug, and saving it would persist a half-profile: the write path is
+    // only safe while it receives complete entries.
+    if ((provider === null) !== (model === null)) return;
+
     // `activeProfile`, not the `agentProfile` prop, so a second switch in the
     // same session carries the effort just set rather than the one from boot
     // — the prop is fixed at mount, `activeProfile` tracks every switch since.

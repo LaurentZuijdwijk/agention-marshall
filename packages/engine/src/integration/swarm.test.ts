@@ -63,7 +63,7 @@ async function agentsSettled(session: Session): Promise<void> {
 
 const spawnCall = (args: Record<string, unknown>) => ({
   name: 'spawn_agent',
-  arguments: { brief: 'restyle the header', tier: 'fast', toolset: 'edit', ...args },
+  arguments: { brief: 'restyle the header', agent_name: 'fast', toolset: 'edit', ...args },
 });
 
 test('the swarm tools are off unless asked for', async (t) => {
@@ -130,10 +130,10 @@ test('a spawned agent gets the toolset its parent asked for, and no more', async
   }
 });
 
-test('the tier the parent picks is the model the agent runs on', async (t) => {
+test('agent_name "fast" runs the agent on the fast tier, not deep', async (t) => {
   const root = tempRoot();
   const fake = await startFakeProvider(
-    { toolCalls: [spawnCall({ tier: 'deep' })] },
+    { toolCalls: [spawnCall({})] },
     { text: 'started it' },
     { text: 'done: nothing to change' },
   );
@@ -141,13 +141,13 @@ test('the tier the parent picks is the model the agent runs on', async (t) => {
 
   const session = makeSession(root, fake);
   t.after(() => session.dispose());
-  await session.run('do the hard one');
+  await session.run('do the small one');
   await agentsSettled(session);
 
   const job = session.agents.list()[0];
-  assert.equal(job.tier, 'deep');
-  assert.equal(job.label, 'llamacpp/deep-model');
-  requestFor(fake, 'deep-model');
+  assert.equal(job.agentName, 'fast');
+  assert.equal(job.label, 'llamacpp/fast-model');
+  requestFor(fake, 'fast-model');
 });
 
 test('a named agent runs on its own configured model instead of a tier', async (t) => {
@@ -272,10 +272,10 @@ test('an unknown agent_name is reported to the model, not thrown, and starts not
   assert.match(String(result), /No agent named .*?nope.*?\. Configured: tester\./);
 });
 
-test('giving both tier and agent_name — or neither — is reported, not thrown', async (t) => {
+test('a spawn with no agent_name is reported, not thrown', async (t) => {
   const root = tempRoot();
   const fake = await startFakeProvider(
-    { toolCalls: [{ name: 'spawn_agent', arguments: { brief: 'write tests', tier: 'fast', agent_name: 'tester', toolset: 'edit' } }] },
+    { toolCalls: [{ name: 'spawn_agent', arguments: { brief: 'write tests', toolset: 'edit' } }] },
     { text: 'my mistake' },
   );
   t.after(() => fake.close());
@@ -288,7 +288,7 @@ test('giving both tier and agent_name — or neither — is reported, not thrown
 
   assert.deepEqual(session.agents.list(), []);
   const result = fake.requests.at(-1)?.messages.find(m => m.role === 'tool')?.content;
-  assert.match(String(result), /Give exactly one of tier or agent_name\./);
+  assert.match(String(result), /Give an agent_name\./);
 });
 
 test('a denied spawn starts nothing', async (t) => {

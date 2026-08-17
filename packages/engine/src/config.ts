@@ -143,8 +143,8 @@ export interface SafetyAgentConfig {
   /** Defaults to 'chat-judge'. */
   kind?: SafetyAgentKind;
   /**
-   * Output token cap for the judge's response. Defaults to 600
-   * (`DEFAULT_SAFETY_MAX_TOKENS` in safety-agent.ts) — raise it for a
+   * Output token cap for the judge's response. Defaults to 4096
+   * (`DEFAULT_SAFETY_MAX_TOKENS` in safety-agent.ts) — raise it further for a
    * reasoning-tuned model that emits a long chain-of-thought before its
    * verdict, or its response gets cut off mid-generation instead of parsed.
    */

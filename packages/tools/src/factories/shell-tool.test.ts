@@ -44,6 +44,15 @@ test('scopes the command to the workspace cwd', async () => {
   assert.match(result, new RegExp(workspaceRoot.replace(/[/\\]/g, '[$/\\\\]')));
 });
 
+test('describes the workspace-relative command convention', () => {
+  const tool = createShellTool(makeConfig());
+  const { description } = tool.getPrompt();
+  assert.match(description, /already set/);
+  assert.match(description, /Prefer relative paths/);
+  assert.match(description, /absolute paths are allowed/);
+  assert.match(description, /Do not invent machine-specific paths/);
+});
+
 test('blocks dangerous commands via the default denylist', async () => {
   const tool = createShellTool(makeConfig());
   const result = await tool.execute('a', 'b', { command: 'rm -rf /' }, 'id');

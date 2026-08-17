@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Box } from 'ink';
 import type { AgentProfile, Provider, SafetyLevel, Session } from '@agentionai/marshall-engine';
 import type { Mode, SetMode } from '../mode.js';
@@ -30,6 +30,15 @@ export interface WizardProps {
   actions: ReturnType<typeof useWizardActions>;
 }
 
+// Re-read the config files whenever a wizard screen opens: these screens show
+// stored state (endpoints, keys' existence, MCP, agents), and another instance
+// may have saved since this one last wrote. What the *session* runs on stays
+// pinned — `refresh` touches the display memo only, never the resolved
+// profiles.
+function useConfigRefresh(mode: Mode, config: ConfigService): void {
+  useEffect(() => { config.refresh(); }, [mode, config]);
+}
+
 /**
  * The four wizards (`/setup`, `/mcp add`, `/model`, `/safety agentic`)
  * rendered *inside* the tree below the transcript rather than replacing it.
@@ -43,6 +52,7 @@ export function Wizard({
   endpoints, customProviders, session, savedConfig, config, transcript,
   setRuntimeMode, setSafetyLevelState, SetupCtor, actions,
 }: WizardProps) {
+  useConfigRefresh(mode, config);
   if (mode.type === 'settings-menu') {
     return (
       <Box padding={1}>

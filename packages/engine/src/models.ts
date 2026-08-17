@@ -225,6 +225,36 @@ export function parseOllamaModels(tags: unknown, running?: unknown): ModelInfo[]
  * every text-only-output model; `supportsTools` records whether the model can
  * call tools so the picker can warn before selection.
  */
+export async function listOpenRouterModels(apiKey: string, host?: string, pinned: string[] = []): Promise<ModelInfo[]> {
+  const { OpenRouterAgent } = await import('@agentionai/agents/openrouter');
+  const agent = new OpenRouterAgent({
+    id: 'marshall-model-catalogue',
+    name: 'Marshall model catalogue',
+    description: 'Lists available OpenRouter models',
+    apiKey,
+    model: pinned[0] ?? 'openai/gpt-4o-mini',
+    vendor: 'openrouter',
+    ...(host ? { baseURL: host } : {}),
+  });
+  const listed = await agent.listModels();
+  return listed
+    .filter(model => {
+      return model.capabilities?.chat !== false;
+    })
+    .map(model => ({
+      id: model.id,
+      ...(model.displayName ? { label: model.displayName } : {}),
+      ...(model.contextLength ? { context: model.contextLength, contextSource: 'configured' as const } : {}),
+      ...(model.maxOutputTokens ? { maxOutput: model.maxOutputTokens } : {}),
+      ...(model.capabilities?.tools !== undefined ? { supportsTools: model.capabilities.tools } : {}),
+      ...(model.capabilities?.thinking ? { reasoning: true } : {}),
+      ...(model.capabilities?.vision ? { extraModalities: ['image'] } : {}),
+      ...((model.raw as any)?.pricing?.prompt !== undefined && (model.raw as any)?.pricing?.completion !== undefined
+        ? { pricing: { prompt: Number((model.raw as any).pricing.prompt), completion: Number((model.raw as any).pricing.completion) } }
+        : {}),
+    }));
+}
+
 export function parseOpenRouterModels(payload: unknown, pinned: string[] = []): ModelInfo[] {
   const data = (payload as { data?: unknown })?.data;
   if (!Array.isArray(data)) return [];

@@ -7,6 +7,7 @@ import {
   withAgents, withModelSelection, withProviderCredentials, upsertProvider, loadConfig, savedDeepProfile,
   findProvider, providerCredentials, providerKeyForHost, configPath, globalConfigPath, savedMcpServers,
   resolveMcpServers, danglingMcpSelections, projectSecretWarnings, legacyProfileWarnings, removeProvider,
+  repairConfig, validateForWrite,
 } from './config-store.js';
 import type { SavedConfig } from './config-store.js';
 import type { SavedAgentEntry, SavedProviderEntry } from './config-store.js';
@@ -306,6 +307,23 @@ describe('loadConfig', () => {
     assert.deepEqual(loadConfig(root), {});
   });
 
+  // First run creates the global file as a side effect of *reading*; an
+  // unwritable config home must not take that down. Reads treat a missing
+  // global file as empty, and the first real write reports the same home
+  // through the service's onError, where the user can see it.
+  it('does not crash first-run creation when the config home is unwritable', () => {
+    const unwritable = join(ws(), 'a-file');
+    writeFileSync(unwritable, 'not a directory');
+    const saved = process.env.XDG_CONFIG_HOME;
+    process.env.XDG_CONFIG_HOME = unwritable;
+    try {
+      assert.doesNotThrow(() => loadConfig(ws()));
+      assert.equal(existsSync(globalConfigPath()), false, 'nothing was created, and that is fine');
+    } finally {
+      process.env.XDG_CONFIG_HOME = saved;
+    }
+  });
+
   it('reads settings from the global config when there is no project override', () => {
     writeGlobal({ provider: 'claude', model: 'opus' });
     assert.deepEqual(loadConfig(ws()), { provider: 'claude', model: 'opus' });
@@ -354,6 +372,70 @@ describe('loadConfig', () => {
     assert.equal(providerCredentials(loadConfig(root).providers, { provider: 'llamacpp' }).host,
       'http://project:8080');
   });
+
+  // The reported bug: a global `models.deep` left over from before the
+  // project/global split (or from a provider this workspace no longer uses)
+  // has a `host` the project's `models.deep` never sets — openrouter has
+  // none. A plain field-by-field deep-merge let that host survive onto the
+  // merged profile, so the app addressed OpenRouter's model at a local
+  // llama.cpp server's URL and got back whatever that server said to it.
+  it('does not let a stale global models.deep leak a field into an unrelated project one', () => {
+    writeGlobal({
+      models: { deep: { provider: 'llamacpp', model: 'qwen', host: 'http://192.168.1.249:8080' } },
+    });
+    const root = ws();
+    write(root, { models: { deep: { provider: 'openrouter', model: 'openai/gpt-5.6-luna' } } });
+
+    assert.deepEqual(savedDeepProfile(loadConfig(root)), { provider: 'openrouter', model: 'openai/gpt-5.6-luna' });
+  });
+
+  it('falls back to the global models.deep when the project has none', () => {
+    writeGlobal({ models: { deep: { provider: 'llamacpp', model: 'qwen', host: 'http://global:8080' } } });
+    const root = ws();
+    write(root, { settings: { version: 1 } });
+
+    assert.deepEqual(savedDeepProfile(loadConfig(root)),
+      { provider: 'llamacpp', model: 'qwen', host: 'http://global:8080' });
+  });
+});
+
+describe('validateForWrite', () => {
+  it('accepts a well-formed candidate', () => {
+    assert.equal(validateForWrite({
+      providers: [
+        { provider: 'openrouter', apiKey: 'k' },
+        { provider: 'llamacpp', host: 'http://box:8080' },
+        { provider: 'openai-compatible', name: 'LM Studio', host: 'http://lm' },
+      ],
+      mcpServers: [{ name: 'docs', url: 'http://docs' }],
+    }), undefined);
+  });
+
+  // A local provider without a host cannot work — persisting one would just
+  // trade a loud failure at save time for a confusing one at run time.
+  it('rejects a local provider without a host', () => {
+    const error = validateForWrite({ providers: [{ provider: 'llamacpp' }] });
+    assert.match(error ?? '', /llamacpp needs a host/);
+  });
+
+  it('accepts a hosted provider without a host, and rejects an empty provider', () => {
+    assert.equal(validateForWrite({ providers: [{ provider: 'openrouter', apiKey: 'k' }] }), undefined);
+    assert.match(validateForWrite({ providers: [{ provider: '' }] }) ?? '', /provider/);
+  });
+
+  // Unknown keys are how a future version's field gets miswritten by this
+  // one: fail the save, don't file the garbage away.
+  it('rejects unknown fields on a provider entry', () => {
+    const error = validateForWrite({
+      providers: [{ provider: 'claude', bogus: 1 } as unknown as SavedProviderEntry],
+    });
+    assert.match(error ?? '', /Unrecognized key/);
+  });
+
+  it('rejects an MCP server without a url', () => {
+    const error = validateForWrite({ mcpServers: [{ name: 'docs' }] });
+    assert.match(error ?? '', /name and a url/);
+  });
 });
 
 describe('reading tiers back', () => {
@@ -394,6 +476,94 @@ describe('legacyProfileWarnings', () => {
 
   it('says nothing for a config with no model saved at all', () => {
     assert.deepEqual(legacyProfileWarnings({}), []);
+  });
+});
+
+describe('repairConfig', () => {
+  it('does nothing to a config with neither problem', () => {
+    const global: SavedConfig = { models: { deep: { provider: 'claude', model: 'opus' } }, providers: [] };
+    const project: SavedConfig = { models: { deep: { provider: 'openrouter', model: 'x' } } };
+    const result = repairConfig(global, project);
+    assert.deepEqual(result, { actions: [] });
+  });
+
+  it('migrates a legacy flat global profile into models.deep and providers', () => {
+    const global: SavedConfig = { provider: 'claude', model: 'opus', apiKey: 'global-secret' };
+    const result = repairConfig(global, undefined);
+
+    assert.equal(result.actions.length, 1);
+    assert.deepEqual(result.global?.models?.deep, { provider: 'claude', model: 'opus' });
+    assert.equal(result.global?.provider, undefined, 'the flat keys are gone once migrated');
+    assert.equal(result.global?.model, undefined);
+    assert.equal(result.global?.apiKey, undefined, 'the credential moved to providers, not left flat');
+    assert.deepEqual(
+      findProvider(result.global?.providers, { provider: 'claude' }),
+      { provider: 'claude', apiKey: 'global-secret' },
+    );
+  });
+
+  it('migrates a legacy flat project profile, keeping the model in the project file and the key out of it', () => {
+    const global: SavedConfig = {};
+    const project: SavedConfig = { provider: 'openrouter', model: 'x', apiKey: 'leaked-key' };
+    const result = repairConfig(global, project);
+
+    assert.equal(result.actions.length, 1);
+    assert.deepEqual(result.project?.models?.deep, { provider: 'openrouter', model: 'x' });
+    assert.equal(result.project?.apiKey, undefined);
+    assert.equal(result.project?.provider, undefined);
+    assert.deepEqual(
+      findProvider(result.global?.providers, { provider: 'openrouter' }),
+      { provider: 'openrouter', apiKey: 'leaked-key' },
+    );
+  });
+
+  it('moves an apiKey out of an already-tiered project file and into global providers', () => {
+    const global: SavedConfig = { providers: [{ provider: 'openrouter', apiKey: 'old-key' }] };
+    const project: SavedConfig = { models: { deep: { provider: 'openrouter', model: 'x', apiKey: 'new-key' } } };
+    const result = repairConfig(global, project);
+
+    assert.equal(result.actions.length, 1);
+    assert.match(result.actions[0], /1 API key/);
+    assert.equal(result.project?.models?.deep?.apiKey, undefined);
+    assert.deepEqual(result.project?.models?.deep, { provider: 'openrouter', model: 'x' });
+    // The project's key wins over whatever was already stored globally — it's
+    // the more recent one, same as any other provider-entry upsert.
+    assert.equal(findProvider(result.global?.providers, { provider: 'openrouter' })?.apiKey, 'new-key');
+  });
+
+  // The adopted entry is only what the project file leaked — the key here —
+  // and replacing the whole global entry would have deleted the host the user
+  // set for that same endpoint.
+  it('keeps the global entry host when adopting a leaked key for the same endpoint', () => {
+    const global: SavedConfig = { providers: [{ provider: 'openrouter', host: 'http://proxy:4000', apiKey: 'old-key' }] };
+    const project: SavedConfig = { models: { deep: { provider: 'openrouter', model: 'x', apiKey: 'new-key' } } };
+    const result = repairConfig(global, project);
+
+    assert.deepEqual(
+      findProvider(result.global?.providers, { provider: 'openrouter' }),
+      { provider: 'openrouter', host: 'http://proxy:4000', apiKey: 'new-key' },
+      'the adopted key wins, the stored host survives');
+  });
+
+  it('drops a bare project-level apiKey that names no provider, rather than crashing trying to move it', () => {
+    const project: SavedConfig = { apiKey: 'orphan-key', models: { deep: { provider: 'claude', model: 'opus' } } };
+    const result = repairConfig({}, project);
+
+    assert.equal(result.project?.apiKey, undefined);
+    assert.match(result.actions.join(' '), /had no provider to file it under and was dropped/);
+  });
+
+  it('reports nothing changed when there is no project file at all', () => {
+    const result = repairConfig({ models: { deep: { provider: 'claude', model: 'opus' } } }, undefined);
+    assert.deepEqual(result, { actions: [] });
+  });
+
+  it('is idempotent — running it again on its own output finds nothing left to fix', () => {
+    const global: SavedConfig = { provider: 'claude', model: 'opus', apiKey: 'secret' };
+    const project: SavedConfig = { models: { deep: { provider: 'openrouter', model: 'x', apiKey: 'leak' } } };
+    const once = repairConfig(global, project);
+    const twice = repairConfig(once.global ?? global, once.project ?? project);
+    assert.deepEqual(twice.actions, []);
   });
 });
 

@@ -18,19 +18,30 @@
 //      config. The snapshot is a memo of what was last read, thrown away by
 //      every write, so the next reader re-reads the file. A write reads the
 //      file it is about to write *inside* the queued task, never from the memo.
-//   2. One write path. `write()` is the only thing in the app that opens a
-//      config file for writing. Everything public is a transform handed to it.
+//   2. One write path. `writeMany()` is the only thing in the app that opens a
+//      config file for writing. Everything public is a *transform* handed to
+//      it, applied to whatever is on disk at the moment it runs — never a
+//      precomputed value, which would encode a stale read and could not be
+//      re-applied to a fresh one.
 //
 // Writes are serialised through a promise chain, so two settings changed in the
-// same tick cannot each read the file before the other writes it.
+// same tick cannot each read the file before the other writes it. The chain
+// only reaches this process: against another instance, or a hand edit, every
+// save fingerprints the files it read, checks the fingerprint still holds
+// before writing, and re-applies the transforms to whatever landed in between
+// rather than clobbering it. The file itself is replaced by temp file +
+// rename, so no reader — this process or another — ever sees a half-written
+// file: one read back through the lenient parser is an *empty* config, which
+// for the global file means every stored key, gone silently.
 
-import { writeFile, mkdir, chmod } from 'node:fs/promises';
+import { writeFile, mkdir, chmod, rename, rm } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import type { AgentProfile, McpServerConfig } from '@agentionai/marshall-engine';
 import {
   configPath, findProvider, globalConfigPath, legacyProfileWarnings, loadConfig, loadMcpWarnings,
   projectSecretWarnings, providerCredentials, providerKeyForHost, readJsonConfig, removeProvider,
-  resolveMcpServers, withAgents, withMcpServers, withModelSelection, withProjectMcp, withProviderCredentials,
+  repairConfig, resolveMcpServers, validateForWrite, withAgents, withMcpServers, withModelSelection,
+  withProjectMcp, withProviderCredentials,
 } from './config-store.js';
 import type { ProviderRef, SavedAgentEntry, SavedConfig, SavedProviderEntry } from './config-store.js';
 import {
@@ -62,6 +73,15 @@ export interface ConfigSnapshot {
   mcpWarnings: string[];
   /** Everything worth telling the user at startup, MCP included. */
   warnings: string[];
+}
+
+/**
+ * Both raw files as one value — what every write transform is handed, so a
+ * transform may consult the layer it is not writing to.
+ */
+export interface ConfigFiles {
+  global: SavedConfig;
+  project: SavedConfig;
 }
 
 export class ConfigService {
@@ -145,6 +165,20 @@ export class ConfigService {
   keyFor = (provider: string, host?: string): string | undefined =>
     providerKeyForHost(this.snapshot().providers, provider, host);
 
+  /**
+   * Re-read the files on the next `snapshot()` — for a display that wants the
+   * current truth rather than the last thing this process wrote, e.g. the
+   * settings menu opening after another instance saved something.
+   *
+   * Deliberately touches nothing the session runs on: this process's profiles
+   * are pinned at startup, and only an in-session `/model` changes them. A
+   * write from another instance changes what the *display* shows, not the
+   * model this session talks to.
+   */
+  refresh(): void {
+    this.invalidate();
+  }
+
   // ── writing ─────────────────────────────────────────────────────────────────
 
   /**
@@ -162,9 +196,55 @@ export class ConfigService {
    */
   saveProfiles(deep: AgentProfile, fast: AgentProfile | undefined): Promise<boolean> {
     return this.writeMany([
-      { scope: 'global', what: 'provider credentials', transform: config => withProviderCredentials(config, deep, fast) },
-      { scope: 'project', what: 'model selection', transform: config => withModelSelection(config, deep, fast) },
+      { scope: 'global', what: 'provider credentials', transform: files => withProviderCredentials(files.global, deep, fast) },
+      { scope: 'project', what: 'model selection', transform: files => withModelSelection(files.project, deep, fast) },
     ]);
+  }
+
+  /**
+   * Fix the config problems `config-store.ts`'s `repairConfig` knows how to
+   * fix unambiguously — a pre-tier flat model choice, or an `apiKey` that
+   * leaked into the committed project file — and report what changed, empty
+   * when there was nothing to do.
+   *
+   * `repairConfig` needs both raw files together — a leaked project key is
+   * filed under the global providers list, not left where it was — so both
+   * transforms below are handed the pair and each takes its own file's result
+   * out of the same pure computation. The computation runs inside the queued
+   * task, not from `snapshot()`'s memo: a repair computed from a stale read
+   * could redo, or silently undo, whatever the write immediately ahead of it
+   * in the queue just did — and because it is a transform of the freshly read
+   * files, the fingerprint check protects it against another instance the way
+   * every other write is protected, instead of writing a value a stale read
+   * baked in.
+   */
+  /**
+   * Resolves `null` when the write itself failed (already reported via
+   * `onError`) rather than an empty list — the two must stay distinguishable,
+   * or a failed repair reads to the caller as "there was nothing to fix".
+   */
+  repair(): Promise<string[] | null> {
+    let actions: string[] = [];
+    // `apply` runs once per scope below, each time recomputing `repairConfig`
+    // over the same `files` pair rather than sharing one result — `writeMany`
+    // calls each entry's `transform` independently, so there is no single call
+    // site to compute it once from. `actions` is overwritten, not merged, on
+    // each call: correct only because `repairConfig` is pure and deterministic
+    // over the same input, so both calls land on the same actions list
+    // regardless of which one runs last. That purity is what `repairConfig`'s
+    // own tests pin — if it ever stopped holding, this would silently report
+    // one scope's actions while writing both.
+    const apply = (files: ConfigFiles, scope: SettingsScope): SavedConfig => {
+      const result = repairConfig(files.global, files.project);
+      actions = result.actions;
+      return scope === 'global'
+        ? result.global ?? files.global
+        : result.project ?? files.project;
+    };
+    return this.writeMany([
+      { scope: 'global', what: 'repaired config', transform: files => apply(files, 'global') },
+      { scope: 'project', what: 'repaired config', transform: files => apply(files, 'project') },
+    ]).then(ok => (ok ? actions : null));
   }
 
   /**
@@ -183,18 +263,24 @@ export class ConfigService {
    * nothing for an entry that only ever lived in the global one.
    */
   removeProvider(ref: ProviderRef): Promise<boolean> {
-    const inGlobal = findProvider(readJsonConfig(globalConfigPath()).providers, ref) !== undefined;
-    const inProject = findProvider(readJsonConfig(configPath(this.workspaceRoot)).providers, ref) !== undefined;
-    if (!inGlobal && !inProject) return Promise.resolve(false);
-
-    const drop = (config: SavedConfig): SavedConfig => ({
-      ...config,
-      providers: removeProvider(config.providers ?? [], ref),
-    });
-    return Promise.all([
-      ...(inGlobal ? [this.write('global', 'provider list', drop)] : []),
-      ...(inProject ? [this.write('project', 'provider list', drop)] : []),
-    ]).then(results => results.every(Boolean));
+    // Checked inside the queued task, not before it: a read outside the queue
+    // can race a write queued just ahead of this one. Each file is only
+    // written when the transform actually changed it — see `writeMany` — so an
+    // entry that only ever lived in the global one does not create a project
+    // file out of nothing.
+    let removed = false;
+    const drop = (scope: SettingsScope) => (files: ConfigFiles): SavedConfig => {
+      const config = files[scope];
+      if (findProvider(config.providers, ref) !== undefined) removed = true;
+      // No list in this file — nothing to drop here, and adding an empty one
+      // would create (or bloat) a file the entry never touched.
+      if (config.providers === undefined) return config;
+      return { ...config, providers: removeProvider(config.providers, ref) };
+    };
+    return this.writeMany([
+      { scope: 'global', what: 'provider list', transform: drop('global') },
+      { scope: 'project', what: 'provider list', transform: drop('project') },
+    ]).then(ok => ok && removed);
   }
 
   /**
@@ -244,85 +330,147 @@ export class ConfigService {
 
   // ── the only writer ─────────────────────────────────────────────────────────
 
-  /** Read one target file, transform it, write it back. No queueing, no
-   *  invalidate/notify — `write` and `writeMany` below wrap this with those,
-   *  since a multi-file save needs them to happen once for every file rather
-   *  than once per file. */
-  private async performWrite(
-    scope: SettingsScope,
-    transform: (config: SavedConfig) => SavedConfig,
-  ): Promise<void> {
-    const path = scope === 'global' ? globalConfigPath() : configPath(this.workspaceRoot);
-    await mkdir(dirname(path), { recursive: true });
-    // From disk, not from `this.memo`: the memo is a rendering convenience and
-    // may predate another writer's change.
-    const next = transform(readJsonConfig(path));
-    await writeFile(path, JSON.stringify(next, null, 2) + '\n',
-      scope === 'global' ? { mode: 0o600 } : {});
-    // `mode` on writeFile only applies when the file is created, and the global
-    // config normally already exists. Tighten it explicitly, so a file that was
-    // once created loosely does not stay that way while holding an API key.
-    if (scope === 'global') await chmod(path, 0o600);
+  /**
+   * Both raw files as one value, handed to every transform. Transforms may
+   * need the other layer — `repair` moves a leaked project key into the global
+   * list — and the fingerprint below needs both at once.
+   */
+  private fingerprint(files: ConfigFiles): string {
+    return JSON.stringify([files.global, files.project]);
   }
 
   /**
-   * Read the target file, transform it, write it back, invalidate, notify.
+   * The whole save protocol, in one place: read both files, apply every
+   * transform to the pair, validate the results, check nothing changed under
+   * us, write every changed file atomically, invalidate once.
    *
-   * Queued: the transform runs against what is on disk at the moment it is its
-   * turn, not against what was there when the caller asked. Two settings
-   * changed in one tick therefore compose instead of the second overwriting the
-   * first with a stale base.
+   * The fingerprint check is what the queue cannot do: the queue serialises
+   * *this* process, while another instance — or a hand edit — writes straight
+   * to the file. When the fingerprint no longer holds, the transforms are
+   * re-applied to the fresh content, which *is* the merge: a transform is a
+   * pure, idempotent function of (files, intent), so re-running it over
+   * whatever the other writer left keeps the other writer's entries and lands
+   * ours on top.
+   *
+   * A save that spans more than one file is seen as a single change — one
+   * invalidate/notify once every file has settled — so a subscriber never
+   * re-renders on a save that is only half done. Only files whose content
+   * actually changed are written, and each file is still written
+   * independently — one failing does not stop the others, matching the
+   * per-scope error reporting.
    *
    * Never rejects: failures go to `onError` and the promise resolves `false`,
-   * so no call site can produce an unhandled rejection by forgetting a `.catch`
-   * — which, on Node's default, takes the process down mid-session.
+   * so no call site can produce an unhandled rejection by forgetting a
+   * `.catch` — which, on Node's default, takes the process down mid-session.
+   */
+  private static readonly WRITE_ATTEMPTS = 3;
+
+  private writeMany(
+    writes: Array<{ scope: SettingsScope; what: string; transform: (files: ConfigFiles) => SavedConfig }>,
+  ): Promise<boolean> {
+    const task: Promise<boolean> = this.queue.then(async () => {
+      const paths = { global: globalConfigPath(), project: configPath(this.workspaceRoot) };
+      for (let attempt = 1; ; attempt++) {
+        // From disk, not from `this.memo`: the memo is a rendering convenience
+        // and may predate another writer's change.
+        const files: ConfigFiles = {
+          global: readJsonConfig(paths.global),
+          project: readJsonConfig(paths.project),
+        };
+        const seen = this.fingerprint(files);
+        const results = new Map<SettingsScope, { what: string; next: SavedConfig }>();
+        for (const write of writes) {
+          const next = write.transform(files);
+          const invalid = validateForWrite(next, files[write.scope]);
+          if (invalid) throw new Error(`${write.what}: ${invalid}`);
+          results.set(write.scope, { what: write.what, next });
+        }
+        // Someone else may have written while we were reading: if so, re-apply
+        // the transforms to the fresh content rather than clobber it.
+        const now: ConfigFiles = {
+          global: readJsonConfig(paths.global),
+          project: readJsonConfig(paths.project),
+        };
+        if (this.fingerprint(now) !== seen) {
+          if (attempt >= ConfigService.WRITE_ATTEMPTS) {
+            throw new Error('the config file keeps changing between read and write; giving up');
+          }
+          continue;
+        }
+        let ok = true;
+        for (const [scope, { what, next }] of results) {
+          if (JSON.stringify(next) === JSON.stringify(files[scope])) continue;
+          try {
+            await this.writeFileAtomic(paths[scope], next, scope === 'global');
+          } catch (err) {
+            ok = false;
+            this.onError(`could not save ${what}: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+        if (ok) this.invalidate();
+        return ok;
+      }
+    });
+
+    // The queue itself must survive a failed write, or one EACCES wedges every
+    // later save in the session. The returned promise must resolve, never
+    // reject: a validation failure or a give-up throws inside the task, and a
+    // call site that forgot its `.catch` would otherwise take the process
+    // down mid-session. Per-file write failures never reject — they are
+    // reported inside the loop and resolved as `false`.
+    this.queue = task.then(() => {}, () => {});
+    return task.then(
+      () => true,
+      (err: unknown) => {
+        this.onError(err instanceof Error ? err.message : String(err));
+        return false;
+      },
+    );
+  }
+
+  /**
+   * Read one target file, transform it, write it back — `writeMany` with a
+   * single file, for a save that only touches one of the two. Queued: the
+   * transform runs against what is on disk at the moment it is its turn, not
+   * against what was there when the caller asked. Two settings changed in one
+   * tick therefore compose instead of the second overwriting the first with a
+   * stale base.
    */
   private write(
     scope: SettingsScope,
     what: string,
     transform: (config: SavedConfig) => SavedConfig,
   ): Promise<boolean> {
-    const task = this.queue.then(async () => {
-      await this.performWrite(scope, transform);
-      this.invalidate();
-    });
-
-    // The queue itself must survive a failed write, or one EACCES wedges every
-    // later save in the session.
-    this.queue = task.catch(() => {});
-    return task.then(() => true, (err: unknown) => {
-      this.onError(`could not save ${what}: ${err instanceof Error ? err.message : String(err)}`);
-      return false;
-    });
+    return this.writeMany([{ scope, what, transform: files => transform(files[scope]) }]);
   }
 
   /**
-   * Like `write`, but for a save that spans more than one file and must be
-   * seen as a single change — one invalidate/notify once every file has
-   * settled, not one per file. A subscriber (the UI) would otherwise re-render
-   * on a save that is only half done, showing a model pinned to a credential
-   * that was never actually written, or the other way round.
+   * The only thing that opens a config file for writing: temp file + rename,
+   * so no reader ever sees a half-written file. A torn file read back through
+   * the lenient parser is an *empty* config — for the global file, every
+   * stored key, gone silently — which is where the old plain `writeFile` went
+   * when the process died mid-save.
    *
-   * Each file is still written independently — one failing does not stop the
-   * others, matching `write`'s per-scope error reporting — but the queue only
-   * advances, and the snapshot only invalidates, once every one of them has
-   * settled.
+   * `0600` is set on the temp file *before* the rename, not on the target
+   * after: the file has the right mode at the moment it becomes visible, and a
+   * file once created loosely does not stay that way while holding an API key.
+   *
+   * Only the global file holds a secret — `secret` is false for the project
+   * file, which is meant to be committed and read by anyone who clones the
+   * repo, so it keeps the default creation mode instead of being locked to
+   * the writing user.
    */
-  private writeMany(
-    writes: Array<{ scope: SettingsScope; what: string; transform: (config: SavedConfig) => SavedConfig }>,
-  ): Promise<boolean> {
-    const task: Promise<boolean> = this.queue.then(async () => {
-      const results = await Promise.all(writes.map(({ scope, what, transform }) =>
-        this.performWrite(scope, transform).then(() => true, (err: unknown) => {
-          this.onError(`could not save ${what}: ${err instanceof Error ? err.message : String(err)}`);
-          return false;
-        })));
-      this.invalidate();
-      return results.every(Boolean);
-    });
-
-    this.queue = task.then(() => {}, () => {});
-    return task;
+  private async writeFileAtomic(path: string, config: SavedConfig, secret: boolean): Promise<void> {
+    await mkdir(dirname(path), { recursive: true });
+    const tmp = `${path}.${process.pid}.tmp`;
+    try {
+      await writeFile(tmp, JSON.stringify(config, null, 2) + '\n', secret ? { mode: 0o600 } : undefined);
+      if (secret) await chmod(tmp, 0o600);
+      await rename(tmp, path);
+    } catch (err) {
+      await rm(tmp, { force: true }).catch(() => {});
+      throw err;
+    }
   }
 
   private invalidate(): void {

@@ -48,17 +48,17 @@
     --ok:     #34D399;
     --warn:   #FBBF24;
     --error:  #F87171;
-    --text:   #E5E7EB;
-    --bg:     #0B0D10;
-    --bg-2:   #10131A;
-    --border: #1F2430;
+    --text:   #080808;
+    --bg:     #f7f7f2;
+    --bg-2:   #ffffff;
+    --border: #080808;
 
     /* theme.ts uses #6B7280 / #4B5563 for muted + faint. A terminal renders
        those on a user-chosen background; here they'd land at 4.0:1 and 2.6:1
        on --bg, under WCAG AA. Lifted just enough to clear 4.5:1 while still
        reading as "chrome, not content". */
-    --muted:  #8A93A6;
-    --faint:  #737E96;
+    --muted:  #444444;
+    --faint:  #666666;
 
     --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
     --nav-h: 52px;
@@ -127,8 +127,8 @@
   nav {
     position: fixed; top: 0; left: 0; right: 0; z-index: 10;
     backdrop-filter: blur(10px);
-    background: rgba(11,13,16,.72);
-    border-bottom: 1px solid var(--border);
+    background: rgba(247,247,242,.88);
+    border-bottom: 3px solid var(--border);
   }
   nav .wrap {
     display: flex; align-items: center; gap: 18px;
@@ -155,7 +155,62 @@
   }
 
   /* ── hero ──────────────────────────────────────────────────── */
-  header.hero { padding: 88px 0 40px; }
+  header.hero {
+    position: relative;
+    isolation: isolate;
+    padding: 92px 0 44px;
+    color: #080808;
+    background: #f5ff4d;
+    overflow: hidden;
+  }
+  header.hero::before,
+  header.hero::after {
+    content: "";
+    position: absolute;
+    z-index: -1;
+    transform: rotate(-31deg);
+    pointer-events: none;
+  }
+  @keyframes hero-ribbons {
+    0%, 100% { transform: translate3d(0, 0, 0) rotate(-31deg); }
+    50% { transform: translate3d(-24px, 12px, 0) rotate(-27deg); }
+  }
+  @keyframes hero-orbit {
+    0%, 100% { transform: translate3d(0, 0, 0) rotate(-31deg) scale(1); }
+    50% { transform: translate3d(18px, -16px, 0) rotate(-24deg) scale(1.06); }
+  }
+  header.hero::before {
+    width: 62vw; height: 190px;
+    top: 54px; right: -14vw;
+    background: #ff6b35;
+    box-shadow: -250px 100px 0 #11aee8, -480px 10px 0 #27c978;
+    animation: hero-ribbons 14s ease-in-out infinite;
+  }
+  header.hero::after {
+    width: 210px; height: 210px;
+    top: 245px; left: -55px;
+    border-radius: 50%;
+    background: #bdb4ff;
+    box-shadow: 150px 100px 0 #ffbfb8;
+    animation: hero-orbit 18s ease-in-out infinite;
+  }
+  header.hero .wrap { position: relative; z-index: 1; }
+  @media (max-width: 640px) { header.hero { padding: 80px 0 28px; } }
+  #hero-logo { color: #080808; }
+  .hero-copy .hero-headline { margin-top: 18px; max-width: 12em; font: 700 clamp(32px, 5vw, 62px)/.95 Arial, Helvetica, sans-serif; letter-spacing: -.05em; }
+  .hero-copy .tagline { color: #080808; max-width: 30em; font-family: Arial, Helvetica, sans-serif; font-weight: 500; }
+  .hero-copy .tagline b { color: #080808; }
+  .hero .callout { border: 3px solid #080808; border-radius: 0; background: #fff; color: #080808; box-shadow: 7px 7px 0 #080808; }
+  .hero .callout p { color: #222; }
+  .hero .install { border: 3px solid #080808; border-radius: 0; background: #080808; color: #fff; }
+  .hero .install .prompt, .hero .install .copy { color: #f5ff4d; }
+  .hero .btn.ghost { border: 3px solid #080808; border-radius: 0; color: #080808; }
+  .hero .btn.ghost:hover { border-color: #080808; background: #fff; color: #080808; }
+  .hero .term { border: 3px solid #080808; border-radius: 0; box-shadow: 10px 10px 0 #080808; }
+  .hero .term-bar { border-bottom: 3px solid #080808; color: #222; background: #fff; }
+  .hero .term-body { background: #10131a; color: #e5e7eb; }
+  .hero .ascii-rule { color: #080808 !important; }
+
   @media (max-width: 640px) { header.hero { padding: 80px 0 24px; } }
 
   .hero-split {
@@ -335,13 +390,14 @@
 
   .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
   .card {
-    border: 1px solid var(--border);
-    border-radius: 10px;
+    border: 3px solid var(--border);
+    border-radius: 0;
     background: var(--bg-2);
     padding: 20px;
-    transition: border-color .2s, transform .2s;
+    box-shadow: 5px 5px 0 #080808;
+    transition: border-color .2s, transform .2s, box-shadow .2s;
   }
-  .card:hover { border-color: #2c3547; transform: translateY(-2px); }
+  .card:hover { border-color: #080808; transform: translate(-2px, -2px); box-shadow: 8px 8px 0 #080808; }
 
   .card .glyph { font-size: 18px; margin-bottom: 10px; }
   .card h4 { font-size: 15px; margin-bottom: 6px; }
@@ -356,10 +412,11 @@
     gap: 14px;
   }
   .stage {
-    border: 1px solid var(--border);
-    border-radius: 10px;
+    border: 3px solid var(--border);
+    border-radius: 0;
     padding: 18px;
     background: var(--bg-2);
+    box-shadow: 5px 5px 0 #080808;
   }
   .stage .n { color: var(--faint); font-size: 12px; }
   .stage h4 { margin: 4px 0 6px; }
@@ -371,8 +428,8 @@
   /* ── providers ─────────────────────────────────────────────── */
   .providers { display: flex; flex-wrap: wrap; gap: 10px; }
   .chip {
-    border: 1px solid var(--border);
-    border-radius: 999px;
+    border: 2px solid var(--border);
+    border-radius: 0;
     padding: 8px 16px;
     background: var(--bg-2);
     color: var(--muted);
@@ -382,7 +439,7 @@
   .chip .faint { color: var(--faint); }
 
   /* ── commands table ────────────────────────────────────────── */
-  .cmds { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--bg-2); }
+  .cmds { border: 3px solid var(--border); border-radius: 0; overflow: hidden; background: var(--bg-2); box-shadow: 7px 7px 0 #080808; }
   .cmds .row {
     display: grid;
     grid-template-columns: 190px 1fr;
@@ -402,9 +459,9 @@
 
   /* ── honest-limits note ────────────────────────────────────── */
   .note {
-    border: 1px solid var(--border);
-    border-left: 2px solid var(--warn);
-    border-radius: 10px;
+    border: 3px solid var(--border);
+    border-left: 10px solid #ff6b35;
+    border-radius: 0;
     background: var(--bg-2);
     padding: 20px 22px;
     color: var(--muted);
@@ -417,7 +474,7 @@
   .big-cta {
     margin: 90px 0 40px;
     text-align: center;
-    border: 1px solid var(--border);
+    border: 3px solid var(--border);
     border-radius: 14px;
     padding: 56px 24px;
     background:
@@ -457,7 +514,7 @@
 
 <nav aria-label="Primary navigation">
   <div class="wrap">
-    <span class="logo grad"><a href="#main" aria-label="marshall home">marshall</a></span>
+    <span class="logo"><a href="#main" aria-label="marshall home">marshall</a></span>
     <a class="sections" href="#team">the team</a>
     <a class="sections" href="#local">open weights</a>
     <a class="sections" href="#safety">safety</a>
@@ -477,8 +534,9 @@
     <div class="hero-split">
       <div class="hero-copy">
         <div id="hero-logo" aria-hidden="true"></div>
+        <p class="hero-headline">Turn ideas into working code.</p>
         <p class="tagline">
-          Put <b>DeepSeek</b>, <b>Qwen</b> and <b>Kimi</b> on the same job.
+          Weave <b>DeepSeek</b>, <b>Qwen</b> and <b>Kimi</b> into one coding team.
           Local with hosted, or all on your own box — each agent
           gets a name, a model, and a brief.
         </p>

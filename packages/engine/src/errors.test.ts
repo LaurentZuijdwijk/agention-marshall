@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { describeAgentError, isConnectionError, isContextLengthError, endpointFor, providerErrorDiagnostics } from './errors.js';
+import {
+  describeAgentError, isConnectionError, isContextLengthError, isModelNotFoundError, isDanglingToolCallError,
+  endpointFor, providerErrorDiagnostics,
+} from './errors.js';
 import type { AgentProfile } from './config.js';
 
 const LOCAL: AgentProfile = { provider: 'llamacpp', model: 'Qwen3.6-35B', host: 'http://192.168.1.248:8080' };
@@ -62,6 +65,28 @@ test('context-length failures are classified and actionable', () => {
   const detailedOut = describeAgentError('coder', LOCAL, detailed);
   assert.match(detailedOut, /context length exceeded/);
   assert.match(detailedOut, /context length exceeded.*Reduce the prompt\/history or lower max tokens/);
+});
+
+test('a rejected model is not mistaken for an overlong prompt', () => {
+  assert.equal(isModelNotFoundError("model 'openai/gpt-5.6-luna' not found"), true);
+  assert.equal(isModelNotFoundError('The model `gpt-9` does not exist or you do not have access to it'), true);
+  assert.equal(isModelNotFoundError('No endpoints found for openai/gpt-5.6-luna'), true);
+  assert.equal(isModelNotFoundError('Unknown model: nonsense'), true);
+  // A model name that happens to contain "not found" text belonging to
+  // something else must not trip this — only the "model" and "not found"
+  // wording combined does.
+  assert.equal(isModelNotFoundError('prompt is too long for the model context'), false);
+  assert.equal(isModelNotFoundError('rate limit exceeded'), false);
+});
+
+test('an unanswered tool call is not mistaken for an overlong prompt', () => {
+  assert.equal(isDanglingToolCallError(
+    'OpenAI API error: No tool output found for function call fc_callmvFwOe1RdZI3M8HIX7gM.',
+  ), true);
+  assert.equal(isDanglingToolCallError("tool_call_id 'call_abc123' not found in the conversation"), true);
+  assert.equal(isDanglingToolCallError('missing a tool result for call_0'), true);
+  assert.equal(isDanglingToolCallError('prompt is too long for the model context'), false);
+  assert.equal(isDanglingToolCallError('rate limit exceeded'), false);
 });
 
 test('provider response details are included when the wrapper message is generic', () => {

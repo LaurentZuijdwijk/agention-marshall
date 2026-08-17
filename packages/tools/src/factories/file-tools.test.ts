@@ -81,6 +81,24 @@ test('search supports fileGlob filtering', async () => {
   assert.doesNotMatch(result, /skip\.md/);
 });
 
+test('search accepts shell-style fileGlob patterns', async () => {
+  const root = tempRoot();
+  writeFileSync(join(root, 'keep.ts'), 'needle\n');
+  writeFileSync(join(root, 'skip.js'), 'needle\n');
+  const [, , search] = createReadOnlyFileTools(root);
+  const result = await search.execute('a', 'b', { pattern: 'needle', fileGlob: '*.ts' }, 'id');
+  assert.match(result, /keep\.ts:1: needle/);
+  assert.doesNotMatch(result, /skip\.js/);
+});
+
+test('plain-name searches ignore case and identifier separators', async () => {
+  const root = tempRoot();
+  writeFileSync(join(root, 'names.txt'), 'file-tools\nfile_tools\nfileTools\nFile Tools\n');
+  const [, , search] = createReadOnlyFileTools(root);
+  const result = await search.execute('a', 'b', { pattern: 'file-tools' }, 'id');
+  assert.equal(result.split('\n').length, 4);
+});
+
 test('search accepts a file path', async () => {
   const root = tempRoot();
   writeFileSync(join(root, 'target.txt'), 'needle\n');
@@ -95,6 +113,7 @@ test('search reports no matches', async () => {
   const [, , search] = createReadOnlyFileTools(root);
   const result = await search.execute('a', 'b', { pattern: 'zzz-not-present' }, 'id');
   assert.match(result, /No matches/);
+  assert.match(result, /1 files searched/);
 });
 
 test('search reports invalid regexes clearly', async () => {
