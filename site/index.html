@@ -639,9 +639,9 @@
         <p><code>light</code> for a small model that shouldn't spawn helpers. <code>default</code> for everyday work. <code>agentic</code> when you want named agents running in the background.</p>
       </div>
       <div class="card" style="grid-column:1/-1">
-        <a href="/bricks/"><img class="thumb" src="/bricks-preview.webp" alt="Bricks: Floating City — a LEGO-style world running in the browser" width="1000" height="450" loading="lazy"></a>
+        <a href="/bricks/" class="bricks-link"><img class="thumb" src="/bricks-preview.webp" alt="Bricks: Floating City — a LEGO-style world running in the browser" width="1000" height="450" loading="lazy"></a>
         <h4>Built entirely on a local 27B</h4>
-        <p>A LEGO-style floating city with a zombie-siege mode, every line written by Qwen 3.8 27B through Marshall — no cloud model involved. <a href="/bricks/">Play it</a>.</p>
+        <p>A LEGO-style floating city with a zombie-siege mode, every line written by Qwen 3.8 27B through Marshall — no cloud model involved. <a href="/bricks/" class="bricks-link">Play it</a>.</p>
       </div>
     </div>
   </div>
@@ -836,6 +836,15 @@ document.querySelectorAll('.install[data-copy]').forEach(btn => {
 document.querySelectorAll('a[href^="http"]').forEach(a => {
   a.addEventListener('click', () => {
     gtag('event', 'outbound_click', { link_url: a.href });
+  });
+});
+// ── bricks showcase clicks ───────────────────────────────────────────────
+// Internal link, so it's invisible to the outbound-click listener above —
+// tracked separately since "did the card convert to a play" is the number
+// that matters here.
+document.querySelectorAll('a.bricks-link').forEach(a => {
+  a.addEventListener('click', () => {
+    gtag('event', 'bricks_card_click', { link_text: a.textContent.trim() || 'thumbnail' });
   });
 });
 </script>

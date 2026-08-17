@@ -4,6 +4,16 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Bricks Floating City</title>
+
+    <!-- Google tag (gtag.js) -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-L248LRLBS9"></script>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){dataLayer.push(arguments);}
+      gtag('js', new Date());
+      gtag('config', 'G-L248LRLBS9', { site_name: 'marshall', page_title: 'bricks' });
+    </script>
+
     <style>
       html,
       body {
@@ -576,6 +586,18 @@
       Harness: <strong>Marshall</strong> &middot;
       <a href="https://marshall.agention.ai" target="_blank" rel="noopener">marshall.agention.ai</a>
     </div>
+
+    <script>
+      // ── mode-select click tracking ──────────────────────────────────────
+      // Separate listeners alongside the game's own — this only reports which
+      // mode was picked, it doesn't touch banner/game state.
+      document.getElementById('explore-btn')?.addEventListener('click', () => {
+        gtag('event', 'bricks_mode_select', { mode: 'explore' });
+      });
+      document.getElementById('siege-btn')?.addEventListener('click', () => {
+        gtag('event', 'bricks_mode_select', { mode: 'siege' });
+      });
+    </script>
 
   </body>
 </html>
