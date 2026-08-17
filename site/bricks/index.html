@@ -1,0 +1,581 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Bricks Floating City</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+      }
+      #app {
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+
+      /* ---------- brick-style start banner ---------- */
+      #banner {
+        position: fixed;
+        inset: 0;
+        z-index: 10;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 34px;
+        background: radial-gradient(
+          ellipse at 50% 40%,
+          rgba(30, 60, 120, 0.35),
+          rgba(10, 15, 35, 0.72)
+        );
+        backdrop-filter: blur(2px);
+        transition: opacity 0.7s ease, visibility 0.7s;
+      }
+      #banner.hidden {
+        opacity: 0;
+        visibility: hidden;
+        pointer-events: none;
+      }
+
+      .plate {
+        position: relative;
+        background: linear-gradient(180deg, #e41e20 0%, #c01012 55%, #9c0b0d 100%);
+        border-radius: 26px;
+        box-shadow:
+          inset 0 4px 0 rgba(255, 255, 255, 0.22),
+          inset 0 -6px 0 rgba(0, 0, 0, 0.28),
+          0 18px 50px rgba(0, 0, 0, 0.55);
+        padding: 48px 56px 40px;
+        text-align: center;
+      }
+      .plate .studs {
+        position: absolute;
+        top: -16px;
+        left: 0;
+        right: 0;
+        display: flex;
+        justify-content: center;
+        gap: 26px;
+      }
+      .studs .stud {
+        width: 30px;
+        height: 30px;
+        border-radius: 50%;
+        background: radial-gradient(
+          circle at 35% 30%,
+          #ffe08a 0%,
+          #f7c81e 45%,
+          #d9a400 100%
+        );
+        box-shadow:
+          inset 0 -3px 4px rgba(0, 0, 0, 0.25),
+          0 3px 5px rgba(0, 0, 0, 0.35);
+      }
+      .plate h1 {
+        margin: 0;
+        font-family: 'Arial Black', Arial, sans-serif;
+        font-size: clamp(26px, 4.6vw, 48px);
+        letter-spacing: 2px;
+        line-height: 1.05;
+        color: #ffe01b;
+        text-shadow:
+          0 3px 0 rgba(0, 0, 0, 0.35),
+          0 0 22px rgba(255, 224, 27, 0.35);
+      }
+      .plate h1 .brick-word {
+        display: inline-block;
+        color: #fff;
+        background: #c01012;
+        border: 3px solid #ffe01b;
+        border-radius: 12px;
+        padding: 2px 14px 4px;
+        margin-bottom: 10px;
+        font-size: 0.72em;
+        letter-spacing: 4px;
+      }
+      .plate p {
+        margin: 14px 0 0;
+        color: #ffd9da;
+        font-family: Arial, sans-serif;
+        font-size: clamp(13px, 1.6vw, 16px);
+        letter-spacing: 1px;
+      }
+
+      .start-brick {
+        cursor: pointer;
+        border: none;
+        position: relative;
+        background: linear-gradient(180deg, #ffe14d 0%, #f7c81e 55%, #d9a400 100%);
+        border-radius: 14px;
+        box-shadow:
+          inset 0 3px 0 rgba(255, 255, 255, 0.45),
+          inset 0 -5px 0 rgba(0, 0, 0, 0.22),
+          0 10px 26px rgba(0, 0, 0, 0.45);
+        padding: 22px 46px 18px;
+        font-family: 'Arial Black', Arial, sans-serif;
+        font-size: clamp(16px, 2.4vw, 22px);
+        letter-spacing: 3px;
+        color: #7a5200;
+        text-shadow: 0 1px 0 rgba(255, 255, 255, 0.35);
+        transition: transform 0.12s ease;
+      }
+      .start-brick::before {
+        content: '';
+        position: absolute;
+        top: -12px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        background: radial-gradient(circle at 35% 30%, #fff0ae 0%, #f7c81e 55%, #c79400 100%);
+        box-shadow: inset 0 -3px 4px rgba(0, 0, 0, 0.25), 0 2px 4px rgba(0, 0, 0, 0.3);
+      }
+      .start-brick:hover {
+        transform: translateY(-2px) scale(1.03);
+      }
+      .start-brick:active {
+        transform: translateY(1px) scale(0.99);
+      }
+      .btn-row {
+        display: flex;
+        gap: 30px;
+        flex-wrap: wrap;
+        justify-content: center;
+      }
+      /* Zombie-themed variant of the start brick */
+      .start-brick.zombie {
+        background: linear-gradient(180deg, #9be25a 0%, #55a02a 55%, #3c7d1b 100%);
+        color: #12330a;
+        text-shadow: 0 1px 0 rgba(255, 255, 255, 0.3);
+      }
+      .start-brick.zombie::before {
+        background: radial-gradient(circle at 35% 30%, #d8ffb0 0%, #7ac143 55%, #4c8a24 100%);
+      }
+
+      /* ---------- Game HUD ---------- */
+      #game-hud {
+        top: 16px;
+        left: 16px;
+        pointer-events: none;
+        min-width: 190px;
+      }
+      #game-hud .row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin: 2px 0;
+        font-size: 13px;
+        letter-spacing: 1px;
+      }
+      #game-hud .label {
+        font-family: 'Arial Black', Arial, sans-serif;
+        font-size: 11px;
+        letter-spacing: 1.5px;
+        color: #ffe01b;
+        width: 52px;
+      }
+      #hp-track {
+        flex: 1;
+        height: 12px;
+        background: rgba(0, 0, 0, 0.45);
+        border-radius: 6px;
+        overflow: hidden;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+      }
+      #hp-fill {
+        height: 100%;
+        width: 100%;
+        background: #7ac143;
+        border-radius: 6px;
+        transition: width 0.15s ease;
+      }
+      #game-ammo {
+        font-family: 'Arial Black', Arial, sans-serif;
+        font-size: 15px;
+        color: #ffe01b;
+        min-width: 56px;
+      }
+      #game-wave {
+        position: fixed;
+        top: 16px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 5;
+        font-family: 'Arial Black', Arial, sans-serif;
+        font-size: 15px;
+        letter-spacing: 3px;
+        color: #fff;
+        background: rgba(12, 18, 38, 0.55);
+        backdrop-filter: blur(6px);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 12px;
+        padding: 9px 20px;
+        pointer-events: none;
+      }
+      #level-display .level-num {
+        font-size: 17px;
+        line-height: 1;
+      }
+      #level-display .level-sub {
+        font-family: 'Arial Black', Arial, sans-serif;
+        font-size: 10px;
+        letter-spacing: 1.5px;
+        color: #fff;
+      }
+      .sound-btn {
+        position: fixed;
+        bottom: 84px;
+        left: 16px;
+        z-index: 20;
+        cursor: pointer;
+        font-family: 'Arial Black', Arial, sans-serif;
+        font-size: 11px;
+        letter-spacing: 1.5px;
+        color: #cdd8ff;
+        background: rgba(12, 18, 38, 0.55);
+        backdrop-filter: blur(6px);
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        border-radius: 10px;
+        padding: 9px 14px;
+        transition: all 0.15s ease;
+      }
+      .sound-btn:hover {
+        border-color: #ffe01b;
+        color: #fff;
+      }
+
+      #crosshair {
+        position: fixed;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        z-index: 6;
+        width: 26px;
+        height: 26px;
+        pointer-events: none;
+      }
+      #crosshair::before,
+      #crosshair::after {
+        content: '';
+        position: absolute;
+        background: rgba(255, 255, 255, 0.9);
+        box-shadow: 0 0 4px rgba(0, 0, 0, 0.8);
+      }
+      #crosshair::before {
+        left: 50%;
+        top: 0;
+        width: 2px;
+        height: 100%;
+        transform: translateX(-50%);
+      }
+      #crosshair::after {
+        top: 50%;
+        left: 0;
+        height: 2px;
+        width: 100%;
+        transform: translateY(-50%);
+      }
+
+      #damage-flash {
+        position: fixed;
+        inset: 0;
+        z-index: 4;
+        pointer-events: none;
+        opacity: 0;
+        background: radial-gradient(ellipse at center, transparent 55%, rgba(208, 16, 18, 0.55) 100%);
+        transition: opacity 0.2s ease;
+      }
+      #damage-flash.on {
+        opacity: 1;
+        transition: opacity 0.03s ease;
+      }
+
+      /* ---------- Pause / game-over overlays ---------- */
+      .overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 26px;
+        background: rgba(8, 12, 28, 0.72);
+        backdrop-filter: blur(3px);
+        text-align: center;
+      }
+      .overlay[hidden] {
+        display: none;
+      }
+      .overlay h2 {
+        margin: 0;
+        font-family: 'Arial Black', Arial, sans-serif;
+        font-size: clamp(26px, 4.5vw, 44px);
+        letter-spacing: 4px;
+        color: #ffe01b;
+        text-shadow: 0 3px 0 rgba(0, 0, 0, 0.4), 0 0 22px rgba(255, 224, 27, 0.3);
+      }
+      .overlay p {
+        margin: 0;
+        color: #cdd8ff;
+        font-family: Arial, sans-serif;
+        font-size: 14px;
+        letter-spacing: 1px;
+        line-height: 1.8;
+        max-width: 420px;
+      }
+      .overlay .final-stats {
+        display: flex;
+        gap: 18px;
+        flex-wrap: wrap;
+        justify-content: center;
+      }
+      .overlay .stat {
+        background: rgba(12, 18, 38, 0.6);
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        border-radius: 12px;
+        padding: 12px 22px;
+      }
+      .overlay .stat b {
+        display: block;
+        font-family: 'Arial Black', Arial, sans-serif;
+        font-size: 22px;
+        color: #ffe01b;
+        letter-spacing: 1px;
+      }
+      .overlay .stat span {
+        font-size: 11px;
+        letter-spacing: 2px;
+        color: #cdd8ff;
+      }
+      .overlay .btn-row .start-brick {
+        padding: 16px 34px 14px;
+        font-size: 15px;
+      }
+
+      .aim-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        justify-content: center;
+      }
+      .aim-row .aim-label {
+        font-family: 'Arial Black', Arial, sans-serif;
+        font-size: 12px;
+        letter-spacing: 2px;
+        color: #cdd8ff;
+      }
+      .mode-btn {
+        cursor: pointer;
+        border: 2px solid rgba(255, 255, 255, 0.25);
+        background: rgba(12, 18, 38, 0.6);
+        color: #cdd8ff;
+        font-family: 'Arial Black', Arial, sans-serif;
+        font-size: 12px;
+        letter-spacing: 1.5px;
+        border-radius: 10px;
+        padding: 10px 16px;
+        transition: all 0.15s ease;
+      }
+      .mode-btn:hover {
+        border-color: #ffe01b;
+        color: #fff;
+      }
+      .mode-btn.active {
+        background: linear-gradient(180deg, #ffe14d, #d9a400);
+        border-color: #ffe01b;
+        color: #7a5200;
+      }
+
+      /* ---------- HUD ---------- */
+      .hud {
+        position: fixed;
+        z-index: 5;
+        font-family: Arial, sans-serif;
+        color: #fff;
+        background: rgba(12, 18, 38, 0.55);
+        backdrop-filter: blur(6px);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 12px;
+        padding: 10px 16px;
+        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+        pointer-events: none;
+      }
+      .hud strong {
+        color: #ffe01b;
+        font-family: 'Arial Black', Arial, sans-serif;
+        letter-spacing: 1px;
+      }
+      #hud-controls {
+        left: 16px;
+        bottom: 16px;
+        font-size: 12px;
+        letter-spacing: 0.5px;
+        line-height: 1.7;
+      }
+      #hud-credits {
+        right: 16px;
+        bottom: 16px;
+        font-size: 12px;
+        letter-spacing: 0.5px;
+        line-height: 1.7;
+        text-align: right;
+      }
+      #hud-credits a {
+        color: #7ec8ff;
+        text-decoration: none;
+        pointer-events: auto;
+      }
+      #hud-credits a:hover {
+        text-decoration: underline;
+      }
+
+      #hud-time {
+        top: 16px;
+        right: 16px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        pointer-events: auto;
+      }
+      #hud-time label {
+        font-size: 11px;
+        letter-spacing: 1.5px;
+        color: #ffe01b;
+        font-family: 'Arial Black', Arial, sans-serif;
+      }
+      #time-slider {
+        width: 160px;
+        accent-color: #f7c81e;
+        cursor: pointer;
+      }
+      #time-label {
+        font-size: 12px;
+        min-width: 42px;
+        text-align: center;
+        font-variant-numeric: tabular-nums;
+      }
+      #hud-time .auto {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        font-size: 11px;
+        letter-spacing: 0.5px;
+        cursor: pointer;
+        color: #cdd8ff;
+        pointer-events: auto;
+        font-family: Arial, sans-serif;
+        color: #fff;
+      }
+      #hud-time .auto input {
+        accent-color: #f7c81e;
+        cursor: pointer;
+      }
+
+      @media (max-width: 560px) {
+        #hud-controls {
+          display: none;
+        }
+        #time-slider {
+          width: 110px;
+        }
+      }
+    </style>
+    <script type="module" crossorigin src="./assets/index-OgiLMwQy.js"></script>
+  </head>
+  <body>
+    <canvas id="app"></canvas>
+
+    <!-- Start banner (brick plate style) -->
+    <div id="banner">
+      <div class="plate">
+        <div class="studs">
+          <span class="stud"></span><span class="stud"></span><span class="stud"></span>
+          <span class="stud"></span><span class="stud"></span><span class="stud"></span>
+          <span class="stud"></span><span class="stud"></span>
+        </div>
+        <h1>
+          <span class="brick-word">BRICKS</span><br />
+          FLOATING CITY
+        </h1>
+        <p>A little brick island adrift in the clouds &mdash; and something is stirring in the houses</p>
+      </div>
+      <div class="btn-row">
+        <button class="start-brick" id="explore-btn">EXPLORE</button>
+        <button class="start-brick zombie" id="siege-btn">ZOMBIE SIEGE</button>
+      </div>
+    </div>
+
+    <!-- Game HUD -->
+    <div class="hud" id="game-hud" hidden>
+      <div class="row" id="level-display"><span class="label">LEVEL</span><strong id="level-num">1</strong><span class="level-sub" id="level-sub">INCOMING…</span></div>
+      <div class="row"><span class="label">SCORE</span><strong id="game-score">0</strong></div>
+      <div class="row"><span class="label">HEALTH</span><div id="hp-track"><div id="hp-fill"></div></div></div>
+      <div class="row"><span class="label">AMMO</span><span id="game-ammo">15</span></div>
+      <div class="row"><span class="label">AIM</span><strong id="game-aim">POINTER LOCK</strong></div>
+    </div>
+    <div id="game-wave" hidden>LEVEL 1 INCOMING…</div>
+    <div id="crosshair" hidden></div>
+    <div id="damage-flash"></div>
+
+    <!-- Pause / deploy overlay -->
+    <div class="overlay" id="pause-overlay" hidden>
+      <h2 id="pause-title">ZOMBIE SIEGE</h2>
+      <p id="pause-text"></p>
+      <div class="aim-row">
+        <span class="aim-label">AIM MODE</span>
+        <button class="mode-btn" id="aim-locked">POINTER LOCK</button>
+        <button class="mode-btn" id="aim-free">FREE LOOK</button>
+        <button class="mode-btn" id="aim-keys">KEYS ONLY</button>
+      </div>
+      <div class="btn-row">
+        <button class="start-brick" id="btn-resume">DEPLOY</button>
+        <button class="start-brick" id="btn-quit">MENU</button>
+      </div>
+    </div>
+
+    <!-- Game-over overlay -->
+    <div class="overlay" id="gameover-overlay" hidden>
+      <h2 style="color:#ff6a5e">YOU GOT ZOMBIED</h2>
+      <div class="final-stats">
+        <div class="stat"><b id="final-score">0</b><span>SCORE</span></div>
+        <div class="stat"><b id="final-kills">0</b><span>ZOMBIES</span></div>
+        <div class="stat"><b id="final-wave">0</b><span>LEVEL</span></div>
+      </div>
+      <div class="btn-row">
+        <button class="start-brick" id="btn-restart">RESTART</button>
+        <button class="start-brick" id="btn-menu">MENU</button>
+      </div>
+    </div>
+
+    <!-- Sound toggle -->
+    <button class="sound-btn" id="sound-btn">SOUND: ON</button>
+
+    <!-- HUD -->
+    <div class="hud" id="hud-time">
+      <label for="time-slider">TIME</label>
+      <input type="range" id="time-slider" min="0" max="23.75" step="0.25" value="17.4" />
+      <span id="time-label">17:24</span>
+      <label class="auto" for="time-auto">cycle</label>
+      <input type="checkbox" id="time-auto" title="Let the day keep turning" />
+    </div>
+    <div class="hud" id="hud-controls">
+      <strong>CONTROLS</strong><br />
+      drag &mdash; orbit &middot; scroll &mdash; zoom &middot; slider &mdash; time of day
+    </div>
+    <div class="hud" id="hud-credits">
+      Built with <strong>Qwen 3.8 27b</strong><br />
+      Harness: <strong>Marshall</strong> &middot;
+      <a href="https://marshall.agention.ai" target="_blank" rel="noopener">marshall.agention.ai</a>
+    </div>
+
+  </body>
+</html>

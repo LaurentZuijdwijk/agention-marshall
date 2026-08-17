@@ -400,6 +400,7 @@
   .card:hover { border-color: #080808; transform: translate(-2px, -2px); box-shadow: 8px 8px 0 #080808; }
 
   .card .glyph { font-size: 18px; margin-bottom: 10px; }
+  .card .thumb { display: block; width: calc(100% + 40px); height: auto; margin: -20px -20px 12px; border-bottom: 3px solid var(--border); }
   .card h4 { font-size: 15px; margin-bottom: 6px; }
   .card p { color: var(--muted); font-size: 13.5px; }
   .card a { color: var(--accent); text-decoration: none; }
@@ -636,6 +637,11 @@
         <div class="glyph" style="color:var(--tool)" aria-hidden="true">⊞</div>
         <h4>Match the belt to the model</h4>
         <p><code>light</code> for a small model that shouldn't spawn helpers. <code>default</code> for everyday work. <code>agentic</code> when you want named agents running in the background.</p>
+      </div>
+      <div class="card" style="grid-column:1/-1">
+        <a href="/bricks/"><img class="thumb" src="/bricks-preview.webp" alt="Bricks: Floating City — a LEGO-style world running in the browser" width="1000" height="450" loading="lazy"></a>
+        <h4>Built entirely on a local 27B</h4>
+        <p>A LEGO-style floating city with a zombie-siege mode, every line written by Qwen 3.8 27B through Marshall — no cloud model involved. <a href="/bricks/">Play it</a>.</p>
       </div>
     </div>
   </div>
