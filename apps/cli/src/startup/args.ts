@@ -97,7 +97,7 @@ Options:
       --api-key <key>     API key (defaults to provider's env var)
       --host <url>        Server base URL for ollama/llamacpp (defaults: :11434 / :8080), or an
                            OpenRouter-compatible gateway override (default: openrouter.ai)
-      --max-tokens <n>    Max output tokens per response (default: 8192; llamacpp default: 32768)
+      --max-tokens <n>    Max output tokens per response (default: uncapped; claude requires one, 8192)
 
   Model tiers — the deep model writes code, plans and reviews; the fast model
   reads files, searches and summarises on its behalf.

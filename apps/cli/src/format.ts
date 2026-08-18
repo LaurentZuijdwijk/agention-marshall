@@ -80,13 +80,26 @@ export function clampToRows(text: string, columns: number, maxRows: number): str
   if (maxRows <= 0 || columns <= 0) return '';
 
   const width = Math.max(1, columns);
+
+  // Only the last maxRows rows can ever be shown, so bound how much of `text`
+  // gets wrapped before that. Called on every appended chunk during a live
+  // stream — reprocessing the full accumulated length each time is O(n²) over
+  // the life of a turn, and on a long uncapped run allocates enough
+  // throwaway `rows` arrays per second to pressure the GC hard. The +width
+  // slack covers the case where the cut lands mid-row so the true last row
+  // still comes out whole. A few characters of misalignment at the very top
+  // of a truncated live buffer is invisible — it's ephemeral and scrolling;
+  // the untruncated text still lands in <Static> once the turn completes.
+  const tailBudget = (maxRows + 1) * width;
+  const tail = text.length > tailBudget ? text.slice(-tailBudget) : text;
+
   const rows: string[] = [];
-  for (const line of text.split('\n')) {
+  for (const line of tail.split('\n')) {
     if (line === '') { rows.push(''); continue; }
     for (let i = 0; i < line.length; i += width) rows.push(line.slice(i, i + width));
   }
 
-  return rows.length <= maxRows ? text : rows.slice(rows.length - maxRows).join('\n');
+  return rows.length <= maxRows ? tail : rows.slice(rows.length - maxRows).join('\n');
 }
 
 /**

@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { transcriptReducer, emptyTranscript, MAX_REASONING_PER_STEP, MAX_REASONING_TOTAL } from './useTranscript.js';
+import { transcriptReducer, emptyTranscript, MAX_REASONING_PER_STEP, MAX_REASONING_TOTAL, MAX_LIVE_TAIL } from './useTranscript.js';
 import type { TranscriptState, TranscriptAction } from './useTranscript.js';
 import type { Message } from '../view/message.js';
 
@@ -82,6 +82,45 @@ describe('live buffers', () => {
       { type: 'append-reasoning', text: 'thinking…' },
     ]);
     assert.deepEqual(state.messages, [], 'nothing streams into the committed transcript');
+  });
+});
+
+describe('live buffer memory bound', () => {
+  it('caps the live stream/reasoning buffers rather than growing them without limit', () => {
+    // A run that goes long enough (an uncapped local model reasoning for an
+    // hour) must not let state.stream/state.reasoning grow without bound —
+    // that's the string V8 has to fully re-flatten on every single render
+    // while it's live (see MAX_LIVE_TAIL's comment), which is what actually
+    // exhausted the heap, not the "real" size of the text.
+    const chunk = 'x'.repeat(1000);
+    let state = emptyTranscript;
+    for (let i = 0; i < 100; i++) {
+      state = transcriptReducer(state, { type: 'append-stream', text: chunk });
+      state = transcriptReducer(state, { type: 'append-reasoning', text: chunk });
+    }
+    assert.ok(state.stream.length <= MAX_LIVE_TAIL, `stream grew to ${state.stream.length}`);
+    assert.ok(state.reasoning.length <= MAX_LIVE_TAIL, `reasoning grew to ${state.reasoning.length}`);
+    // And it's a tail, not a truncated-from-the-front buffer losing the
+    // newest tokens — the most recent chunk must still be at the end.
+    assert.ok(state.stream.endsWith(chunk));
+    assert.ok(state.reasoning.endsWith(chunk));
+  });
+
+  it('stays cheap over many appends instead of reprocessing the whole buffer each time', () => {
+    // Regression guard for the actual bug: an unbounded live buffer means
+    // every appended chunk pays a flatten cost proportional to everything
+    // generated so far, which is O(n²) over the life of a long turn. Bounded
+    // append-then-trim keeps each step cheap regardless of how long the turn
+    // runs — this simulates a stream long enough that the old behaviour
+    // would take double-digit seconds; bounded, it should be near-instant.
+    const chunk = 'the quick brown fox jumps over the lazy dog. '.repeat(20); // ~940 chars
+    let state = emptyTranscript;
+    const start = Date.now();
+    for (let i = 0; i < 5000; i++) {
+      state = transcriptReducer(state, { type: 'append-reasoning', text: chunk });
+    }
+    const elapsed = Date.now() - start;
+    assert.ok(elapsed < 2000, `expected well under 2s for 5000 chunks, took ${elapsed}ms`);
   });
 });
 

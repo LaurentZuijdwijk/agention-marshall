@@ -118,6 +118,22 @@ describe('clampToRows', () => {
     assert.equal(clampToRows('anything', 0, 10), '');
     assert.equal(clampToRows('anything', 80, 0), '');
   });
+
+  it('stays cheap given an already-bounded input, repeated many times', () => {
+    // clampToRows can't by itself stay cheap against an unboundedly growing
+    // source string — V8 flattens the *whole* thing on the first read
+    // regardless of how little gets sliced out afterward (see
+    // useTranscript.ts's MAX_LIVE_TAIL, which is the actual fix: it keeps
+    // what reaches this function bounded before every call). This only
+    // guards that clampToRows itself adds no further quadratic cost once
+    // that's true — repeatedly calling it on a fixed-size input should be
+    // linear in the call count, not in how many times it's been called.
+    const bounded = 'the quick brown fox jumps over the lazy dog. '.repeat(400); // ~18.8k chars
+    const start = Date.now();
+    for (let i = 0; i < 5000; i++) clampToRows(bounded, 80, 20);
+    const elapsed = Date.now() - start;
+    assert.ok(elapsed < 2000, `expected well under 2s for 5000 calls on a fixed ~19k input, took ${elapsed}ms`);
+  });
 });
 
 describe('theme colours', () => {

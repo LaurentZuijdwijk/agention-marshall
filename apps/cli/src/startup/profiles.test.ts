@@ -192,7 +192,7 @@ describe('resolveProfiles — roles and limits', () => {
 
   it('sets an output budget only when the user asked for one', () => {
     // The session carries one number, so a default picked here would apply to
-    // every tier — a local deep tier's 32768 handed to a hosted fast tier.
+    // every tier — a cap meant for one provider handed to every other one.
     // Absent, the engine resolves the cap per profile instead.
     assert.strictEqual(resolveProfiles(flags({ provider: 'llamacpp' }), {}).maxTokens, undefined);
     assert.strictEqual(resolveProfiles(flags({ provider: 'claude' }), {}).maxTokens, undefined);

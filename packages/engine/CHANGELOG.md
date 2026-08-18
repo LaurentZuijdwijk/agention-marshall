@@ -1,5 +1,19 @@
 # @agentionai/marshall-engine
 
+## 0.19.0
+
+### Minor Changes
+
+- Remove the fixed 32768-token output cap that llama.cpp and Ollama profiles
+  got by default. It existed to stop an uncapped local server from generating
+  until its context window ran out, but a reasoning model can legitimately
+  need more than that just to finish thinking — a long-running turn now dies
+  with "Response exceeded maximum token limit" instead of ever reaching an
+  answer. Local providers are now uncapped by default like every hosted one
+  except claude, matching `--max-tokens`'s existing per-session override.
+  `Session.skipReasoning()` (Ctrl-E) is the actual answer for a run that's
+  taking too long, not a blanket ceiling.
+
 ## 0.18.0
 
 ### Minor Changes

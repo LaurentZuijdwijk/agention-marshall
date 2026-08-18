@@ -404,15 +404,18 @@ const REQUIRED_MAX_TOKENS: Partial<Record<Provider, number>> = {
 };
 
 /**
- * Cap applied when the user hasn't asked for one. Hosted providers are absent
- * on purpose: omitting the field lets the model use its own maximum, which is
- * what a long answer needs. Local servers get a ceiling anyway — without one
- * they will happily generate until the context window is exhausted.
+ * Cap applied when the user hasn't asked for one. Absent on purpose for every
+ * provider but Anthropic: omitting the field lets the model use its own
+ * maximum, which is what a long answer — or a long reasoning run — needs.
+ *
+ * Local servers used to get a fixed 32768 ceiling here, to stop an uncapped
+ * one from generating until the context window ran out. Removed: a reasoning
+ * model can legitimately need more than that to finish thinking, and
+ * `Session.skipReasoning()` (Ctrl-E) is the actual fix for a run that's
+ * taking too long — a blanket cap just moves where it dies.
  */
 const DEFAULT_MAX_TOKENS_BY_PROVIDER: Partial<Record<Provider, number>> = {
   ...REQUIRED_MAX_TOKENS,
-  llamacpp: 32768,
-  ollama:   32768,
 };
 
 /**

@@ -1,5 +1,32 @@
 # @agentionai/marshall-cli
 
+## 0.21.1
+
+### Patch Changes
+
+- Fix an out-of-memory crash on long-running turns (an uncapped local model
+  reasoning for an hour was enough to trigger it). The live stream/reasoning
+  buffers were unbounded strings re-read on every single streamed token to
+  redraw the terminal — V8 has to fully re-flatten a repeatedly-appended
+  string on its first read, so cost grew with everything generated so far,
+  not with what was actually displayed. Profiled: 2000 chunks against the old
+  unbounded buffer took 4.6s and showed heavy allocator churn
+  (`mmap`/`munmap`) from repeatedly flattening a growing string; the same
+  work against a buffer bounded before each append took 61ms. The full,
+  untruncated text still reaches history — only the live display copy is
+  capped.
+- Remove the fixed 32768-token output cap that llama.cpp and Ollama profiles
+  got by default. It existed to stop an uncapped local server from generating
+  until its context window ran out, but a reasoning model can legitimately
+  need more than that just to finish thinking — a long-running turn now dies
+  with "Response exceeded maximum token limit" instead of ever reaching an
+  answer. Local providers are now uncapped by default like every hosted one
+  except claude, matching `--max-tokens`'s existing per-session override.
+  `Session.skipReasoning()` (Ctrl-E) is the actual answer for a run that's
+  taking too long, not a blanket ceiling.
+- Updated dependencies
+  - @agentionai/marshall-engine@0.19.0
+
 ## 0.21.0
 
 ### Minor Changes

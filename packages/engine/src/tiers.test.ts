@@ -286,25 +286,27 @@ test('hosted providers send no cap, so the model uses its own ceiling', () => {
   assert.equal(resolveMaxTokens({ provider: 'openai' }), undefined);
 });
 
-test('local servers keep a ceiling — uncapped they generate until context runs out', () => {
-  assert.equal(resolveMaxTokens(LOCAL), 32768);
-  assert.equal(resolveMaxTokens({ provider: 'ollama' }), 32768);
+test('local servers get no default ceiling either — Ctrl-E is the fix for a run that overstays', () => {
+  // Used to be a fixed 32768, to stop an uncapped server from generating until
+  // its context ran out. A reasoning model can legitimately need more than
+  // that just to finish thinking, so the cap is gone; Session.skipReasoning()
+  // is what actually addresses a run that's taking too long.
+  assert.equal(resolveMaxTokens(LOCAL), undefined);
+  assert.equal(resolveMaxTokens({ provider: 'ollama' }), undefined);
 });
 
-test('the cap is per profile, so a hosted deep and local fast differ', () => {
-  const config = base({ agent: KIMI, models: { deep: KIMI, fast: LOCAL } });
-  assert.equal(resolveMaxTokens(resolveRoleProfile(config, 'coder')), undefined);
-  assert.equal(resolveMaxTokens(resolveRoleProfile(config, 'context')), 32768);
+test('the cap is per profile, so claude and a local fast tier differ', () => {
+  const config = base({ agent: { provider: 'claude' }, models: { deep: { provider: 'claude' }, fast: LOCAL } });
+  assert.equal(resolveMaxTokens(resolveRoleProfile(config, 'coder')), DEFAULT_MAX_TOKENS);
+  assert.equal(resolveMaxTokens(resolveRoleProfile(config, 'context')), undefined);
 });
 
-test('a session-wide cap flattens that difference — which is why nobody sets one by default', () => {
+test('a session-wide cap applies uniformly regardless of profile', () => {
   // EngineConfig.maxTokens is one number for every tier, so passing it turns
-  // off the per-profile resolution above. The CLI used to fill it in from the
-  // deep provider's default, which handed a local tier's 32768 to a hosted one.
+  // off the per-profile resolution above.
   const config = base({ agent: KIMI, models: { deep: KIMI, fast: LOCAL } });
   const sessionWide = 32768;
-  assert.equal(resolveMaxTokens(resolveRoleProfile(config, 'coder'), sessionWide), 32768,
-    'the hosted tier no longer omits the field');
+  assert.equal(resolveMaxTokens(resolveRoleProfile(config, 'coder'), sessionWide), 32768);
   assert.equal(resolveMaxTokens(resolveRoleProfile(config, 'context'), sessionWide), 32768);
 });
 

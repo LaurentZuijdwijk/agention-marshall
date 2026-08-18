@@ -46,6 +46,34 @@ export const emptyTranscript: TranscriptState = {
 export const MAX_REASONING_PER_STEP = 4000; // chars kept per committed reasoning row (the tail)
 export const MAX_REASONING_TOTAL = 60_000; // total retained reasoning chars before pruning
 
+/**
+ * Cap on the *live* stream/reasoning buffers — the ones redrawn on every
+ * token while a turn is in flight, before either is committed.
+ *
+ * V8 builds a repeatedly-`+=`'d string as a lazy rope; cheap to extend, but
+ * the first read (`.slice()`, `.split()`, anything `clampToRows` does for the
+ * live display) forces the *whole* thing to flatten, which costs O(current
+ * length). Reading on every single appended chunk — which is exactly what
+ * the live view does — turns that into O(n²) over the life of a turn, and on
+ * an hour-long reasoning run the transient flattened copies are what
+ * actually exhausts the heap, not the "real" size of the text. Bounding the
+ * live value *before* the next append keeps every read cheap and constant,
+ * the same way it already worked for `takeStream`/`clearStream`.
+ *
+ * Far more generous than any real terminal needs (`splitLiveRows` never asks
+ * for more than a few thousand characters) — this is a safety ceiling, not a
+ * display budget. The full, untruncated text still reaches history: this
+ * only bounds the reducer's copy, kept solely for rendering. `streamRef`/
+ * `reasoningRef` below hold the complete text `takeStream`/`takeReasoning`
+ * commit from, untouched by this cap.
+ */
+export const MAX_LIVE_TAIL = 20_000;
+
+function appendBounded(current: string, text: string): string {
+  const next = current + text;
+  return next.length > MAX_LIVE_TAIL ? next.slice(-MAX_LIVE_TAIL) : next;
+}
+
 function boundReasoningRows(messages: Message[]): Message[] {
   let total = 0;
   let needsWork = false;
@@ -104,11 +132,11 @@ export function transcriptReducer(state: TranscriptState, action: TranscriptActi
         epoch: state.epoch + 1,
       };
     case 'append-stream':
-      return { ...state, stream: state.stream + action.text };
+      return { ...state, stream: appendBounded(state.stream, action.text) };
     case 'clear-stream':
       return state.stream === '' ? state : { ...state, stream: '' };
     case 'append-reasoning':
-      return { ...state, reasoning: state.reasoning + action.text };
+      return { ...state, reasoning: appendBounded(state.reasoning, action.text) };
     case 'clear-reasoning':
       return state.reasoning === '' ? state : { ...state, reasoning: '' };
     case 'replay':
