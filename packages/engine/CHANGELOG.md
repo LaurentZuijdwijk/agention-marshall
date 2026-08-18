@@ -1,5 +1,16 @@
 # @agentionai/marshall-engine
 
+## 0.20.0
+
+### Minor Changes
+
+- 645123a: Add `list_conflicts` and `resolve_conflicts` tools for resolving git merge, rebase, and cherry-pick conflicts. `list_conflicts` reports each unresolved hunk with a short content-hashed id, its line range, ours/theirs labels and commit ids, and a few lines of surrounding context — without needing the whole file in context. `resolve_conflicts` takes those ids back with `ours`, `theirs`, or `both` to keep for each — one or many in a single call — and applies them directly, gated behind the normal approval flow.
+
+### Patch Changes
+
+- Updated dependencies [645123a]
+  - @agentionai/marshall-tools@0.7.0
+
 ## 0.19.0
 
 ### Minor Changes
