@@ -1,5 +1,11 @@
 # @agentionai/marshall-cli
 
+## 0.21.2
+
+### Patch Changes
+
+- Pick up `@agentionai/marshall-tools@0.7.0` and `@agentionai/marshall-engine@0.20.0`, which add `list_conflicts`/`resolve_conflicts` tools for resolving git merge conflicts.
+
 ## 0.21.1
 
 ### Patch Changes
