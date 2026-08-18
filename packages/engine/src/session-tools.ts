@@ -7,6 +7,7 @@ import {
   createShellTool,
   createScratchTools,
   createGitHubTools,
+  createConflictTools,
   createJobTools,
   createAskTool,
   createDedupeCache,
@@ -252,6 +253,7 @@ export class ToolBelt {
       createShellTool(toolConfig),
       ...(light ? [] : createJobTools(toolConfig)),
       ...(light ? [] : createScratchTools(toolConfig)),
+      ...(light ? [] : createConflictTools(toolConfig)),
       ...(config.enableGitHub ? createGitHubTools(toolConfig) : []),
       // Light mode is single-agent by definition, so spawning is out there for
       // the same reason the sub-agent tools are.

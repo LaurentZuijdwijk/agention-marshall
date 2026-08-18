@@ -54,3 +54,6 @@ export {
 export type { McpToolOptions } from './factories/mcp-tools.js';
 export { createScratchTools } from './factories/scratch-tools.js';
 export { createGitHubTools } from './factories/github-tools.js';
+export { createConflictTools } from './factories/conflict-tools.js';
+export { parseConflicts, applyResolution, hashConflict } from './primitives/conflicts.js';
+export type { ConflictHunk, Resolution } from './primitives/conflicts.js';
