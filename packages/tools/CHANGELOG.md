@@ -1,5 +1,70 @@
 # @agentionai/marshall-tools
 
+## 0.7.1
+
+### Patch Changes
+
+- 1ddcb49: Fix line count reporting, partial reads, and line numbering in `read_file` to match grep and standard line numbering across long files.
+
+  `read_file` and `search` now stream rather than reading whole files, so `maxFileBytes` bounds
+  what is held in memory and not just what is printed — a file too large to hold as a string is
+  still readable and searchable. Line ranges are validated: a reversed or non-numeric range is an
+  error instead of a `NaN` header. `\r` is preserved, so an `edit_file` `oldString` copied out of
+  a `read_file` render still matches a CRLF file.
+
+  `write_file` now requires a read with no line range before replacing a file wholesale, and says
+  which of the two reasons it is refusing for — a range read is fixed by re-reading without one,
+  and only a file over the read limit needs `maxFileBytes` raised. An `edit_file` in between no
+  longer counts as having read the file: matching a unique substring renders none of the rest, so
+  a ranged read followed by an edit stays a ranged read rather than unlocking the overwrite the
+  gate exists to refuse.
+
+- 1ddcb49: Fix `read_file` sending a whole file over `maxFileBytes` in a single request when the file's
+  first (or `startLine`-targeted) line is itself larger than the cap — a minified bundle or a
+  one-line JSON dump, for example.
+
+  The line-window reader always included a window's first line in full, on the reasoning that a
+  window rendering nothing tells the model nothing. That had no upper bound of its own: a 480 KB
+  single-line file bypassed `maxFileBytes` entirely and went out uncapped, which is what turned a
+  routine tool call into a request large enough for a provider to reject as exceeding its context
+  window. The oversized line is now clipped to fit the cap instead, and `read_file`'s truncation
+  notice says so specifically — "this line exceeds the read limit on its own" rather than the
+  generic "read another section," which was never the fix for a single huge line.
+
+- 1ddcb49: `list_dir` now reports each file's size in bytes.
+
+  Without it, a model choosing between `read_file` and `search` for a large single-line file (a
+  minified bundle, say) had no way to know the file was large until after calling `read_file` on
+  it — which, even correctly capped, can still mean tens of thousands of tokens of repeated content
+  for a question `search` would have answered in a few hundred. Seeing the size up front is what
+  lets a model prefer `search` for a file it can tell in advance is not meant to be read whole.
+
+  Sizes are column-aligned without spreading one argument per entry into `Math.max`, which would
+  have thrown on a directory large enough to overflow the argument list and lost the whole listing.
+
+- 1ddcb49: Fix four ways the workspace `search` tool put wrong or wasteful content into an agent's context.
+
+  The truncation notice `cappedRead` appends was being scanned as if it were a line of the file, so
+  searching for a word in it reported a match at a line number the file does not have. Binary files
+  are now skipped the way grep skips them, instead of decoding to replacement characters and
+  matching. A single hit in a minified or bundled file returned the whole line — up to 256 KiB for
+  one match — and is now clipped to a window centred on the match. Generated output directories
+  (`target`, `out`, `vendor`, `.gradle`, `Pods`, `.terraform` and others) are skipped alongside the
+  ones already listed — and that skip list is now applied only to directories, so an ordinary file
+  that happens to be named `build` or `vendor` is searched instead of silently passed over.
+
+  `search` also now says when a file was only read up to its per-file cap, and when binaries were
+  skipped — including on a "no matches" result, where "nothing found" in a partly-read file is a
+  weaker claim than it looks.
+
+  A sub-agent that fails to construct (`context`, `search`, `planner`, `reviewer`) now logs
+  `SUBAGENT_UNAVAILABLE` with the provider error instead of disappearing from every turn silently.
+
+- 1ddcb49: Trim `list_dir` and `search`'s tool descriptions — wording only, no behavior change. Cuts about
+  56 tokens of fixed per-turn overhead while keeping the parts proven this cycle to prevent real
+  failures: the case-sensitivity flip between plain-name and regex search, and `fileGlob` being a
+  name filter rather than a path.
+
 ## 0.7.0
 
 ### Minor Changes

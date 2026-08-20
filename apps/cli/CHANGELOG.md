@@ -1,5 +1,20 @@
 # @agentionai/marshall-cli
 
+## 0.21.3
+
+### Patch Changes
+
+- Release the CLI so existing installs pick up this cycle's `marshall-tools` and `marshall-engine`
+  fixes.
+
+  The CLI depends on both at `*`, which npm resolves once at install time and then leaves alone — so
+  publishing the packages underneath an unchanged CLI version ships the fixes to new installs only,
+  and everyone already running `marshall` stays on whatever they resolved to originally. A version
+  bump here is what makes `npm i -g @agentionai/marshall-cli@latest` re-resolve them.
+
+  No CLI behaviour changes in this release; see the `marshall-tools` and `marshall-engine` entries
+  for what actually moved.
+
 ## 0.21.2
 
 ### Patch Changes
