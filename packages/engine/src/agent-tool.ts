@@ -1,4 +1,21 @@
 import { Tool } from '@agentionai/agents/core';
+import type { TokenUsage } from '@agentionai/agents/core';
+
+/**
+ * What this module needs off a call's usage reading.
+ *
+ * A `Pick` of the SDK's own `TokenUsage` rather than a hand-written copy: the
+ * fields have to keep matching what an agent actually reports, and this seam
+ * exists to keep the fakes light, not to restate the type. Narrow on purpose —
+ * `TokenUsage` also requires `total_tokens` and carries a dozen optional timing
+ * fields no caller here reads.
+ *
+ * `cost_usd` earns its place: the usage tally prefers a provider-reported cost
+ * to a price-table lookup, and for a sub-agent on a model missing from the
+ * catalogue it is the only figure there is. Leaving it out of this type is how
+ * it went missing before.
+ */
+export type AgentTokenUsage = Pick<TokenUsage, 'input_tokens' | 'output_tokens' | 'cost_usd'>;
 
 /** The slice of an agent this module needs — keeps the seam testable. */
 export interface Executable {
@@ -9,7 +26,7 @@ export interface Executable {
    * returned by it: the SDK accumulates onto the agent across its own tool-call
    * steps, so the agent is the only thing that knows the whole call's total.
    */
-  lastTokenUsage?: { input_tokens: number; output_tokens: number };
+  lastTokenUsage?: AgentTokenUsage;
 }
 
 export interface AgentToolOptions {
@@ -32,7 +49,7 @@ export interface AgentToolOptions {
     error?: string;
     result?: string;
     /** Reported even when the call failed — a turn that died still cost tokens. */
-    usage?: { input_tokens: number; output_tokens: number };
+    usage?: AgentTokenUsage;
   }) => void;
 }
 

@@ -56,6 +56,15 @@ export interface ScriptedTurn {
    * reported ↑0 ↓0 while llama.cpp reported fine.
    */
   usageOnFinalChunk?: boolean;
+  /**
+   * Answer with an HTTP error instead of a turn.
+   *
+   * The status and the wording are both the point: the engine decides whether a
+   * failure is worth compressing for by reading them (see
+   * `classifyProviderError`), so a test about that decision has to come through
+   * the same path a provider's would.
+   */
+  error?: { status: number; message: string; type?: string };
   /** Hold the response open this long before answering — for interrupt tests. */
   delayMs?: number;
   /**
@@ -133,6 +142,13 @@ export async function startFakeProvider(...turns: ScriptedTurn[]): Promise<FakeP
 
     const turn = queue.shift() ?? EXHAUSTED;
     if (turn.delayMs) await new Promise(resolve => setTimeout(resolve, turn.delayMs));
+
+    if (turn.error) {
+      // Before the stream branch: a provider that rejects a request answers with
+      // a JSON error body and the declared status, never an SSE stream.
+      send(res, turn.error.status, { error: { message: turn.error.message, type: turn.error.type ?? 'invalid_request_error' } });
+      return;
+    }
 
     if (stream) await streamTurn(res, turn, String(body.model ?? 'fake'));
     else send(res, 200, completion(turn, String(body.model ?? 'fake')));

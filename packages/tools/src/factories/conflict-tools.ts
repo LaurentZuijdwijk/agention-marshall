@@ -12,14 +12,11 @@ import { parseConflicts, applyResolution, hashConflict } from '../primitives/con
 import type { ConflictHunk, Resolution } from '../primitives/conflicts.js';
 import { withApproval } from './approval.js';
 import type { ToolConfig, ToolSpec } from '../types.js';
+import { safe } from '../primitives/tool-error.js';
 
 const RESOLUTIONS: readonly Resolution[] = ['ours', 'theirs', 'both'];
 
 const CONTEXT_LINES = 3;
-
-function safe(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
 
 /** Refs git exposes for "the other side", checked in the order a conflict
  *  can actually arise. `REBASE_HEAD` (git ≥2.19) is what makes this correct

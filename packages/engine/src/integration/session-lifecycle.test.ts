@@ -10,9 +10,10 @@ import assert from 'node:assert/strict';
 import { mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { History, toolResult } from '@agentionai/agents/core';
 import { Session } from '../session.js';
 import { startFakeProvider } from '../testing/fake-provider.js';
-import type { FakeProvider } from '../testing/fake-provider.js';
+import type { FakeProvider, ScriptedTurn } from '../testing/fake-provider.js';
 import type { ClientInterface, OutputEvent } from '../types.js';
 
 function tempRoot(): string {
@@ -30,13 +31,19 @@ function collector(): { client: ClientInterface; events: OutputEvent[] } {
   };
 }
 
-function makeSession(root: string, fake: FakeProvider, client: ClientInterface): Session {
+function makeSession(
+  root: string,
+  fake: FakeProvider,
+  client: ClientInterface,
+  overrides: Partial<ConstructorParameters<typeof Session>[0]> = {},
+): Session {
   return new Session(
     {
       agent: { provider: 'llamacpp', host: fake.host, model: 'test-model' },
       workspaceRoot: root,
       compressionThreshold: 0,
       enableWebSearch: false,
+      ...overrides,
     },
     client,
   );
@@ -240,4 +247,123 @@ test('a background job finishing while idle wakes the agent', async (t) => {
   const lastUser = resumed.messages.filter(m => m.role === 'user').pop();
   assert.match(JSON.stringify(lastUser?.content), /Background job finished/,
     'the resumed turn is prefixed with the job report');
+});
+
+// A tool result whose call is gone is rejected exactly like a call with no
+// result — OpenAI, Azure and OpenRouter all answer with a bare 400, and because
+// it carries no context-length wording the engine used to read it as an
+// overflow and answer with a compression pass. Compression is also what creates
+// it: summarising a middle window that ends between a call and its result. The
+// pairing is repaired before the request goes out, so a session already carrying
+// a broken one heals instead of failing every turn from there on.
+test('a tool result stranded from its call is repaired before the next request', async (t) => {
+  const root = tempRoot();
+  const fake = await startFakeProvider({ text: 'acknowledged' });
+  t.after(() => fake.close());
+
+  const { client } = collector();
+  const session = makeSession(root, fake, client);
+  t.after(() => session.dispose());
+
+  const history = (session as unknown as { history: History }).history;
+  history.addText('user', 'an earlier question');
+  // What compression leaves behind: the assistant entry holding the call is
+  // summarised away, the entry holding its result is kept.
+  history.addMessage('user', [toolResult('call_gone', 'file contents', false)]);
+
+  await session.run('carry on');
+
+  const sent = fake.requests.at(-1)?.messages ?? [];
+  const calledIds = new Set(sent.flatMap(m => {
+    const calls = (m as { tool_calls?: { id: string }[] }).tool_calls;
+    return Array.isArray(calls) ? calls.map(c => c.id) : [];
+  }));
+  const answeredIds = sent.filter(m => m.role === 'tool')
+    .map(m => m.tool_call_id)
+    .filter((id): id is string => id !== undefined);
+
+  for (const id of answeredIds) {
+    assert.ok(calledIds.has(id), `tool result ${id} sent with no matching call in the same request`);
+  }
+  assert.ok(!answeredIds.includes('call_gone'), 'the stranded result must not reach the provider');
+});
+
+// ── which failures are worth compressing for ──────────────────────────────────
+//
+// Compression on an error is a guess: llama.cpp answers an overflow with a bare
+// `Provider returned error`, so requiring the provider to *say* "context" would
+// leave local models with no recovery. The cost is that every 400 the engine has
+// not been taught about is treated as a maybe-overflow — it pops the turn's last
+// message, compresses history, and reports a full context window that the
+// provider never claimed. These pin down which side of that line each failure
+// falls on, with enough history that compression would genuinely find something
+// to cut and so would otherwise "succeed".
+
+async function sessionWithHistory(t: { after: (fn: () => unknown) => void }, turn: ScriptedTurn) {
+  const root = tempRoot();
+  const fake = await startFakeProvider(turn);
+  t.after(() => fake.close());
+  const { client, events } = collector();
+  // Compression on, and a history well under the threshold: proactive
+  // compression stays out of the way, so what these observe is only what the
+  // *error* triggered. The summariser runs against the same fake provider,
+  // whose script has run dry by then and answers with plain text.
+  const session = makeSession(root, fake, client, { compressionThreshold: 40_000 });
+  t.after(() => session.dispose());
+
+  const history = (session as unknown as { history: History }).history;
+  for (let i = 0; i < 20; i++) history.addText('user', 'x'.repeat(2_000));
+
+  return { session, events };
+}
+
+test('a content filter rejection is reported, not compressed away as a full context window', async (t) => {
+  const { session, events } = await sessionWithHistory(t, {
+    error: {
+      status: 400,
+      message: "The response was filtered due to the prompt triggering Azure OpenAI's content management policy.",
+    },
+  });
+
+  await session.run('do the thing');
+
+  assert.ok(!events.some(e => e.type === 'context-full'),
+    'a filtered prompt is not an overflow — shrinking history cannot fix it');
+  const errors = events.filter(e => e.type === 'error');
+  assert.equal(errors.length, 1, `the provider error should be reported once: ${JSON.stringify(events.map(e => e.type))}`);
+  assert.match((errors[0] as { message: string }).message, /content management policy/);
+});
+
+test('a rejected tool schema is reported, not compressed away as a full context window', async (t) => {
+  const { session, events } = await sessionWithHistory(t, {
+    error: { status: 400, message: "Invalid schema for function 'read_file': 'startLine' is not of type 'object'." },
+  });
+
+  await session.run('do the thing');
+
+  assert.ok(!events.some(e => e.type === 'context-full'));
+  assert.ok(events.some(e => e.type === 'error' && /Invalid schema/.test((e as { message: string }).message)));
+});
+
+test('an unlabelled 400 is still treated as a possible overflow, since some providers report one that way', async (t) => {
+  const { session, events } = await sessionWithHistory(t, {
+    error: { status: 400, message: 'Provider returned error' },
+  });
+
+  await session.run('do the thing');
+
+  assert.ok(events.some(e => e.type === 'context-full'),
+    'the guess has to stay, or llama.cpp overflows get no recovery at all');
+});
+
+test('a provider that names the context window is compressed for', async (t) => {
+  const { session, events } = await sessionWithHistory(t, {
+    error: { status: 400, message: 'request (14231 tokens) exceeds the available context size (13312 tokens)' },
+  });
+
+  await session.run('do the thing');
+
+  const contextFull = events.find(e => e.type === 'context-full');
+  assert.ok(contextFull, 'an explicit overflow must reach compression');
+  assert.equal((contextFull as { compressed: boolean }).compressed, true);
 });

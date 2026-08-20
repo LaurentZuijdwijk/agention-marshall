@@ -30,6 +30,7 @@ import {
   buildSwarmPrompt,
 } from './agent-factory.js';
 import { agentTool } from './agent-tool.js';
+import { describeAgentError, providerErrorDiagnostics } from './errors.js';
 import { summariseAgentJob } from './agent-jobs.js';
 import type { AgentJobs, AgentToolset } from './agent-jobs.js';
 import { McpRegistry } from './mcp.js';
@@ -608,6 +609,10 @@ export class ToolBelt {
         this.deps.usage.record(`${opts.id}@${this.subagentSeq++}`, { role, profile }, {
           inputTokens: usage.input_tokens,
           outputTokens: usage.output_tokens,
+          // Same preference as the coder's own reading (see session.ts): what
+          // the provider billed beats what the price table guesses, and for a
+          // model absent from the table it is the only figure there is.
+          ...(usage.cost_usd !== undefined ? { costUsd: usage.cost_usd } : {}),
         });
       }
     }
@@ -659,9 +664,20 @@ export class ToolBelt {
       return agent;
     };
 
+    // A reachability probe: build one now and throw it away, so a tool that
+    // cannot be constructed is left off the belt rather than failing the first
+    // time the model reaches for it.
     try {
       await create();
-    } catch {
+    } catch (err) {
+      // Logged, not swallowed. A `null` here removes the tool from every turn
+      // for the rest of the session, and the model is simply never told the
+      // capability existed — so without a line here the only symptom is an
+      // agent that inexplicably stops delegating, and nothing to grep for.
+      log(
+        `SUBAGENT_UNAVAILABLE ${opts.name} role=${opts.role} ` +
+        `${describeAgentError(opts.name, opts.profile, err)} details=${providerErrorDiagnostics(err)}`,
+      );
       return null;
     }
 
@@ -681,6 +697,7 @@ export class ToolBelt {
           this.deps.usage.record(`${opts.name}@${this.subagentSeq++}`, { role: opts.role, profile: opts.profile }, {
             inputTokens: usage.input_tokens,
             outputTokens: usage.output_tokens,
+            ...(usage.cost_usd !== undefined ? { costUsd: usage.cost_usd } : {}),
           });
         }
         log(

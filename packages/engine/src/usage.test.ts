@@ -93,6 +93,29 @@ describe('UsageTally', () => {
     assert.equal(turn.costPartial, undefined, 'free is a figure, not a gap');
   });
 
+  it('prefers a live cost reported by the provider over the price table', () => {
+    // CLAUDE has no entry in PRICES, so a table lookup alone would leave this
+    // reading unpriced — but a provider-reported cost (OpenRouter attaches one
+    // per response) should count on its own, table or not.
+    const tally = createUsageTally(() => PRICES);
+    tally.startTurn();
+    tally.record('coder@1', { role: 'coder', profile: CLAUDE }, { ...spend(1000, 1000), costUsd: 0.045 });
+
+    const { turn } = tally.report();
+    assert.equal(turn.costUsd, 0.045);
+    assert.equal(turn.costPartial, undefined, 'a live figure is not a floor');
+  });
+
+  it('a live cost of exactly zero still counts as priced, not missing', () => {
+    const tally = createUsageTally(() => PRICES);
+    tally.startTurn();
+    tally.record('coder@1', { role: 'coder', profile: CLAUDE }, { ...spend(1000, 1000), costUsd: 0 });
+
+    const { turn } = tally.report();
+    assert.equal(turn.costUsd, 0);
+    assert.equal(turn.costPartial, undefined);
+  });
+
   it('marks a total as a floor when something in it had no price', () => {
     const tally = createUsageTally(() => PRICES);
     tally.startTurn();

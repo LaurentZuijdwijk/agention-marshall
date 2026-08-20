@@ -1,11 +1,18 @@
+// ── the read gate ─────────────────────────────────────────────────────────────
+//
+// `read_file`, `write_file` and `edit_file` tested together because they are one
+// mechanism: what a read recorded is the only thing a write is allowed to act
+// on. Splitting these apart would leave each half asserting on state the other
+// half owns.
+
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, openSync, writeSync, closeSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createFileTools, createReadOnlyFileTools } from './file-tools.js';
-import { createKeyedLock } from '../primitives/keyed-lock.js';
-import type { ToolConfig, ApprovalRequest } from '../types.js';
+import { createFileTools, createReadOnlyFileTools } from './index.js';
+import { createKeyedLock } from '../../primitives/keyed-lock.js';
+import type { ToolConfig, ApprovalRequest } from '../../types.js';
 
 function tempRoot(): string {
   return mkdtempSync(join(tmpdir(), 'marshall-file-test-'));
@@ -26,19 +33,152 @@ test('read_file returns content with a header and numbered lines', async () => {
   const [read_file] = createReadOnlyFileTools(root);
   const result = await read_file.execute('a', 'b', { path: 'a.txt' }, 'id');
   assert.match(result, /a\.txt/);
+  assert.match(result, /\(lines 1–3 of 3\)/);
   assert.match(result, /1 \| line one/);
   assert.match(result, /3 \| line three/);
 });
 
-test('read_file honours startLine/endLine', async () => {
+test('read_file honours startLine/endLine and reports sample range and total lines', async () => {
   const root = tempRoot();
   const file = join(root, 'a.txt');
   writeFileSync(file, 'one\ntwo\nthree\n');
   const [read_file] = createReadOnlyFileTools(root);
   const result = await read_file.execute('a', 'b', { path: 'a.txt', startLine: 2, endLine: 2 }, 'id');
+  assert.match(result, /\(lines 2–2 of 3\)/);
   assert.match(result, /2 \| two/);
   assert.doesNotMatch(result, /one/);
   assert.doesNotMatch(result, /three/);
+});
+
+test('read_file reports total lines and sample lines when file exceeds maxFileBytes', async () => {
+  const root = tempRoot();
+  const file = join(root, 'long.txt');
+  // Create 1000 lines of 10 bytes each (~10KB)
+  const lines = Array.from({ length: 1000 }, (_, i) => `line ${String(i + 1).padStart(4, '0')}`);
+  writeFileSync(file, lines.join('\n') + '\n');
+  // Cap at 200 bytes
+  const [read_file] = createReadOnlyFileTools(root, { maxFileBytes: 200 });
+  const result = await read_file.execute('a', 'b', { path: 'long.txt' }, 'id');
+  assert.match(result, /long\.txt/);
+  assert.match(result, /of 1000\)/);
+  assert.match(result, /\[\.\.\.file truncated — showing lines 1–\d+ of 1000/);
+});
+
+test('read_file partial read past byte limit returns correct lines and line numbers', async () => {
+  const root = tempRoot();
+  const file = join(root, 'long.txt');
+  const lines = Array.from({ length: 1000 }, (_, i) => `line ${String(i + 1).padStart(4, '0')}`);
+  writeFileSync(file, lines.join('\n') + '\n');
+  // Small maxFileBytes
+  const [read_file] = createReadOnlyFileTools(root, { maxFileBytes: 200 });
+  const result = await read_file.execute('a', 'b', { path: 'long.txt', startLine: 500, endLine: 505 }, 'id');
+  assert.match(result, /\(lines 500–505 of 1000\)/);
+  assert.match(result, /500 \| line 0500/);
+  assert.match(result, /505 \| line 0505/);
+});
+
+test('read_file counts lines the way grep does, not one more', async () => {
+  const root = tempRoot();
+  const [read_file] = createReadOnlyFileTools(root);
+
+  writeFileSync(join(root, 'terminated.txt'), 'one\ntwo\n');
+  writeFileSync(join(root, 'bare.txt'), 'one\ntwo');
+  writeFileSync(join(root, 'empty.txt'), '');
+
+  assert.match(await read_file.execute('a', 'b', { path: 'terminated.txt' }, 'id'), /\(lines 1–2 of 2\)/);
+  assert.match(await read_file.execute('a', 'b', { path: 'bare.txt' }, 'id'), /\(lines 1–2 of 2\)/);
+
+  const empty = await read_file.execute('a', 'b', { path: 'empty.txt' }, 'id');
+  assert.match(empty, /\(lines 0–0 of 0\)/);
+  assert.match(empty, /\(empty file\)/);
+});
+
+// read_file's render is what a model copies an oldString out of, and edit_file
+// matches the file's actual bytes. Dropping the CR would make every multi-line
+// edit to a CRLF file unexpressible: the string the model was shown is not a
+// string the file contains.
+test('read_file preserves CRLF line endings, so an edit built from its output still matches', async () => {
+  const root = tempRoot();
+  writeFileSync(join(root, 'crlf.txt'), 'alpha\r\nbeta\r\ngamma\r\n');
+  const tools = createFileTools(makeConfig({ workspaceRoot: root }));
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+
+  const rendered = await byName.read_file.execute('a', 'b', { path: 'crlf.txt' }, 'id');
+  assert.match(rendered, /\(lines 1–3 of 3\)/);
+  assert.match(rendered, /1 \| alpha\r/, 'the CR is still there');
+
+  // Exactly what the render shows for lines 1–2, stripped of the gutter.
+  const result = await byName.edit_file.execute(
+    'a', 'b', { path: 'crlf.txt', oldString: 'alpha\r\nbeta', newString: 'ALPHA\r\nBETA' }, 'id',
+  );
+  assert.match(result, /Edited/);
+  assert.equal(readFileSync(join(root, 'crlf.txt'), 'utf8'), 'ALPHA\r\nBETA\r\ngamma\r\n');
+});
+
+test('read_file rejects a reversed or unparseable line range instead of rendering NaN', async () => {
+  const root = tempRoot();
+  writeFileSync(join(root, 'a.txt'), 'one\ntwo\nthree\n');
+  const [read_file] = createReadOnlyFileTools(root);
+
+  const reversed = await read_file.execute('a', 'b', { path: 'a.txt', startLine: 3, endLine: 2 }, 'id');
+  assert.match(reversed, /^Error: startLine 3 is after endLine 2/);
+
+  const nonsense = await read_file.execute('a', 'b', { path: 'a.txt', startLine: 'abc' }, 'id');
+  assert.match(nonsense, /^Error: startLine and endLine must be numbers/);
+  assert.doesNotMatch(nonsense, /NaN/);
+});
+
+test('read_file says so when startLine is past the end of the file', async () => {
+  const root = tempRoot();
+  writeFileSync(join(root, 'a.txt'), 'one\ntwo\n');
+  const [read_file] = createReadOnlyFileTools(root);
+  const result = await read_file.execute('a', 'b', { path: 'a.txt', startLine: 99 }, 'id');
+  assert.match(result, /beyond total lines 2/);
+});
+
+// What `maxFileBytes` has to bound is what gets *held*, not just what gets
+// printed: reading a file whole and then slicing a window out of it looks
+// identical from the outside. Comparing `heapUsed` cannot tell the two apart —
+// V8 collects the intermediate string mid-operation and the delta comes back
+// small either way — so this uses the one wall that is not a heuristic. A
+// string cannot exceed ~512 MB, so a file past that is one no slurping
+// implementation can read at all, however much memory it is given.
+//
+// The file is sparse: 600 MB apparent, ~2 MB on disk, well under a second.
+const sparseSkip = process.platform === 'win32'
+  ? 'NTFS zero-fills instead of making the file sparse'
+  : false;
+
+test('a file too large to hold as a string is still readable and searchable', { skip: sparseSkip }, async () => {
+  const root = tempRoot();
+  const MB = 1024 * 1024;
+  const totalMB = 600;
+  const fd = openSync(join(root, 'huge.bin'), 'w');
+  try {
+    // Real text across everything `search` will read (its per-file cap is
+    // 256 KiB). The holes past that are NUL, which is what makes a file binary
+    // — leave them inside the searched window and the file is correctly skipped
+    // as binary, which is a different property than the one under test here.
+    const prefix = Buffer.from('needle' + 'x'.repeat(512 * 1024));
+    writeSync(fd, prefix, 0, prefix.length, 0);
+    // One terminator per megabyte, and nothing in between — the holes cost no
+    // blocks. The last one lands on the final byte, so the file ends cleanly.
+    for (let k = 1; k <= totalMB; k++) writeSync(fd, Buffer.from('\n'), 0, 1, k * MB - 1);
+  } finally {
+    closeSync(fd);
+  }
+
+  const [read_file, , search] = createReadOnlyFileTools(root, { maxFileBytes: 4096 });
+
+  const read = await read_file.execute('a', 'b', { path: 'huge.bin', startLine: 500, endLine: 500 }, 'id');
+  assert.doesNotMatch(read, /^Error:/, 'a 600 MB file must not be unreadable');
+  assert.match(read, /\(lines 500–500 of 600\)/, 'the total and the deep range are both exact');
+
+  // Uncapped, search throws ERR_STRING_TOO_LONG here — and its `catch` swallows
+  // that, so the file is skipped and the needle in its first bytes goes missing
+  // with nothing said. Capped, the match is simply found.
+  const found = await search.execute('a', 'b', { pattern: 'needle' }, 'id');
+  assert.match(found, /^huge\.bin:1: needle/m);
 });
 
 test('read_file blocks path escape', async () => {
@@ -46,88 +186,6 @@ test('read_file blocks path escape', async () => {
   const [read_file] = createReadOnlyFileTools(root);
   const result = await read_file.execute('a', 'b', { path: '../../etc/passwd' }, 'id');
   assert.match(result, /^Error:/);
-});
-
-test('list_dir lists prefixed entries', async () => {
-  const root = tempRoot();
-  writeFileSync(join(root, 'f.txt'), '');
-  mkdirSync(join(root, 'dir'));
-  const [, list_dir] = createReadOnlyFileTools(root);
-  const result = await list_dir.execute('a', 'b', { path: '.' }, 'id');
-  const asLines = result.split('\n');
-  assert.ok(asLines.some((l) => l.startsWith('f') && l.includes('f.txt')));
-  assert.ok(asLines.some((l) => l.startsWith('d') && l.includes('dir')));
-});
-
-test('search finds matches with file:line: content', async () => {
-  const root = tempRoot();
-  writeFileSync(join(root, 'x.txt'), 'alpha\nbeta\nalpha again\n');
-  const [, , search] = createReadOnlyFileTools(root);
-  const result = await search.execute('a', 'b', { pattern: 'alpha' }, 'id');
-  assert.match(result, /x\.txt:1: alpha/);
-  assert.match(result, /x\.txt:3: alpha again/);
-});
-
-test('search supports fileGlob filtering', async () => {
-  const root = tempRoot();
-  mkdirSync(join(root, 'src'));
-  writeFileSync(join(root, 'keep.ts'), 'needle\n');
-  writeFileSync(join(root, 'skip.md'), 'needle\n');
-  writeFileSync(join(root, 'src', 'nested.ts'), 'needle\n');
-  const [, , search] = createReadOnlyFileTools(root);
-  const result = await search.execute('a', 'b', { pattern: 'needle', fileGlob: '.ts' }, 'id');
-  assert.match(result, /keep\.ts:1: needle/);
-  assert.match(result, /src[\\/]nested\.ts:1: needle/);
-  assert.doesNotMatch(result, /skip\.md/);
-});
-
-test('search accepts shell-style fileGlob patterns', async () => {
-  const root = tempRoot();
-  writeFileSync(join(root, 'keep.ts'), 'needle\n');
-  writeFileSync(join(root, 'skip.js'), 'needle\n');
-  const [, , search] = createReadOnlyFileTools(root);
-  const result = await search.execute('a', 'b', { pattern: 'needle', fileGlob: '*.ts' }, 'id');
-  assert.match(result, /keep\.ts:1: needle/);
-  assert.doesNotMatch(result, /skip\.js/);
-});
-
-test('plain-name searches ignore case and identifier separators', async () => {
-  const root = tempRoot();
-  writeFileSync(join(root, 'names.txt'), 'file-tools\nfile_tools\nfileTools\nFile Tools\n');
-  const [, , search] = createReadOnlyFileTools(root);
-  const result = await search.execute('a', 'b', { pattern: 'file-tools' }, 'id');
-  assert.equal(result.split('\n').length, 4);
-});
-
-test('search accepts a file path', async () => {
-  const root = tempRoot();
-  writeFileSync(join(root, 'target.txt'), 'needle\n');
-  const [, , search] = createReadOnlyFileTools(root);
-  const result = await search.execute('a', 'b', { pattern: 'needle', path: 'target.txt' }, 'id');
-  assert.match(result, /target\.txt:1: needle/);
-});
-
-test('search reports no matches', async () => {
-  const root = tempRoot();
-  writeFileSync(join(root, 'x.txt'), 'nothing here\n');
-  const [, , search] = createReadOnlyFileTools(root);
-  const result = await search.execute('a', 'b', { pattern: 'zzz-not-present' }, 'id');
-  assert.match(result, /No matches/);
-  assert.match(result, /1 files searched/);
-});
-
-test('search reports invalid regexes clearly', async () => {
-  const [, , search] = createReadOnlyFileTools(tempRoot());
-  const result = await search.execute('a', 'b', { pattern: '[' }, 'id');
-  assert.match(result, /^Error: Invalid regex:/);
-});
-
-test('search only reports truncation when the limit is reached', async () => {
-  const root = tempRoot();
-  writeFileSync(join(root, 'x.txt'), 'needle\n');
-  const [, , search] = createReadOnlyFileTools(root, { maxSearchResults: 1 });
-  const result = await search.execute('a', 'b', { pattern: 'needle' }, 'id');
-  assert.doesNotMatch(result, /truncated/);
 });
 
 test('write_file creates a new file (no read required)', async () => {
@@ -158,6 +216,87 @@ test('write_file allows overwrite after reading the file', async () => {
   const result = await byName.write_file.execute('a', 'b', { path: 'existing.txt', content: 'updated' }, 'id');
   assert.match(result, /Wrote/);
   assert.equal(readFileSync(join(root, 'existing.txt'), 'utf8'), 'updated');
+});
+
+// Seeing part of a file cannot authorize replacing all of it — content composed
+// from the part discards the rest. The two ways of having seen only part need
+// different advice, and telling a model to raise a limit it is not up against
+// is advice it cannot act on.
+test('write_file refuses after a ranged read, and names the range as the reason', async () => {
+  const root = tempRoot();
+  writeFileSync(join(root, 'small.txt'), 'one\ntwo\nthree\n');
+  const tools = createFileTools(makeConfig({ workspaceRoot: root }));
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+
+  // A range that happens to cover the whole file is still a ranged read.
+  await byName.read_file.execute('a', 'b', { path: 'small.txt', endLine: 999 }, 'id');
+  const result = await byName.write_file.execute('a', 'b', { path: 'small.txt', content: 'x' }, 'id');
+
+  assert.match(result, /read with startLine\/endLine/);
+  assert.doesNotMatch(result, /maxFileBytes/,
+    'the file is 14 bytes — raising the read limit would change nothing');
+  assert.match(result, /edit_file/, 'and it must name the tool that would have worked');
+  assert.equal(readFileSync(join(root, 'small.txt'), 'utf8'), 'one\ntwo\nthree\n');
+
+  // Re-reading without a range is the stated fix, so it has to work.
+  await byName.read_file.execute('a', 'b', { path: 'small.txt' }, 'id');
+  assert.match(await byName.write_file.execute('a', 'b', { path: 'small.txt', content: 'x' }, 'id'), /Wrote/);
+});
+
+// The way around the gate above, if an edit counted as having read the file:
+// read ten lines, make one targeted edit, and the file is suddenly "seen". It
+// is not — edit_file matched a unique substring and rendered nothing else.
+test('an edit_file does not promote a ranged read into a licence to overwrite', async () => {
+  const root = tempRoot();
+  // Zero-padded so no line number is a prefix of another — edit_file needs an
+  // oldString that appears exactly once, and that is not what this is testing.
+  const original = Array.from({ length: 40 }, (_, i) => `line ${String(i).padStart(2, '0')}`).join('\n') + '\n';
+  writeFileSync(join(root, 'big.txt'), original);
+  const tools = createFileTools(makeConfig({ workspaceRoot: root }));
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+
+  await byName.read_file.execute('a', 'b', { path: 'big.txt', startLine: 1, endLine: 3 }, 'id');
+  assert.match(
+    await byName.edit_file.execute('a', 'b', { path: 'big.txt', oldString: 'line 01', newString: 'LINE 01' }, 'id'),
+    /Edited/,
+    'the edit itself is fine — it is targeted, and only needs the file to have been read',
+  );
+
+  const result = await byName.write_file.execute('a', 'b', { path: 'big.txt', content: 'replaced\n' }, 'id');
+  assert.match(result, /read with startLine\/endLine/, 'still a ranged read after the edit');
+  assert.notEqual(readFileSync(join(root, 'big.txt'), 'utf8'), 'replaced\n');
+  assert.match(readFileSync(join(root, 'big.txt'), 'utf8'), /line 39/, 'the unseen tail is intact');
+});
+
+// The other direction: the fix must not cost a caller that really did read the
+// whole file the right to rewrite it after making an edit.
+test('an edit_file after a full read leaves write_file allowed', async () => {
+  const root = tempRoot();
+  writeFileSync(join(root, 'small.txt'), 'alpha\nbeta\ngamma\n');
+  const tools = createFileTools(makeConfig({ workspaceRoot: root }));
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+
+  await byName.read_file.execute('a', 'b', { path: 'small.txt' }, 'id');
+  await byName.edit_file.execute('a', 'b', { path: 'small.txt', oldString: 'beta', newString: 'BETA' }, 'id');
+
+  assert.match(
+    await byName.write_file.execute('a', 'b', { path: 'small.txt', content: 'replaced\n' }, 'id'),
+    /Wrote/,
+  );
+  assert.equal(readFileSync(join(root, 'small.txt'), 'utf8'), 'replaced\n');
+});
+
+test('write_file refuses after a read cut short by the byte limit, and says so', async () => {
+  const root = tempRoot();
+  writeFileSync(join(root, 'long.txt'), Array.from({ length: 1000 }, (_, i) => `line ${i}`).join('\n') + '\n');
+  const tools = createFileTools(makeConfig({ workspaceRoot: root, limits: { maxFileBytes: 200 } }));
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+
+  await byName.read_file.execute('a', 'b', { path: 'long.txt' }, 'id');
+  const result = await byName.write_file.execute('a', 'b', { path: 'long.txt', content: 'x' }, 'id');
+
+  assert.match(result, /exceeds the read limit/);
+  assert.match(result, /maxFileBytes/);
 });
 
 // The permission dodge this guards: rather than edit_file, whose approval

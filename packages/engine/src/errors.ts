@@ -56,10 +56,95 @@ export function isModelNotFoundError(message: string): boolean {
  * it), and this exists only as a backstop: if a dangling call ever gets
  * through some other way, it should be reported for what it is rather than
  * misdiagnosed as a full context window.
+ *
+ * Both directions of the break land here, because providers do not distinguish
+ * them in the status they return: a call with no result, and a result whose
+ * call is missing. Each vendor words it differently and none of the wordings
+ * mention tokens, so the list is empirical — OpenAI's Responses API ("No tool
+ * output found for function call"), Chat Completions ("...did not have response
+ * messages", "must be a response to a preceding message with 'tool_calls'"),
+ * and Azure via OpenRouter ("Missing tool call ID reference for function call
+ * outputs"). Anything unmatched falls through to the maybe-overflow guess,
+ * which is why the patterns are broad rather than exact.
  */
 export function isDanglingToolCallError(message: string): boolean {
-  return /no (?:tool )?output found for (?:function|tool) call|tool_call_id.{0,60}not found|missing (?:a )?(?:tool|function) (?:result|output|response)/i
-    .test(message);
+  return /no (?:tool )?output found for (?:function|tool) call/i.test(message)
+    || /tool.?call.?ids?\b.{0,60}(?:not found|did not have|missing|no (?:matching )?response)/i.test(message)
+    || /missing\b.{0,40}\btool.?call.?id/i.test(message)
+    || /missing (?:a )?(?:tool|function) (?:result|output|response)/i.test(message)
+    || /must be (?:a )?response.{0,40}preceding message/i.test(message)
+    || /must be followed by tool messages/i.test(message);
+}
+
+/**
+ * A 400 the request's *shape* earned, not its size.
+ *
+ * These are the ones worth naming, because the fallback below assumes any
+ * unlabelled 400 might be an overflow — a guess that costs a compression pass,
+ * the turn, and the popped message that goes with it. None of these get better
+ * with a smaller history: a rejected schema stays rejected, a filtered prompt
+ * stays filtered. Checked after `isContextLengthError`, so a provider that
+ * explicitly said "context length" is believed over any wording here.
+ */
+export function isUnsupportedRequestError(message: string): boolean {
+  return /content management policy|content[_ ]filter|responsible ai|safety system/i.test(message)
+    || /invalid schema|invalid[_ ]request[_ ]error|invalid (?:value|parameter|type) for/i.test(message)
+    || /unsupported (?:parameter|value|country|region)|unknown parameter|unrecognized (?:request )?argument/i.test(message)
+    || /(?:is )?not supported (?:with|for|by) this model|does not support/i.test(message)
+    || /invalid image|unsupported image|failed to (?:parse|decode) image/i.test(message);
+}
+
+/** How a provider failure was read, and the rule that read it that way. */
+export interface ProviderErrorClass {
+  kind:
+    | 'connection' | 'rate-limit' | 'context-length' | 'model-not-found'
+    | 'dangling-tool-call' | 'unsupported-request' | 'maybe-context' | 'other';
+  /** Whether compressing history is worth attempting for this. */
+  compressible: boolean;
+  /** One line naming the rule that fired, for the session log. */
+  reason: string;
+}
+
+/**
+ * The single place that decides whether a provider failure is worth compressing
+ * for — and says which rule decided it.
+ *
+ * Only `'context-length'` is a provider *stating* the problem. `'maybe-context'`
+ * is a guess, and it exists because llama.cpp answers an overflow with a bare
+ * `Provider returned error` and nothing else: requiring positive identification
+ * would leave local models with no recovery at all. The cost of that guess is
+ * that every 400 we have not taught this function about is treated as a maybe —
+ * so the branches above it are the ones that keep it honest, and a new
+ * non-overflow 400 seen in the wild belongs in one of them.
+ *
+ * Order is deliberate. Connection and rate-limit come first because
+ * `isBadRequestError` reads any `400` in the message text and a quota payload
+ * can contain one. `context-length` comes before the shape checks because a
+ * provider naming the context window outranks our guess about the wording.
+ */
+export function classifyProviderError(err: unknown, message: string): ProviderErrorClass {
+  if (isConnectionError(message)) {
+    return { kind: 'connection', compressible: false, reason: 'the server could not be reached' };
+  }
+  if (isRateLimitError(message)) {
+    return { kind: 'rate-limit', compressible: false, reason: 'rate limited or out of quota' };
+  }
+  if (isContextLengthError(message)) {
+    return { kind: 'context-length', compressible: true, reason: 'the provider named the context window' };
+  }
+  if (isModelNotFoundError(message)) {
+    return { kind: 'model-not-found', compressible: false, reason: 'the provider rejected the model, not the request size' };
+  }
+  if (isDanglingToolCallError(message)) {
+    return { kind: 'dangling-tool-call', compressible: false, reason: 'a tool call and its result were not paired' };
+  }
+  if (isUnsupportedRequestError(message)) {
+    return { kind: 'unsupported-request', compressible: false, reason: 'the request shape was rejected, which a smaller history will not fix' };
+  }
+  if (isBadRequestError(err)) {
+    return { kind: 'maybe-context', compressible: true, reason: 'an unlabelled 400 — guessing overflow, since some providers report one without saying so' };
+  }
+  return { kind: 'other', compressible: false, reason: 'not a bad request and no context wording' };
 }
 
 /**

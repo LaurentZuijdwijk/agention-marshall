@@ -81,7 +81,58 @@ function entryText(entry: ReducibleEntry): string {
   }).filter(Boolean).join(' ');
 }
 
-export function middleCompressionPlugin(execute: (prompt: string) => Promise<string>): HistoryPlugin {
+/** Every tool call in `entries`, and every call some result answers. */
+function toolPairing(entries: readonly ReducibleEntry[]): { calls: Set<string>; answered: Set<string>; orphaned: string[] } {
+  const calls = new Set<string>();
+  const answered = new Set<string>();
+  const orphaned: string[] = [];
+  for (const entry of entries) {
+    for (const block of entry.content) {
+      if (isToolUseContent(block)) calls.add(block.id);
+      else if (isToolResultContent(block)) {
+        // Ordering matters, not just membership: a result that appears before
+        // the call it answers is as invalid to the provider as one whose call
+        // is missing entirely.
+        if (calls.has(block.tool_use_id)) answered.add(block.tool_use_id);
+        else orphaned.push(block.tool_use_id);
+      }
+    }
+  }
+  return { calls, answered, orphaned };
+}
+
+const danglingCount = (entries: readonly ReducibleEntry[]): number => {
+  const { calls, answered } = toolPairing(entries);
+  return [...calls].filter(id => !answered.has(id)).length;
+};
+
+/**
+ * The earliest tail start, at or after `from`, that leaves no tool result
+ * stranded from the call it answers.
+ *
+ * The tail is otherwise chosen purely by token budget, so its boundary lands
+ * wherever the arithmetic puts it — including between an assistant's tool call
+ * and the entry carrying that call's result. Summarising the call while keeping
+ * the result produces a history that OpenAI, Azure and OpenRouter all reject
+ * outright ("Missing tool call ID reference for function call outputs"), and
+ * because that comes back as a bare 400 it used to be read as an overflow and
+ * answered with another compression pass — which could split the next pair.
+ *
+ * Moving the boundary later (summarising both halves of the pair) rather than
+ * earlier keeps the step's token goal reachable: pulling the call into the tail
+ * instead would grow what is retained, which is the opposite of the point.
+ */
+function firstCleanTailStart(nonSystem: readonly ReducibleEntry[], from: number): number {
+  for (let start = Math.max(0, from); start < nonSystem.length; start++) {
+    if (toolPairing(nonSystem.slice(start)).orphaned.length === 0) return start;
+  }
+  return nonSystem.length;
+}
+
+export function middleCompressionPlugin(
+  execute: (prompt: string) => Promise<string>,
+  log: (line: string) => void = () => {},
+): HistoryPlugin {
   return {
     async reduce(entries, options) {
       const { maxTokens } = options;
@@ -103,7 +154,15 @@ export function middleCompressionPlugin(execute: (prompt: string) => Promise<str
         tail.unshift(entry);
         retained += entry.__metadata.estimatedTokens;
       }
-      const middle = nonSystem.slice(1, nonSystem.length - tail.length);
+      // The budget picks where the tail starts; this moves it to the nearest
+      // place that does not cut a tool call away from its result.
+      const budgetStart = nonSystem.length - tail.length;
+      const tailStart = firstCleanTailStart(nonSystem, budgetStart);
+      if (tailStart !== budgetStart) {
+        log(`COMPRESSION_TAIL_ALIGNED ${budgetStart} -> ${tailStart} (kept a tool call and its result together)`);
+      }
+      const keptTail = nonSystem.slice(tailStart);
+      const middle = nonSystem.slice(1, tailStart);
       if (middle.length === 0) return entries;
 
       const priorSummary = middle.find((entry) => entry.__metadata.isSummary);
@@ -127,7 +186,19 @@ export function middleCompressionPlugin(execute: (prompt: string) => Promise<str
           coversRange: { from: firstCovered.__metadata.coversRange?.from ?? firstCovered.__metadata.date, to: lastCovered.__metadata.coversRange?.to ?? lastCovered.__metadata.date },
         },
       };
-      return [...system, first, summary, ...tail];
+      const reduced = [...system, first, summary, ...keptTail];
+
+      // A backstop for the ways a boundary is not the only thing that can break
+      // a pairing — `first` is preserved unconditionally, so a tool call in it
+      // loses its result to the summary. Compression is best-effort and a
+      // skipped reduce only costs tokens; emitting a history the provider will
+      // reject costs the turn.
+      const { orphaned } = toolPairing(reduced);
+      if (orphaned.length > 0 || danglingCount(reduced) > danglingCount(entries)) {
+        log(`COMPRESSION_SKIPPED_BROKEN_PAIRING orphaned=${orphaned.length} — history left uncompressed`);
+        return entries;
+      }
+      return reduced;
     },
   };
 }
@@ -222,7 +293,7 @@ export class CompressionManager {
       const agent = this.summaryAgent;
       if (!agent) throw new Error('no summariser is configured');
       return agent.execute(prompt);
-    }));
+    }, this.log));
   }
 
   /**

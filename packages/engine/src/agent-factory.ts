@@ -281,6 +281,24 @@ export interface CreateAgentOptions {
    *  default applies — set it for callers that need reproducible output (e.g.
    *  a classifier) rather than a conversational one. */
   temperature?: number;
+  /**
+   * Mark the system prompt and tool schemas as an Anthropic cache breakpoint
+   * (OpenRouter only — silently ignored by every other provider). Worth it
+   * only for an agent whose belt is reused across many turns in one session:
+   * a cache write costs more than a plain input token, and a one-shot or
+   * few-call agent — a sub-agent spawned per delegated call, the compression
+   * summariser — never makes enough follow-up calls to earn that back. The
+   * main coder agent is the one long-lived caller; leave this off everywhere
+   * else.
+   */
+  promptCaching?: boolean;
+  /**
+   * Sticky OpenRouter routing key, pinning every request from this agent to
+   * the same upstream instance — the precondition for `promptCaching` to
+   * actually hit rather than write a cache that never gets read. No effect
+   * without `promptCaching: true`; harmless on every other provider.
+   */
+  sessionId?: string;
 }
 
 export async function createAgent(
@@ -297,6 +315,8 @@ export async function createAgent(
     systemPrompt,
     builtInTools,
     temperature,
+    promptCaching,
+    sessionId,
   } = options;
   const { key: apiKey, authType } = resolveAuth(profile);
   const model = resolveModel(profile);
@@ -387,6 +407,8 @@ export async function createAgent(
           ...base,
           baseURL: routerHost,
           defaultHeaders: { ...OPENROUTER_ATTRIBUTION },
+          ...(promptCaching ? { promptCaching: true } : {}),
+          ...(sessionId ? { sessionId } : {}),
         } as OpenRouterConfig, history);
       }
       case 'cerebras': {

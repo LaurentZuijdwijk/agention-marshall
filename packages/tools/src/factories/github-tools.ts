@@ -3,10 +3,7 @@ import type { ToolInputSchema } from '@agentionai/agents/core';
 import { spawnSandboxed } from '../primitives/spawn.js';
 import { withApproval } from './approval.js';
 import type { ToolConfig, ToolSpec } from '../types.js';
-
-function safe(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
+import { safe } from '../primitives/tool-error.js';
 
 async function gh(
   args: string[],

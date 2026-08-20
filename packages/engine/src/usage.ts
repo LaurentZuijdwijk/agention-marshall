@@ -43,6 +43,13 @@ export interface TokenCount {
    * breaks it out. Billed as output either way — this only says what it went on.
    */
   reasoningTokens?: number;
+  /**
+   * USD the provider itself billed for this reading (OpenRouter reports this
+   * per call). Preferred over a price-table lookup when present, since it
+   * reflects the account's actual rate — BYOK discounts, promos, whatever
+   * OpenRouter did with routing — rather than a catalogue guess.
+   */
+  costUsd?: number;
 }
 
 export interface UsageTotals extends TokenCount {
@@ -174,15 +181,16 @@ export function createUsageTally(prices: () => PriceBook | undefined = () => und
 
     record(key, { role, profile }, usage) {
       const pricing = pricingFor(profile, prices());
+      const costUsd = usage.costUsd ?? (pricing
+        ? usage.inputTokens * pricing.prompt + usage.outputTokens * pricing.completion
+        : undefined);
       entries.set(key, {
         role,
         model: `${profile.provider}/${resolveModel(profile)}`,
         inputTokens: usage.inputTokens,
         outputTokens: usage.outputTokens,
         ...(usage.reasoningTokens ? { reasoningTokens: usage.reasoningTokens } : {}),
-        ...(pricing
-          ? { costUsd: usage.inputTokens * pricing.prompt + usage.outputTokens * pricing.completion }
-          : {}),
+        ...(costUsd !== undefined ? { costUsd } : {}),
         turn,
       });
     },

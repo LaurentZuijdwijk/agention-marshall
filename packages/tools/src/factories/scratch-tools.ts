@@ -8,6 +8,7 @@ import { cappedRead, DEFAULT_MAX_FILE_BYTES } from '../primitives/capped-read.js
 import { resolveInWorkspace } from '../primitives/resolve.js';
 import { createKeyedLock } from '../primitives/keyed-lock.js';
 import type { ToolConfig } from '../types.js';
+import { safe } from '../primitives/tool-error.js';
 
 /**
  * The scratch area lives at WORKSPACE_ROOT/.marshall/ and is the agent's
@@ -18,10 +19,6 @@ import type { ToolConfig } from '../types.js';
  *   .marshall/notes/   — named markdown notes the agent creates/updates
  *   .marshall/session.log — append-only human-readable session journal
  */
-function safe(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
-
 export function createScratchTools(config: ToolConfig): Tool<string>[] {
   const { workspaceRoot, limits = {} } = config;
   const scratchRoot = join(workspaceRoot, '.marshall');

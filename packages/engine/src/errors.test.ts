@@ -85,8 +85,32 @@ test('an unanswered tool call is not mistaken for an overlong prompt', () => {
   ), true);
   assert.equal(isDanglingToolCallError("tool_call_id 'call_abc123' not found in the conversation"), true);
   assert.equal(isDanglingToolCallError('missing a tool result for call_0'), true);
+
+  // Every vendor words this differently and none of them mention tokens, so an
+  // unmatched wording falls through to the maybe-overflow guess and spends a
+  // compression pass on a history that was never too big. These are the
+  // phrasings seen in the wild.
+  assert.equal(isDanglingToolCallError(
+    'Missing tool call ID reference for function call outputs.',
+  ), true, 'Azure via OpenRouter');
+  assert.equal(isDanglingToolCallError(
+    "An assistant message with 'tool_calls' must be followed by tool messages responding to each "
+    + "'tool_call_id'. The following tool_call_ids did not have response messages: call_abc",
+  ), true, 'OpenAI chat completions');
+  assert.equal(isDanglingToolCallError(
+    "Invalid parameter: messages with role 'tool' must be a response to a preceding message with 'tool_calls'.",
+  ), true, 'the orphaned-result direction of the same break');
+  assert.equal(isDanglingToolCallError(
+    "Missing parameter 'tool_call_id': messages with role 'tool' must have 'tool_call_id'.",
+  ), true, 'Azure OpenAI');
+
   assert.equal(isDanglingToolCallError('prompt is too long for the model context'), false);
   assert.equal(isDanglingToolCallError('rate limit exceeded'), false);
+  // A real overflow must still reach compression rather than being reported raw.
+  assert.equal(isDanglingToolCallError(
+    'request (14231 tokens) exceeds the available context size (13312 tokens)',
+  ), false);
+  assert.equal(isDanglingToolCallError('This model\'s maximum context length is 8192 tokens'), false);
 });
 
 test('provider response details are included when the wrapper message is generic', () => {

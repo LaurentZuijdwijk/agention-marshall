@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Session } from './session.js';
 import { assistantText } from './session-events.js';
+import { toolUse, toolResult, isToolResultContent } from '@agentionai/agents/core';
+import type { SessionHistory } from './session-history.js';
 import type { ClientInterface, OutputEvent, ApprovalRequest, ApprovalDecision } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -864,5 +866,92 @@ test('reduceToTarget stops instead of looping forever when a step makes no progr
   await inner.compression.reduceToTarget(100);
 
   assert.equal(calls, 1, 'a no-progress step must abort the loop rather than retrying indefinitely');
+  session.dispose();
+});
+
+// ---------------------------------------------------------------------------
+// history repair
+// ---------------------------------------------------------------------------
+
+/** Reaches past `private`: both repair paths are internal, and what they must
+ *  hold is a property of the history they leave behind. */
+function repairable(session: Session) {
+  return session as unknown as {
+    history: SessionHistory;
+    dropOrphanedToolResults(): void;
+    repairDanglingToolCalls(reason?: string): void;
+  };
+}
+
+// The repair rebuilds history from a copy of itself. Done through the public
+// `entries` getter that copy has no metadata, and `addEntry` mints a fresh one
+// — so a summary would come back as an ordinary turn and be summarised again.
+test('dropping an orphaned tool result keeps a compression summary recognisable', () => {
+  const session = makeSession(tempRoot(), makeClient());
+  const { history } = repairable(session);
+
+  history.addText('user', 'first');
+  history.addText('assistant', 'a summary of everything before this');
+  history.addMessage('assistant', [toolUse('call-1', 'read_file', {})]);
+  history.addMessage('user', [toolResult('call-1', 'ok')]);
+  // The call this answers is nowhere in history — the block the repair removes.
+  history.addMessage('user', [toolResult('call-gone', 'orphan')]);
+
+  const marked = history.rawEntries;
+  marked[1] = {
+    ...marked[1],
+    __metadata: {
+      ...marked[1].__metadata,
+      isSummary: true,
+      coversRange: { from: '2024-01-01T00:00:00.000Z', to: '2024-01-02T00:00:00.000Z' },
+    },
+  };
+  const originalDate = marked[1].__metadata.date;
+  history.replaceEntries(marked);
+
+  repairable(session).dropOrphanedToolResults();
+
+  const after = history.rawEntries;
+  assert.equal(after.length, 4, 'the entry left holding nothing goes with its orphaned block');
+  assert.equal(after[1].__metadata.isSummary, true, 'still a summary');
+  assert.deepEqual(after[1].__metadata.coversRange,
+    { from: '2024-01-01T00:00:00.000Z', to: '2024-01-02T00:00:00.000Z' });
+  assert.equal(after[1].__metadata.date, originalDate, 'and it still dates from when it was made');
+  session.dispose();
+});
+
+// Appending the cancellation at the end only pairs it correctly when the
+// unanswered call was the last thing in history. This runs on every turn, to
+// heal a break inherited from an earlier build, where it is not.
+test('a dangling tool call mid-history is answered next to the call, not at the end', () => {
+  const session = makeSession(tempRoot(), makeClient());
+  const { history } = repairable(session);
+
+  history.addText('user', 'one');
+  history.addMessage('assistant', [toolUse('call-1', 'read_file', {})]);
+  history.addText('user', 'two');
+  history.addText('assistant', 'three');
+
+  repairable(session).repairDanglingToolCalls('the call did not complete');
+
+  const after = history.rawEntries;
+  assert.equal(after.length, 5);
+
+  const repair = after[2];
+  assert.equal(repair.role, 'user', 'the answer sits directly after the entry that called');
+  const block = repair.content[0];
+  assert.ok(isToolResultContent(block));
+  assert.equal(block.tool_use_id, 'call-1');
+  assert.match(block.content, /Cancelled/);
+
+  // Everything else keeps the order it had.
+  assert.deepEqual(
+    after.map((e) => e.role),
+    ['user', 'assistant', 'user', 'user', 'assistant'],
+  );
+
+  // And the repair actually closed the pairing.
+  repairable(session).repairDanglingToolCalls('again');
+  assert.equal(history.rawEntries.length, 5, 'a healthy history is left alone');
   session.dispose();
 });

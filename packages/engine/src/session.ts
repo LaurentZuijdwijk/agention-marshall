@@ -1,6 +1,7 @@
 import { join, dirname } from 'node:path';
 import { readFile, readdir, rm, appendFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import {
   History, AgentEvent, BaseAgent, isToolUseContent, isToolResultContent, toolResult,
 } from '@agentionai/agents/core';
@@ -36,11 +37,11 @@ import {
 } from './agent-factory.js';
 import { runAgent } from './streaming.js';
 import { formatTrace, traceMode } from './history-trace.js';
+import { SessionHistory } from './session-history.js';
 import { checkAttachments, buildInput } from './images.js';
 import type { ImageAttachment } from './images.js';
 import {
-  describeAgentError, providerErrorDiagnostics, isBadRequestError, isContextLengthError, isModelNotFoundError,
-  isDanglingToolCallError,
+  describeAgentError, providerErrorDiagnostics, classifyProviderError,
 } from './errors.js';
 import { resolveRoleProfile, resolveModel, routingSummary, resolveSearchProfile } from './config.js';
 import type {
@@ -160,7 +161,9 @@ function raceAbort<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
 }
 
 export class Session {
-  private readonly history: History;
+  /** `SessionHistory`, not `History`, for the metadata-preserving rebuild the
+   *  repair paths need — see session-history.ts. */
+  private readonly history: SessionHistory;
   private readonly maskingPlugin: ToolResultMaskingPlugin;
   private readonly dedupeCache: DedupeCache;
   /**
@@ -195,6 +198,13 @@ export class Session {
   private readonly events: SessionEvents;
   /** Owns the sub-agent tools and the per-turn belt — see session-tools.ts. */
   private readonly toolBelt: ToolBelt;
+  /**
+   * Sticky routing key for the coder agent's OpenRouter requests — see
+   * `CreateAgentOptions.promptCaching`. Without it, OpenRouter can load-balance
+   * consecutive requests to a different upstream instance with no warm cache to
+   * hit, silently turning the cache breakpoint into dead weight.
+   */
+  private readonly sessionId = randomUUID();
   private readonly logPath: string;
   private readonly logDirReady: Promise<void>;
   /** When this process's Session was constructed — logged alongside a provider
@@ -267,7 +277,7 @@ export class Session {
       exclude: NEVER_MASK_TOOLS,
     });
 
-    this.history = new History();
+    this.history = new SessionHistory();
     this.history.use(this.maskingPlugin);
     this.dedupeCache = createDedupeCache();
 
@@ -494,6 +504,7 @@ export class Session {
           inputTokens: usage.input_tokens,
           outputTokens: usage.output_tokens,
           ...(usage.reasoning_tokens !== undefined ? { reasoningTokens: usage.reasoning_tokens } : {}),
+          ...(usage.cost_usd !== undefined ? { costUsd: usage.cost_usd } : {}),
         });
       }
       // This agent's own rates, from timings the SDK took inside each API call.
@@ -578,11 +589,10 @@ export class Session {
 
   /** Remove the failed request's final message before rebuilding the prompt. */
   private popLastHistoryMessage(): boolean {
-    const entries = this.history.entries;
+    const entries = this.history.rawEntries;
     if (entries.length === 0) return false;
 
-    this.history.clear();
-    for (const entry of entries.slice(0, -1)) this.history.addEntry(entry);
+    this.history.replaceEntries(entries.slice(0, -1));
     this.log('CONTEXT_ERROR_POPPED_LAST_MESSAGE');
     return true;
   }
@@ -602,8 +612,10 @@ export class Session {
    * history — patches the pairing directly instead of guessing at the error
    * it would otherwise cause.
    */
-  private repairDanglingToolCalls(): void {
-    const entries = this.history.entries;
+  private repairDanglingToolCalls(reason = 'interrupted by the user before this call finished'): void {
+    this.dropOrphanedToolResults();
+
+    const entries = this.history.rawEntries;
     const answered = new Set<string>();
     for (const entry of entries) {
       for (const block of entry.content) {
@@ -611,18 +623,86 @@ export class Session {
       }
     }
 
+    // Grouped by the entry that made the calls, not collected into one flat
+    // list. Appending every cancellation at the end of history only pairs them
+    // correctly when the unanswered call was in the last assistant entry — the
+    // interrupt case. This also runs on every turn, to heal a pairing broken
+    // earlier, and there the call is somewhere in the middle: a tool result
+    // that does not directly follow the message that called for it is rejected
+    // just as a missing one is, so the repair has to land beside its call.
+    const danglingByEntry = new Map<number, string[]>();
     const dangling: string[] = [];
-    for (const entry of entries) {
-      if (entry.role !== 'assistant') continue;
+    entries.forEach((entry, index) => {
+      if (entry.role !== 'assistant') return;
       for (const block of entry.content) {
-        if (isToolUseContent(block) && !answered.has(block.id)) dangling.push(block.id);
+        if (!isToolUseContent(block) || answered.has(block.id)) continue;
+        const ids = danglingByEntry.get(index) ?? [];
+        ids.push(block.id);
+        danglingByEntry.set(index, ids);
+        dangling.push(block.id);
       }
-    }
+    });
     if (dangling.length === 0) return;
 
-    this.history.addMessage('user', dangling.map(id =>
-      toolResult(id, '[Cancelled: interrupted by the user before this call finished.]', true)));
-    this.log(`INTERRUPT_REPAIRED_DANGLING_TOOL_CALLS ${dangling.join(',')}`);
+    // Built through `addMessage` so the library measures each new entry the way
+    // it measures every other, then moved into place — `SessionHistory` can
+    // reorder entries but has no way to derive metadata for a fresh one.
+    const positions = [...danglingByEntry.keys()].sort((a, b) => a - b);
+    for (const index of positions) {
+      this.history.addMessage('user', danglingByEntry.get(index)!.map(id =>
+        toolResult(id, `[Cancelled: ${reason}.]`, true)));
+    }
+
+    const withAppended = this.history.rawEntries;
+    const repairs = withAppended.slice(withAppended.length - positions.length);
+    const rebuilt = withAppended.slice(0, withAppended.length - positions.length);
+    // Back to front, so each splice index still refers to the entry it was
+    // computed against.
+    for (let i = positions.length - 1; i >= 0; i--) {
+      rebuilt.splice(positions[i] + 1, 0, repairs[i]);
+    }
+    this.history.replaceEntries(rebuilt);
+    this.log(`REPAIRED_DANGLING_TOOL_CALLS ${dangling.join(',')}`);
+  }
+
+  /**
+   * The other half of the same break: a tool result whose call is no longer in
+   * history. Providers reject it identically, but it cannot be patched by
+   * adding anything — the call it answers is gone — so the result itself has to
+   * go. Removing whole entries would take the surrounding assistant text with
+   * them, so only the orphaned blocks are dropped, and an entry left with
+   * nothing is dropped with them.
+   *
+   * Reachable two ways, both of which lose an earlier entry while keeping a
+   * later one: compression summarising a middle window, and
+   * `popLastHistoryMessage` discarding a rejected request's tail.
+   */
+  private dropOrphanedToolResults(): void {
+    // `rawEntries`, not `entries`: the latter strips `__metadata`, and writing
+    // the result back through `addEntry` would regenerate it — taking a
+    // compression summary's `isSummary`/`coversRange` with it. See SessionHistory.
+    const entries = this.history.rawEntries;
+    const calls = new Set<string>();
+    for (const entry of entries) {
+      for (const block of entry.content) {
+        if (isToolUseContent(block)) calls.add(block.id);
+      }
+    }
+
+    const orphaned: string[] = [];
+    const repaired = entries.map(entry => {
+      const kept = entry.content.filter(block => {
+        if (!isToolResultContent(block) || calls.has(block.tool_use_id)) return true;
+        orphaned.push(block.tool_use_id);
+        return false;
+      });
+      return kept.length === entry.content.length ? entry : { ...entry, content: kept };
+    }).filter(entry => entry.content.length > 0);
+
+    if (orphaned.length === 0) return;
+
+    this.history.replaceEntries(repaired);
+    this.log(`REPAIRED_ORPHANED_TOOL_RESULTS ${orphaned.join(',')}`);
   }
 
   // ── background jobs ─────────────────────────────────────────────────────────
@@ -993,6 +1073,13 @@ export class Session {
     // the unhandled-rejection crash, and doing it here keeps it awaited.
     await this.compression.compressIfNeeded();
 
+    // After compression, not before: this is the last point at which history can
+    // still be fixed before the provider sees it, and compression is one of the
+    // things that used to break it. Cheap and a no-op on a healthy session — it
+    // also lets a session already carrying a broken pairing from an earlier
+    // build heal itself rather than failing every turn from here on.
+    this.repairDanglingToolCalls('the call did not complete');
+
     const memoryPath = join(this.config.workspaceRoot, 'AGENTS.md');
     const projectMemory = existsSync(memoryPath)
       ? await readFile(memoryPath, 'utf8').catch(() => '')
@@ -1058,6 +1145,12 @@ export class Session {
         // key off whether their tool resolved — and this closes the same gap for
         // the fixed rules.
         systemPrompt: buildSystemPrompt({ scratch: !light, background: !light }),
+        // The one long-lived agent in the session: this same History (and so
+        // the same system prompt and tool schemas) is resent on every turn.
+        // See CreateAgentOptions.promptCaching for why every other caller
+        // (sub-agents, the compression summariser) leaves this off.
+        promptCaching: true,
+        sessionId: this.sessionId,
       });
       if (coderProfile.provider === 'llamacpp') this.llamaModelLoaded = true;
       this.currentAgent = agent;
@@ -1072,9 +1165,13 @@ export class Session {
       agent.on(AgentEvent.ERROR, (err: unknown) => {
         if (signal.aborted) return;
         const message = err instanceof Error ? err.message : String(err);
-        const recoverable = !isModelNotFoundError(message) && !isDanglingToolCallError(message)
-          && (isBadRequestError(err) || isContextLengthError(message));
-        this.log(`AGENT_ERROR ${diag} recoverable=${recoverable} ${JSON.stringify(message)} details=${providerErrorDiagnostics(err)}`);
+        const verdict = classifyProviderError(err, message);
+        const recoverable = verdict.compressible;
+        this.log(
+          `AGENT_ERROR ${diag} kind=${verdict.kind} recoverable=${recoverable} ` +
+          `because=${JSON.stringify(verdict.reason)} ${JSON.stringify(message)} ` +
+          `details=${providerErrorDiagnostics(err)}`,
+        );
         // Every agent error also rejects the promise `stream()` is awaiting (see
         // createAgent's comment on the safety-net listener), so a recoverable
         // error reaches the try/catch below regardless of whether it's reported
@@ -1107,10 +1204,17 @@ export class Session {
         response = await stream(buildInput(effectiveTask, images));
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        const shouldRecover = !isModelNotFoundError(message) && !isDanglingToolCallError(message)
-          && (isBadRequestError(err) || isContextLengthError(message));
-        this.log(`STREAM_ERROR ${diag} shouldRecover=${shouldRecover} aborted=${signal.aborted} ${JSON.stringify(message)}`);
-        if (!shouldRecover || signal.aborted) throw err;
+        const verdict = classifyProviderError(err, message);
+        this.log(
+          `STREAM_ERROR ${diag} kind=${verdict.kind} shouldCompress=${verdict.compressible} ` +
+          `because=${JSON.stringify(verdict.reason)} aborted=${signal.aborted} ` +
+          `${JSON.stringify(message)} details=${providerErrorDiagnostics(err)}`,
+        );
+        if (!verdict.compressible || signal.aborted) {
+          this.log(`NO_COMPRESSION ${diag} kind=${verdict.kind} — reporting the provider error as-is`);
+          throw err;
+        }
+        this.log(`COMPRESSION_TRIGGERED_BY_ERROR ${diag} kind=${verdict.kind} because=${JSON.stringify(verdict.reason)}`);
 
         // Our own token estimate is unreliable for code-heavy content (see
         // contextErrorTarget's comment) — it can miss by 15k+ tokens on a
@@ -1124,6 +1228,10 @@ export class Session {
         // turn to history. Remove that invalid tail before compressing,
         // otherwise the bad message survives into the summary.
         this.popLastHistoryMessage();
+        // Popping an entry can strand a tool result whose call went with it, so
+        // the retry would fail on a pairing error instead of the overflow it was
+        // sent back to fix.
+        this.repairDanglingToolCalls('the request it belonged to was rejected');
         const compressed = await this.compression.compressForContextError(message);
 
         // A 400 only *might* be an overflow: providers that report one without
@@ -1133,12 +1241,15 @@ export class Session {
         // window is not what went wrong — an OpenAI tool-schema rejection spent
         // a release being reported as a full context window over 921 tokens.
         // Show what the provider actually said instead of guessing.
-        if (!compressed && !isContextLengthError(message)) {
-          this.log(`BAD_REQUEST_NOT_CONTEXT ${diag} ${JSON.stringify(message)}`);
+        if (!compressed && verdict.kind !== 'context-length') {
+          this.log(`BAD_REQUEST_NOT_CONTEXT ${diag} kind=${verdict.kind} nothing compressed — reporting the provider error instead ${JSON.stringify(message)}`);
           throw err;
         }
 
-        this.log(`CONTEXT_ERROR_HANDED_BACK compressed=${compressed}`);
+        // Worth reading in the log next to the line above: when the guess was
+        // `maybe-context` and compression *did* free tokens, this is reported as
+        // a full context window without the provider ever having said so.
+        this.log(`CONTEXT_ERROR_HANDED_BACK ${diag} kind=${verdict.kind} compressed=${compressed}`);
         this.steeringContext = task;
         this.client.onOutput({ type: 'context-full', compressed });
         return;

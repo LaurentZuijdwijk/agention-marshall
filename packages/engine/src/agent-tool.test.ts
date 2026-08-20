@@ -151,6 +151,26 @@ test('fan-out is visible in the log — all starts precede the first end', async
   assert.deepEqual(events.slice(3).sort(), ['end#0', 'end#1', 'end#2']);
 });
 
+// The usage tally prefers a provider-reported cost to a price-table lookup, and
+// for a sub-agent on a model missing from the catalogue it is the only figure
+// there is — so it has to survive the hop from the agent to onEnd rather than
+// being narrowed away by the type in between.
+test('a provider-reported cost reaches onEnd alongside the token counts', async () => {
+  const ends: Array<number | undefined> = [];
+  const tool = agentTool({
+    name: 'probe',
+    description: 'probe',
+    spawn: async (): Promise<Executable> => ({
+      execute: async () => 'ok',
+      lastTokenUsage: { input_tokens: 100, output_tokens: 20, cost_usd: 0.0125 },
+    }),
+    onEnd: ({ usage }) => ends.push(usage?.cost_usd),
+  });
+
+  await call(tool, 'x');
+  assert.deepEqual(ends, [0.0125]);
+});
+
 test('a failing invocation reports the error through onEnd', async () => {
   const ends: Array<{ error?: string }> = [];
   const tool = agentTool({

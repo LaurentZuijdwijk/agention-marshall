@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { History } from '@agentionai/agents/core';
+import { History, isToolResultContent, isToolUseContent, toolResult, toolUse } from '@agentionai/agents/core';
 import type { ReducibleEntry } from '@agentionai/agents/core';
 import { compactSummaryPrompt, CompressionManager, middleCompressionPlugin } from './session-compression.js';
 import type { EngineConfig } from './config.js';
@@ -278,4 +278,113 @@ test('compressForContextError drives the real reduce plugin end-to-end with a st
   assert.equal(reduced, true, 'a working stub summariser should let compression report progress');
   assert.ok(history.totalEstimatedTokens < current, 'history should shrink below its starting size');
   assert.ok(logs.some(line => line.includes('CONTEXT_ERROR_COMPRESSED')));
+});
+
+// ── tool-call pairing ─────────────────────────────────────────────────────────
+//
+// The tail is chosen by token budget alone, so its boundary lands wherever the
+// arithmetic puts it. Landing it between an assistant's tool call and the entry
+// carrying that call's result used to summarise the call away and keep the
+// result, which OpenAI, Azure and OpenRouter all reject with a bare 400
+// ("Missing tool call ID reference for function call outputs"). That 400 has no
+// context-length wording, so it was read as an overflow and answered with
+// another compression pass — which could split the next pair the same way.
+
+function reducible(role: string, content: unknown[], estimatedTokens: number): ReducibleEntry {
+  return {
+    role,
+    content,
+    __metadata: { date: new Date().toISOString(), contentLength: 0, estimatedTokens },
+  } as unknown as ReducibleEntry;
+}
+
+/** `HistoryPlugin.reduce` is optional on the interface; this one always has it. */
+function reduceWith(
+  plugin: ReturnType<typeof middleCompressionPlugin>,
+  entries: ReducibleEntry[],
+  maxTokens: number,
+): Promise<readonly ReducibleEntry[]> {
+  assert.ok(plugin.reduce, 'the compression plugin defines reduce');
+  return plugin.reduce(entries, { maxTokens });
+}
+
+/** Tool-call ids that survived, and result ids left with nothing to answer. */
+function pairing(entries: readonly ReducibleEntry[]): { calls: string[]; orphaned: string[] } {
+  const calls = new Set<string>();
+  const orphaned: string[] = [];
+  for (const entry of entries) {
+    for (const block of entry.content) {
+      if (isToolUseContent(block)) calls.add(block.id);
+      else if (isToolResultContent(block) && !calls.has(block.tool_use_id)) orphaned.push(block.tool_use_id);
+    }
+  }
+  return { calls: [...calls], orphaned };
+}
+
+const CONVERSATION_WITH_A_TOOL_CALL = (): ReducibleEntry[] => [
+  reducible('user', [{ type: 'text', text: 'start the task' }], 100),
+  reducible('assistant', [{ type: 'text', text: 'thinking about it' }], 100),
+  reducible('user', [{ type: 'text', text: 'go on' }], 100),
+  reducible('assistant', [toolUse('call_A', 'read_file', { path: 'a.ts' })], 100),
+  reducible('user', [toolResult('call_A', 'file contents', false)], 100),
+  reducible('assistant', [{ type: 'text', text: 'here is what I found' }], 100),
+];
+
+test('compression never keeps a tool result whose call it summarised away', async () => {
+  const entries = CONVERSATION_WITH_A_TOOL_CALL();
+  const plugin = middleCompressionPlugin(async () => 'a summary');
+
+  // Every budget, not one: which boundary splits the pair is arithmetic, and
+  // the point is that no budget can produce a result without its call.
+  for (let maxTokens = 100; maxTokens <= 700; maxTokens += 25) {
+    const reduced = await reduceWith(plugin, entries, maxTokens);
+    const { orphaned } = pairing(reduced);
+    assert.deepEqual(orphaned, [], `maxTokens ${maxTokens} stranded a tool result`);
+  }
+});
+
+test('the pair is kept together, or summarised together — never half of it', async () => {
+  const entries = CONVERSATION_WITH_A_TOOL_CALL();
+  const logs: string[] = [];
+  const plugin = middleCompressionPlugin(async () => 'a summary', line => logs.push(line));
+
+  // 350 puts the budget boundary exactly between the call and its result.
+  const reduced = await reduceWith(plugin, entries, 350);
+  const { calls, orphaned } = pairing(reduced);
+
+  assert.deepEqual(orphaned, []);
+  assert.deepEqual(calls, [], 'the call went into the summary, so its result had to as well');
+  assert.ok(logs.some(line => line.includes('COMPRESSION_TAIL_ALIGNED')),
+    `the boundary move should be visible in the log: ${logs.join(' | ')}`);
+});
+
+test('a budget with room for the whole pair keeps both halves', async () => {
+  const entries = CONVERSATION_WITH_A_TOOL_CALL();
+  const plugin = middleCompressionPlugin(async () => 'a summary');
+
+  const reduced = await reduceWith(plugin, entries, 450);
+  const { calls, orphaned } = pairing(reduced);
+
+  assert.deepEqual(calls, ['call_A'], 'the call is still there');
+  assert.deepEqual(orphaned, []);
+});
+
+test('compression is skipped rather than emitting a history the provider rejects', async () => {
+  // The preserved first entry is a tool call whose result sits in the middle:
+  // no boundary can save it, because `first` is kept unconditionally.
+  const entries: ReducibleEntry[] = [
+    reducible('assistant', [toolUse('call_Z', 'read_file', {})], 100),
+    reducible('user', [toolResult('call_Z', 'contents', false)], 100),
+    reducible('assistant', [{ type: 'text', text: 'filler' }], 100),
+    reducible('user', [{ type: 'text', text: 'more filler' }], 100),
+    reducible('assistant', [{ type: 'text', text: 'the newest thing' }], 100),
+  ];
+  const logs: string[] = [];
+  const plugin = middleCompressionPlugin(async () => 'a summary', line => logs.push(line));
+
+  const reduced = await reduceWith(plugin, entries, 250);
+
+  assert.equal(reduced, entries, 'history is handed back untouched');
+  assert.ok(logs.some(line => line.includes('COMPRESSION_SKIPPED_BROKEN_PAIRING')),
+    `the skip should say why: ${logs.join(' | ')}`);
 });
