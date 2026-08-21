@@ -26,6 +26,8 @@ const OPTIONS = {
   'fast-model':     { type: 'string'  },
   'fast-provider':  { type: 'string'  },
   'fast-host':      { type: 'string'  },
+  message:          { type: 'string'  },
+  safety:           { type: 'string'  },
   help:             { type: 'boolean', short: 'h' },
 } as const;
 
@@ -48,6 +50,11 @@ export interface CliFlags {
   webSearch: boolean;
   /** Undefined means "not asked for on the CLI" — the config still gets a say. */
   light?: boolean;
+  /** A single task to run non-interactively, then exit. No Ink, no REPL. */
+  message?: string;
+  /** Same words as `/safety` — `yolo`, `default`, `agentic`. Headless mode
+   *  (`--message`) requires `yolo`: there is no human to fall back on. */
+  safety?: string;
   help: boolean;
 }
 
@@ -77,6 +84,8 @@ export function parseCliArgs(argv: string[] = process.argv.slice(2)): CliFlags {
     contextModel:   str(values['context-model']),
     plannerModel:   str(values['planner-model']),
     reviewerModel:  str(values['reviewer-model']),
+    message:        str(values.message),
+    safety:         str(values.safety),
     github:         values.github === true,
     light:          values.light === true ? true : undefined,
     webSearch:      values['no-web-search'] !== true,
@@ -113,6 +122,10 @@ Options:
                            sub-agents, and a prompt with only the rules that still apply
                            (~1100 fewer tokens per request). Also /runtime light in the
                            session, which saves it for next time
+      --message <task>    Run one task non-interactively and exit — no Ink, no REPL.
+                           For scripting and benchmark harnesses. Requires --safety yolo.
+      --safety <word>     Same words as /safety: yolo, default, agentic. --message needs
+                           yolo — there is no human for any other level to fall back on.
   -h, --help              Show this help
 
 Provider defaults:
@@ -129,5 +142,6 @@ Examples:
            --fast-provider llamacpp --fast-host http://192.168.1.248:8080 --fast-model Gemma-4-E4B-MTP .
   marshall --provider openrouter --model anthropic/claude-sonnet-4.6 .
   marshall --provider claude --model claude-opus-4-6 /path/to/project
+  marshall --safety yolo --message "fix the failing test" /path/to/project
 `.trim();
 }

@@ -14,6 +14,7 @@ import { installCrashLogging } from './startup/crash-log.js';
 import { installHttpTrace } from './startup/http-trace.js';
 import { maybeRespawnForHeap } from './startup/heap-size.js';
 import { installResizeRedraw } from './view/resize.js';
+import { runHeadless } from './startup/headless.js';
 
 // Long sessions can exhaust Node's old-space heap, which is only raised by a
 // startup flag. Re-exec with --max-old-space-size when it isn't already set,
@@ -54,6 +55,11 @@ try {
   if (!(err instanceof StartupError)) throw err;
   console.error(err.message);
   process.exit(1);
+}
+
+if (flags.message !== undefined) {
+  const code = await runHeadless(flags, workspaceRoot, profiles);
+  process.exit(code);
 }
 
 installCrashLogging(workspaceRoot);
