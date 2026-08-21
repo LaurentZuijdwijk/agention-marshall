@@ -1,7 +1,7 @@
 import React from 'react';
 import { Box, Text } from 'ink';
 import { C, G } from './theme.js';
-import { clampToRows } from '../format.js';
+import { clampToRows, reflowProse } from '../format.js';
 import { safeWidth } from './layout.js';
 
 /**
@@ -54,6 +54,11 @@ export function LiveOutput({ stream, reasoning, columns, rows }: {
   if (stream === '' && reasoning === '') return null;
 
   const width = liveWidth(columns);
+  // The reasoning block has no `◆ ` gutter, so it gets the two columns back
+  // that `liveWidth` holds for the stream's. Measuring it two columns narrower
+  // than the box it renders into would budget rows against a width Ink is not
+  // using, which is the one thing this arithmetic must not do.
+  const reasoningWidth = safeWidth(columns);
   const budget = splitLiveRows(rows, stream !== '' && reasoning !== '');
   const streamRows = budget.stream;
   const reasoningRows = budget.reasoning;
@@ -64,7 +69,7 @@ export function LiveOutput({ stream, reasoning, columns, rows }: {
           them in — and it is what lands in <Static> when the turn completes. */}
       {reasoning !== '' && (
         <Box marginBottom={1}>
-          <Text color={C.thinking} italic>{clampToRows(reasoning, width, reasoningRows)}</Text>
+          <Text color={C.thinking} italic>{clampToRows(reflowProse(reasoning), reasoningWidth, reasoningRows)}</Text>
         </Box>
       )}
 

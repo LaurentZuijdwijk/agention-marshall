@@ -4,7 +4,7 @@ import { Header, STARTUP_TAGLINES } from './Banner.js';
 import { MarkdownView } from './MarkdownView.js';
 import { C, G } from './theme.js';
 import { AssistantText } from './AssistantText.js';
-import { truncate } from '../format.js';
+import { reflowProse, truncate } from '../format.js';
 import type { Message } from './message.js';
 
 // ── message row ────────────────────────────────────────────────────────────────
@@ -273,7 +273,7 @@ export function MessageRow({ msg, columns = process.stdout.columns ?? 80 }: {
       return (
         <Box flexDirection="column" marginY={1}>
           <Text color={C.thinking} bold>reasoning</Text>
-          <Text color={C.thinking} italic>{msg.content}</Text>
+          <Text color={C.thinking} italic>{reflowProse(msg.content)}</Text>
         </Box>
       );
 

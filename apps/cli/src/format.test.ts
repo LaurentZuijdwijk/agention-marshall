@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { formatToolInput, formatToolName, shortenPath, truncate, clampToRows, windowRange, formatUsageReport } from './format.js';
+import { formatToolInput, formatToolName, shortenPath, truncate, clampToRows, reflowProse, windowRange, formatUsageReport } from './format.js';
+import wrapAnsi from 'wrap-ansi';
 import type { UsageReport } from '@agentionai/marshall-engine';
 import { mix, brand } from './view/theme.js';
 
@@ -114,6 +115,39 @@ describe('clampToRows', () => {
     assert.ok(rows <= 6, `expected <= 6 rows, got ${rows}`);
   });
 
+  // The budget is only worth something if it is counted the way the rows are
+  // actually drawn. Chopping every `width` characters packs more into a row
+  // than word wrapping does, so a chop-counted budget under-counts and the live
+  // region overruns the viewport — which is what makes Ink clear the terminal
+  // and reprint the whole transcript on every token. Ten paragraphs of prose at
+  // 140 columns budgeted 21 rows and drew 31 before this held.
+  it('never exceeds the budget once wrapped the way Ink wraps it', () => {
+    const paragraph = 'The build succeeded and the chunk-size warning is expected and harmless '
+      + 'for a demo. Now smoke-test the dev server: start it in the background, curl the root '
+      + 'page and a transformed module to confirm 200s, then kill.';
+    for (const columns of [40, 60, 80, 100, 138]) {
+      for (const maxRows of [2, 6, 16, 32]) {
+        for (const reps of [1, 3, 10, 40]) {
+          const out = clampToRows(`${paragraph}\n\n`.repeat(reps), columns, maxRows);
+          const drawn = wrapAnsi(out, columns, { trim: true, hard: true }).split('\n').length;
+          assert.ok(
+            drawn <= maxRows,
+            `columns=${columns} maxRows=${maxRows} reps=${reps}: budgeted ${maxRows} rows, Ink draws ${drawn}`,
+          );
+        }
+      }
+    }
+  });
+
+  // A word longer than the whole width is the case that makes the two wrappers
+  // disagree most: Ink breaks it (`hard: true`), so it costs several rows where
+  // a naive word wrap would call it one.
+  it('counts a word wider than the terminal as the rows it really takes', () => {
+    const out = clampToRows(`${'z'.repeat(95)}\ntail`, 10, 3);
+    const drawn = wrapAnsi(out, 10, { trim: true, hard: true }).split('\n').length;
+    assert.ok(drawn <= 3, `expected <= 3 rows, Ink draws ${drawn}`);
+  });
+
   it('degrades safely on a zero-sized terminal', () => {
     assert.equal(clampToRows('anything', 0, 10), '');
     assert.equal(clampToRows('anything', 80, 0), '');
@@ -152,6 +186,47 @@ describe('theme colours', () => {
     for (let i = 0; i <= 10; i++) {
       assert.match(brand(i / 10), /^#[0-9a-f]{6}$/);
     }
+  });
+});
+
+describe('reflowProse', () => {
+  // The failure this exists for: an endpoint that terminates every reasoning
+  // delta with a newline. Rendered as-is that is one token per row — a column
+  // of single words down the left edge, many times taller than its row budget.
+  it('reflows a stream broken at every delta', () => {
+    const perDelta = 'The\n build\n succeeded\n and\n it\n is\n expected\n.';
+    assert.equal(reflowProse(perDelta), 'The build succeeded and it is expected.');
+  });
+
+  // Deltas carry their own leading space, so the join has to be flat wherever
+  // one is not wanted — "smoke -test" and "expected ." are what inserting a
+  // space unconditionally produces.
+  it('does not weld a space into punctuation or a hyphenated word', () => {
+    assert.equal(reflowProse('smoke\n-test\n the\n server\n,\n then\n kill\n.'), 'smoke-test the server, then kill.');
+  });
+
+  // The opposite case, and the reason the join is not simply a deletion: a
+  // break a model wrote inside a paragraph *is* a word separator.
+  it('restores the space a model line break stood in for', () => {
+    assert.equal(reflowProse('First paragraph runs\non two source lines.'), 'First paragraph runs on two source lines.');
+  });
+
+  it('keeps blank lines as paragraph breaks', () => {
+    assert.equal(reflowProse('One.\n\nTwo.'), 'One.\n\nTwo.');
+  });
+
+  // Real model output pads its blank lines, and a live buffer is full of
+  // half-written whitespace; neither should become a stray blank row.
+  it('normalises padded and repeated blank lines, and trims the ends', () => {
+    assert.equal(reflowProse('One.\n   \nTwo.'), 'One.\n\nTwo.');
+    assert.equal(reflowProse('One.\n\n\n\nTwo.'), 'One.\n\nTwo.');
+    assert.equal(reflowProse('\n\n  Hello there.  \n\n'), 'Hello there.');
+  });
+
+  it('leaves ordinary prose alone and handles nothing at all', () => {
+    assert.equal(reflowProse('Just one line.'), 'Just one line.');
+    assert.equal(reflowProse(''), '');
+    assert.equal(reflowProse('  \n\n  '), '');
   });
 });
 

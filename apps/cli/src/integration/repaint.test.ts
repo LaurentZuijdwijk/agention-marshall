@@ -152,3 +152,33 @@ test('nothing ever reaches the terminal edge', async (t) => {
     );
   }
 });
+
+// ── reasoning that arrives pre-broken ─────────────────────────────────────────
+//
+// Reasoning is the one text on screen whose line structure the provider decides.
+// An OpenRouter stealth endpoint terminated every delta with a newline, and the
+// reasoning block rendered as a column of single words down the left edge —
+// `for` / `a` / `demo` / `).`, one per row, forty rows for two sentences.
+//
+// Worth asserting end to end rather than on `reflowProse` alone: the two
+// reasoning rows (live preview and committed row) are separate components, and
+// the failure is only visible once one of them has actually been drawn.
+const PER_DELTA_REASONING = 'The build succeeded and the chunk-size warning is expected and harmless for a demo. '
+  .split(' ').map(word => ` ${word}`).join('\n');
+
+test('reasoning broken at every delta still renders as prose', async (t) => {
+  for (const size of [{ columns: 60, rows: 24 }, { columns: 100, rows: 30 }, { columns: 137, rows: 46 }]) {
+    const app = await drive(t, [{ reasoning: PER_DELTA_REASONING, text: 'Done.' }], size);
+
+    await app.submit('check the build');
+    await app.until('Done.', 'the final answer');
+
+    // The words are all there, on far fewer rows than there are words.
+    const rows = app.screen.lines().filter(line => line.includes('chunk-size warning'));
+    assert.ok(rows.length > 0, `the reasoning never reached the screen:\n${app.screen.text()}`);
+    assert.ok(
+      rows.every(row => row.trim().split(/\s+/).length > 1),
+      `reasoning rendered one word per row at ${size.columns} columns:\n${app.screen.text()}`,
+    );
+  }
+});

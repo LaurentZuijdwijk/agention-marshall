@@ -587,6 +587,25 @@ export class Session {
       .catch(() => {});
   }
 
+  /**
+   * Record raw reasoning deltas, exactly as the provider sent them.
+   *
+   * `MARSHALL_TRACE_REASONING=1` appends one JSON-encoded delta per line to
+   * `.marshall/logs/reasoning.log`. JSON rather than the text itself because
+   * the whole question this answers is about whitespace: whether a provider
+   * terminates every delta with a newline, which renders reasoning as a column
+   * of single words and is invisible in a log that writes the text raw.
+   *
+   * Off by default and read at call time, like `traceHistory`, so enabling it
+   * is a restart and disabling it costs nothing.
+   */
+  private traceReasoning(text: string): void {
+    if (process.env.MARSHALL_TRACE_REASONING !== '1') return;
+    this.logDirReady
+      .then(() => appendFile(join(dirname(this.logPath), 'reasoning.log'), `${JSON.stringify(text)}\n`))
+      .catch(() => {});
+  }
+
   /** Remove the failed request's final message before rebuilding the prompt. */
   private popLastHistoryMessage(): boolean {
     const entries = this.history.rawEntries;
@@ -1193,6 +1212,7 @@ export class Session {
       const stream = (input: string | ReturnType<typeof buildInput>): Promise<string> =>
         raceAbort(runAgent(agent, input, chunk => {
           if (signal.aborted) return;
+          if (chunk.type === 'reasoning') this.traceReasoning(chunk.content);
           this.client.onOutput(chunk.type === 'reasoning'
             ? { type: 'reasoning', text: chunk.content }
             : { type: 'token', text: chunk.content });
