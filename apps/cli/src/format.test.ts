@@ -163,10 +163,26 @@ describe('clampToRows', () => {
     // that's true — repeatedly calling it on a fixed-size input should be
     // linear in the call count, not in how many times it's been called.
     const bounded = 'the quick brown fox jumps over the lazy dog. '.repeat(400); // ~18.8k chars
-    const start = Date.now();
-    for (let i = 0; i < 5000; i++) clampToRows(bounded, 80, 20);
-    const elapsed = Date.now() - start;
-    assert.ok(elapsed < 2000, `expected well under 2s for 5000 calls on a fixed ~19k input, took ${elapsed}ms`);
+    // Warm up first so JIT noise lands outside the measured batches.
+    for (let i = 0; i < 200; i++) clampToRows(bounded, 80, 20);
+    const perCall = (calls: number) => {
+      const start = Date.now();
+      for (let i = 0; i < calls; i++) clampToRows(bounded, 80, 20);
+      return (Date.now() - start) / calls;
+    };
+    const early = perCall(1000);
+    const late = perCall(4000);
+    // With a fixed input every honest call costs the same, so the later batch
+    // must not cost materially more per call than the earlier one: hidden
+    // accumulating state (a mis-keyed cache, a ever-growing array) is exactly
+    // what would make it. Comparing the two batches instead of asserting one
+    // wall-clock total keeps machine speed out of the equation — an absolute
+    // budget calibrated as "~0.4ms per call, so 2s for 5000" had zero headroom
+    // and failed on any hardware slower than the author's.
+    assert.ok(
+      late < Math.max(early * 3, early + 0.5),
+      `clampToRows got more expensive as calls accumulated: ${early.toFixed(3)}ms/call -> ${late.toFixed(3)}ms/call`,
+    );
   });
 });
 
