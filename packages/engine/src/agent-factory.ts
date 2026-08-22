@@ -58,7 +58,8 @@ export interface PromptCapabilities {
 }
 
 const PROMPT_HEADER =
-  'You are Marshall, a coding assistant. Be terse and direct — no filler, no emojis, no padding.';
+  'You are an expert coding assistant operating inside Marshall, a coding agent harness. '
+  + 'No filler, no emojis, no padding.';
 
 const FILE_RULES = [
   '- Always read_file before writing or editing an existing file',

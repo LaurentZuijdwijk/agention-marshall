@@ -1,5 +1,32 @@
 # @agentionai/marshall-cli
 
+## 0.22.0
+
+### Minor Changes
+
+- 7d2b3e7: Add `--message`/`--safety` for running one task non-interactively and exiting — no Ink, no
+  REPL — for scripting and benchmark harnesses (built for the Harbor/Terminal-Bench agent
+  adapter under `bench/harbor_agent/`). `--message <task>` requires `--safety yolo`, since
+  headless mode has no human to fall back on and the other two levels both still end in "ask a
+  human." Output is a plain-text transcript on stdout, plus a `MARSHALL_USAGE` marker line with
+  final token/cost totals (turn and session, `reasoningTokens` broken out where the provider
+  reports it) once the turn ends. Exit code reflects the run: 1 on any engine error or
+  interruption, 0 otherwise.
+- 7d2b3e7: Add `--version` to print the installed version and exit. Doubles as what the Harbor/Terminal-Bench
+  agent adapter (`bench/harbor_agent/`) reads back via `get_version_command`, so which marshall
+  build produced a trial is recorded in the result rather than left implicit.
+
+### Patch Changes
+
+- 7d2b3e7: Fix the `--max-old-space-size` respawn wrapper always exiting 0, regardless of the child
+  process's actual exit code. Silent under the interactive REPL, where nobody checks `$?` after
+  quitting — but it would have made every failure in the new `--message` headless mode read as
+  success to whatever invoked it. A signal with no exit code (the child was killed) now reports 1
+  rather than defaulting to 0.
+- Updated dependencies [014ea7a]
+- Updated dependencies
+  - @agentionai/marshall-engine@0.21.0
+
 ## 0.21.4
 
 ### Patch Changes

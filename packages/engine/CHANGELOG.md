@@ -1,5 +1,45 @@
 # @agentionai/marshall-engine
 
+## 0.21.0
+
+### Minor Changes
+
+- 014ea7a: Retry a dropped connection mid-turn instead of ending it. A `'connection'`-classified provider
+  error (`fetch failed`, `terminated`, `ECONNRESET`, ...) is not the provider saying no — the
+  request was simply never answered — so it no longer goes straight to the client as a failure.
+  History already holds everything the turn did up to the drop (tool calls, their results,
+  reasoning), so the retry is a short "continue where you left off" nudge, not a resend of the
+  original task. Bounded (`EngineConfig.maxConnectionRetries`, default 3) with exponential backoff
+  plus jitter (`connectionRetryBaseMs`, default 2000ms, capped at 30s) — a genuinely dead endpoint
+  still ends the turn and reports the error, just after giving it a real chance to recover first.
+
+  Surfaced by a Terminal-Bench run where a long tool-calling turn (5+ hours, 330K input tokens of
+  real progress) was thrown away entirely by one transient network blip.
+
+  Also fixes `isConnectionError` not matching `terminated` — Node's `fetch` error for a socket the
+  far end closed mid-response, and, on a very long turn, one of the more likely ways to see this at
+  all.
+
+### Patch Changes
+
+- Rework the coder's system-prompt header: "You are an expert coding assistant operating inside
+  Marshall, a coding agent harness." replaces "You are Marshall, a coding assistant. Be terse and
+  direct — no filler, no emojis, no padding."
+
+  Two changes. First, "Be terse and direct" is gone — plausible instinct is that it was pushing
+  weaker/local models toward rushed, incomplete answers on multi-step tasks rather than genuinely
+  concise ones; "no filler, no emojis, no padding" already covers unwanted padding without also
+  capping how much verification or explanation a hard task needs. Second, "You are Marshall" (a
+  branded persona) becomes "an expert coding assistant operating inside Marshall, a coding agent
+  harness" — Marshall is what the model is _running inside_, not what it _is_. Modeled on how pi
+  (`@earendil-works/pi-coding-agent`), the closest comparable open-source harness, frames the same
+  thing: "You are an expert coding assistant operating inside pi, a coding agent harness." "Expert"
+  carries over from that same comparison (also Aider's "Act as an expert software developer") on
+  the theory that it measurably helps model confidence on coding tasks.
+
+  Not yet benchmarked in isolation — see bench/harbor_agent/ for the Terminal-Bench harness this
+  can be evaluated against.
+
 ## 0.20.2
 
 ### Patch Changes
