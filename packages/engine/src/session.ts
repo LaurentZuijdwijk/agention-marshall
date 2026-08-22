@@ -3,8 +3,9 @@ import { readFile, readdir, rm, appendFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import {
-  History, AgentEvent, BaseAgent, isToolUseContent, isToolResultContent, toolResult,
+  History, AgentEvent, BaseAgent, isToolUseContent, isToolResultContent, isTextContent, toolResult, text,
 } from '@agentionai/agents/core';
+import type { ReducibleEntry } from '@agentionai/agents/core';
 import { toolResultMaskingPlugin } from '@agentionai/agents/history/plugins';
 import type { ToolResultMaskingPlugin } from '@agentionai/agents/history/plugins';
 import {
@@ -30,6 +31,9 @@ import type { McpServerConfig, McpServerState } from './mcp.js';
 import {
   createAgent,
   buildSystemPrompt,
+  buildAgentDescription,
+  agentSystemMessage,
+  DEFAULT_AGENT_NAME,
   PLANNER_AGENT_PROMPT,
   GOAL_AGENT_PROMPT,
   REVIEWER_AGENT_PROMPT,
@@ -651,6 +655,48 @@ export class Session {
       .catch(() => {});
   }
 
+  /**
+   * Keeps the shared History's system entry first and current.
+   *
+   * The SDK's own system-message guard (`BaseAgent.addSystemMessage`) only
+   * skips re-adding when the content is byte-identical to what is already
+   * there — otherwise it *appends* a second system entry rather than
+   * replacing the first, since `History.addSystem` is a plain push. This
+   * session's History is shared and long-lived (`createAgent` is called
+   * fresh every turn, same object), and the effective prompt genuinely does
+   * change turn to turn — `/runtime light`, `/runtime agentic`, any change
+   * to which tools are available. Left alone, the stale entry stays where it
+   * was and is no longer first once real turns follow it, and several
+   * providers reject that outright (llama.cpp's Jinja template: "System
+   * message must be at the beginning").
+   *
+   * Pre-inserting the correct content here — byte-identical to what
+   * `createAgent`'s own call is about to ask for, via the same
+   * `agentSystemMessage`/`buildAgentDescription` `agent-factory.ts` uses
+   * internally — makes that check always match: a no-op when nothing
+   * changed, a clean replace-and-reposition when it did.
+   */
+  private syncSystemMessage(name: string, description: string): void {
+    const expected = agentSystemMessage(name, description);
+    const entries = this.history.rawEntries;
+    const currentText = (entry: ReducibleEntry) =>
+      entry.content.filter(isTextContent).map(block => block.text).join('\n');
+    if (entries[0]?.role === 'system' && currentText(entries[0]) === expected) return;
+
+    const rest = entries.filter(entry => entry.role !== 'system');
+    const fresh: ReducibleEntry = {
+      role: 'system',
+      content: [text(expected)],
+      __metadata: {
+        date: new Date().toISOString(),
+        contentLength: expected.length,
+        estimatedTokens: Math.ceil(expected.length / 4),
+      },
+    };
+    this.history.replaceEntries([fresh, ...rest]);
+    this.log('SYSTEM_MESSAGE_RESYNCED');
+  }
+
   /** Remove the failed request's final message before rebuilding the prompt. */
   private popLastHistoryMessage(): boolean {
     const entries = this.history.rawEntries;
@@ -1200,15 +1246,24 @@ export class Session {
       if (coderProfile.provider === 'llamacpp' && !this.llamaModelLoaded) {
         this.client.onOutput({ type: 'model-loading' });
       }
+      // Built from the belt above, so a rule can never describe a tool this
+      // turn does not have. The guidance blocks already work this way — they
+      // key off whether their tool resolved — and this closes the same gap for
+      // the fixed rules.
+      const turnSystemPrompt = buildSystemPrompt({ scratch: !light, background: !light });
+      // Ahead of createAgent, not after: this is what keeps a prompt that
+      // legitimately differs from last turn's (`/runtime light`, tool
+      // availability) from leaving a stale, no-longer-first system entry in
+      // the shared History for the SDK's own append-only guard to trip over.
+      this.syncSystemMessage(
+        DEFAULT_AGENT_NAME,
+        buildAgentDescription(turnSystemPrompt, extraInstructions || undefined, projectMemory || undefined),
+      );
       const agent = await createAgent(coderProfile, tools, this.history, {
         maxTokens: this.config.maxTokens,
         projectMemory: projectMemory || undefined,
         extraInstructions: extraInstructions || undefined,
-        // Built from the belt above, so a rule can never describe a tool this
-        // turn does not have. The guidance blocks already work this way — they
-        // key off whether their tool resolved — and this closes the same gap for
-        // the fixed rules.
-        systemPrompt: buildSystemPrompt({ scratch: !light, background: !light }),
+        systemPrompt: turnSystemPrompt,
         // The one long-lived agent in the session: this same History (and so
         // the same system prompt and tool schemas) is resent on every turn.
         // See CreateAgentOptions.promptCaching for why every other caller

@@ -430,3 +430,37 @@ test('a connection that never recovers is reported once, after retries are exhau
   assert.match((errors[0] as { message: string }).message, /cannot reach/);
   assert.equal(fake.requests.length, 3, 'the initial attempt plus exactly maxConnectionRetries retries');
 });
+
+// ── system message resync ───────────────────────────────────────────────────────
+//
+// The shared History is long-lived and `createAgent` is called fresh every
+// turn, but the SDK's own system-message guard only *skips* re-adding when
+// the content is byte-identical — it never repositions, so a prompt that
+// legitimately changes turn to turn (`/runtime light`, `/runtime agentic`)
+// used to leave a stale entry in place and append the new one wherever
+// history currently ended. Several providers reject a system message that
+// isn't first outright (llama.cpp's Jinja template: "System message must be
+// at the beginning") — this is what actually surfaced it.
+
+test('a system prompt that changes mid-session stays first, not duplicated', async (t) => {
+  const root = tempRoot();
+  const fake = await startFakeProvider(
+    { text: 'first answer, default runtime' },
+    { text: 'second answer, light runtime' },
+  );
+  t.after(() => fake.close());
+  const { client } = collector();
+  const session = makeSession(root, fake, client);
+  t.after(() => session.dispose());
+
+  await session.run('do the first thing');
+  session.setRuntime('light');
+  await session.run('do the second thing');
+
+  assert.equal(fake.requests.length, 2);
+  const messages = fake.requests[1].messages;
+  const systemMessages = messages.filter(m => m.role === 'system');
+  assert.equal(systemMessages.length, 1,
+    `exactly one system message, not a stale one plus a new one: ${JSON.stringify(messages.map(m => m.role))}`);
+  assert.equal(messages[0].role, 'system', 'the system message must be first, not wherever it landed');
+});

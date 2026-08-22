@@ -302,6 +302,38 @@ export interface CreateAgentOptions {
   sessionId?: string;
 }
 
+/** `createAgent`'s default `CreateAgentOptions.name` — exported so a caller
+ *  that didn't pass one (the coder, via `Session`) can still tell what name
+ *  it ended up with. */
+export const DEFAULT_AGENT_NAME = 'Marshall';
+
+/** What `createAgent` hands the underlying agent as its description — the
+ *  part of the eventual system message that actually varies. Exported so a
+ *  caller holding the History directly (`Session.syncSystemMessage`) can
+ *  compute the exact same content `createAgent` is about to ask for. */
+export function buildAgentDescription(
+  prompt: string,
+  extraInstructions: string | undefined,
+  projectMemory: string | undefined,
+): string {
+  return prompt +
+    (extraInstructions ?? '') +
+    (projectMemory ? PROJECT_MEMORY_HEADER + projectMemory : '');
+}
+
+/**
+ * The literal system-message text the SDK computes internally
+ * (`BaseAgent.getSystemMessage`) from an agent's name and description.
+ *
+ * Duplicated here rather than imported — it isn't part of the SDK's public
+ * surface — so `Session.syncSystemMessage` can tell whether the entry
+ * already at history's front matches what `createAgent` is about to ask
+ * for, without depending on an internal the SDK doesn't export.
+ */
+export function agentSystemMessage(name: string, description: string): string {
+  return `You are an agent called ${name} and should follow these instructions: ${description}`;
+}
+
 export async function createAgent(
   profile: AgentProfile,
   tools: Tool<unknown>[],
@@ -309,7 +341,7 @@ export async function createAgent(
   options: CreateAgentOptions = {},
 ): Promise<BaseAgent<string, string>> {
   const {
-    name = 'Marshall',
+    name = DEFAULT_AGENT_NAME,
     maxTokens,
     projectMemory,
     extraInstructions,
@@ -322,10 +354,7 @@ export async function createAgent(
   const { key: apiKey, authType } = resolveAuth(profile);
   const model = resolveModel(profile);
   const prompt = systemPrompt ?? SYSTEM_PROMPT;
-  const description =
-    prompt +
-    (extraInstructions ?? '') +
-    (projectMemory ? PROJECT_MEMORY_HEADER + projectMemory : '');
+  const description = buildAgentDescription(prompt, extraInstructions, projectMemory);
   // Reasoning models (gpt-5 / o-series) ignore temperature — OpenAI rejects it
   // outright ("Unsupported parameter"). The judgment is model-based, not
   // provider-based: an `openai/gpt-5.6-luna` profile over OpenRouter hits the
