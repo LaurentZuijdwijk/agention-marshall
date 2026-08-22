@@ -140,15 +140,26 @@ class MarshallAgent(BaseInstalledAgent):
         harbor_provider, model = self.model_name.split("/", 1)
         provider = _PROVIDER_TO_MARSHALL.get(harbor_provider, harbor_provider)
 
+        # Not every provider needs a key — llamacpp is host-only, and isn't
+        # even in Harbor's own PROVIDERS registry, so model_connection.env is
+        # legitimately empty for it. marshall reports its own clear error for
+        # a provider that *does* need one and doesn't have it; no need to
+        # duplicate that check here.
         env = dict(self.model_connection.env)
-        if not env:
-            raise ValueError(f"No API key found for provider: {harbor_provider}")
+
+        # --ae/--agent-env MARSHALL_HOST=... on the harbor CLI — the one piece
+        # a provider/model string can't carry: where a local server actually
+        # is. Unused for a hosted provider, where marshall's own default is
+        # already right.
+        host = self._get_env("MARSHALL_HOST")
+        host_flag = f"--host {shlex.quote(host)} " if host else ""
 
         await self.exec_as_agent(
             environment,
             command=(
                 ". ~/.nvm/nvm.sh; "
                 f"marshall --provider {shlex.quote(provider)} --model {shlex.quote(model)} "
+                f"{host_flag}"
                 f"--safety yolo --message {shlex.quote(instruction)} "
                 "2>&1 | stdbuf -oL tee /logs/agent/marshall.txt"
             ),
