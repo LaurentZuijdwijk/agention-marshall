@@ -28,6 +28,7 @@ const OPTIONS = {
   'fast-host':      { type: 'string'  },
   message:          { type: 'string'  },
   safety:           { type: 'string'  },
+  version:          { type: 'boolean' },
   help:             { type: 'boolean', short: 'h' },
 } as const;
 
@@ -55,6 +56,7 @@ export interface CliFlags {
   /** Same words as `/safety` — `yolo`, `default`, `agentic`. Headless mode
    *  (`--message`) requires `yolo`: there is no human to fall back on. */
   safety?: string;
+  version: boolean;
   help: boolean;
 }
 
@@ -89,6 +91,7 @@ export function parseCliArgs(argv: string[] = process.argv.slice(2)): CliFlags {
     github:         values.github === true,
     light:          values.light === true ? true : undefined,
     webSearch:      values['no-web-search'] !== true,
+    version:        values.version === true,
     help:           values.help === true,
   };
 }
@@ -126,6 +129,7 @@ Options:
                            For scripting and benchmark harnesses. Requires --safety yolo.
       --safety <word>     Same words as /safety: yolo, default, agentic. --message needs
                            yolo — there is no human for any other level to fall back on.
+      --version           Print the installed version and exit
   -h, --help              Show this help
 
 Provider defaults:

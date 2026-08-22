@@ -21,16 +21,23 @@ import { runHeadless } from './startup/headless.js';
 // then hand the terminal to the child. Must be the first thing this file does.
 const heapChild = maybeRespawnForHeap();
 if (heapChild) {
-  await new Promise<void>(resolve => heapChild.on('close', resolve));
-  process.exit(0);
+  // A signal (no `code`) means the child was killed rather than exiting on its
+  // own — 1 beats silently reporting success, which `?? 0` would have done.
+  const code = await new Promise<number>(resolve => heapChild.on('close', code => resolve(code ?? 1)));
+  process.exit(code);
 }
-import { checkForUpdate } from './update-check.js';
+import { checkForUpdate, currentVersion } from './update-check.js';
 import { ConfigService } from './services/config-service.js';
 
 const flags = parseCliArgs();
 
 if (flags.help) {
   console.log(helpText());
+  process.exit(0);
+}
+
+if (flags.version) {
+  console.log(currentVersion);
   process.exit(0);
 }
 

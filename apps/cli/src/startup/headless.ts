@@ -45,6 +45,18 @@ function makeClient(onError: () => void): ClientInterface {
           onError();
           process.stderr.write('interrupted\n');
           break;
+        case 'usage':
+          // Only the reading taken once the turn is over — the samples before
+          // it are real but incomplete, and headless mode runs one turn, so
+          // one final line is the whole story. `session` already rolls up
+          // every sub-agent the turn fanned out to (see OutputEvent's doc).
+          // A machine-parseable marker line: MarshallAgent.populate_context_post_run
+          // (bench/harbor_agent/marshall_agent.py) reads this back out of the
+          // teed transcript to report tokens/cost into Harbor's AgentContext.
+          if (event.final) {
+            process.stdout.write(`\nMARSHALL_USAGE ${JSON.stringify({ turn: event.turn, session: event.session })}\n`);
+          }
+          break;
         default:
           break;
       }
@@ -62,6 +74,7 @@ export async function runHeadless(
   flags: CliFlags,
   workspaceRoot: string,
   profiles: ResolvedProfiles,
+  SessionCtor: typeof Session = Session,
 ): Promise<number> {
   const word = flags.safety;
   if (word !== 'yolo') {
@@ -92,7 +105,7 @@ export async function runHeadless(
     reviewerAgent: profiles.reviewerAgentProfile,
   };
 
-  const session = new Session(engineConfig, client);
+  const session = new SessionCtor(engineConfig, client);
   await session.run(flags.message!);
   return sawError ? 1 : 0;
 }
