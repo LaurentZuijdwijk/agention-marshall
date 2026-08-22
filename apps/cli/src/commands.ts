@@ -30,6 +30,8 @@ const execFileAsync = promisify(execFile);
 
 /** The subset of the engine Session the commands need. */
 export interface CommandSession {
+  /** Whether a turn currently owns the session — see `refuseWhileBusy`. */
+  readonly busy: boolean;
   plan(task: string): Promise<unknown>;
   goal(task: string): Promise<unknown>;
   review(notes?: string): Promise<unknown>;
@@ -145,6 +147,27 @@ function describeServer(server: McpServerState): string {
   return `${head}\n  ${server.toolNames.length} tools: ${server.toolNames.join(', ')}`;
 }
 
+/**
+ * Refuses to enter a wizard while a turn owns the session.
+ *
+ * Most commands here are safe at any time: reads, background-job/agent
+ * management, and config the engine already re-reads fresh each turn
+ * (`/runtime`, `/safety <level>`) either touch nothing the active turn is
+ * using or the engine's own `refuseIfBusy`/`clear()` guard already covers
+ * them cleanly. A wizard is different — it replaces `mode` outright
+ * (`setMode({ type: 'setup' | 'mcp-setup' | 'team-setup' | 'safety-setup' |
+ * 'login-pending', ... })`), and `handleSubmit`'s own comment on why it
+ * checks `session.busy` as well as `mode` exists because the two *can*
+ * disagree. Letting a wizard steal `mode` out from under a turn that is
+ * still actually running would manufacture exactly that mismatch, only
+ * self-inflicted rather than a background job's doing.
+ */
+function refuseWhileBusy(session: CommandSession | null, transcript: Transcript): boolean {
+  if (!session?.busy) return false;
+  transcript.push('error', 'a task is running — interrupt it first (Esc), or wait for it to finish.');
+  return true;
+}
+
 export function runSlashCommand(input: string, deps: CommandDeps): void {
   const { transcript, session, setMode } = deps;
   const command = resolveSlashCommand(input);
@@ -258,6 +281,7 @@ export function runSlashCommand(input: string, deps: CommandDeps): void {
       const current = deps.agents ?? [];
 
       if (command.action === 'add') {
+        if (refuseWhileBusy(session, transcript)) return;
         setMode({ type: 'team-setup' });
         return;
       }
@@ -306,6 +330,7 @@ export function runSlashCommand(input: string, deps: CommandDeps): void {
       }
 
       if (command.action === 'add') {
+        if (refuseWhileBusy(session, transcript)) return;
         setMode({ type: 'mcp-setup' });
         return;
       }
@@ -355,12 +380,20 @@ export function runSlashCommand(input: string, deps: CommandDeps): void {
       return;
 
     case 'setup':
+      if (refuseWhileBusy(session, transcript)) return;
       setMode({ type: 'settings-menu', scope: command.scope });
       return;
 
     case 'model':
-      if (command.target === 'off') deps.applyProfiles(deps.activeProfile, undefined);
-      else if (command.target === 'both') setMode({ type: 'setup', tier: 'deep', chain: true });
+      // Off just drops the fast tier — a config change the engine re-reads
+      // fresh next turn, the same as /runtime or /safety <level>. The other
+      // targets open the model-picker wizard, which is what needs the guard.
+      if (command.target === 'off') {
+        deps.applyProfiles(deps.activeProfile, undefined);
+        return;
+      }
+      if (refuseWhileBusy(session, transcript)) return;
+      if (command.target === 'both') setMode({ type: 'setup', tier: 'deep', chain: true });
       else setMode({ type: 'setup', tier: command.target, chain: false });
       return;
 
@@ -459,6 +492,7 @@ export function runSlashCommand(input: string, deps: CommandDeps): void {
       if (command.level === 'agentic') {
         // Level 3 needs a judge model before it means anything — the wizard
         // sets `safetyLevel` itself once one is actually chosen.
+        if (refuseWhileBusy(session, transcript)) return;
         setMode({ type: 'safety-setup' });
         return;
       }
@@ -495,6 +529,7 @@ export function runSlashCommand(input: string, deps: CommandDeps): void {
     }
 
     case 'login':
+      if (refuseWhileBusy(session, transcript)) return;
       try {
         const login = deps.startLogin();
         transcript.push('info',

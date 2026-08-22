@@ -512,6 +512,46 @@ describe('App component', () => {
     }
   });
 
+  // A slash command is a local/session command, not agent input — queuing it
+  // behind an active turn used to silently turn "/help" into a chat message
+  // once it was finally dequeued and sent to run(), rather than the command
+  // it looks like.
+  it('applies a slash command immediately even while a turn owns the session', async () => {
+    const sent: string[] = [];
+    mockRun = async (text) => { sent.push(text); };
+
+    const ws = mkTemp();
+    const stream = fakeStdout(chunk => { capturedOutput += chunk; });
+    const stdin = fakeStdin();
+
+    const instance = renderTui(
+      React.createElement(App, {
+        workspaceRoot: ws,
+        agentProfile: { provider: 'claude' as const, model: 'claude-sonnet-4-6' },
+        SessionCtor: MockSession as any,
+        startLoginCtor: mockStartLogin,
+        completeLoginCtor: mockCompleteLogin,
+      } as any),
+      { stdout: stream, stdin },
+    );
+
+    try {
+      await waitFor(() => capturedOutput.includes('type a task'));
+
+      mockBusy = true;
+      stdin.push('/help');
+      await waitFor(() => capturedOutput.includes('/help'));
+      stdin.push(KEY.enter);
+
+      await waitFor(() => capturedOutput.includes('/model deep'), 'the help text, applied immediately');
+      assert.ok(!capturedOutput.includes('queued prompt'),
+        'a slash command must not be queued as if it were agent input');
+      assert.deepEqual(sent, [], 'a local command is never sent to the session as a task');
+    } finally {
+      instance.unmount();
+    }
+  });
+
   // The runtime settings menu updates React state and disk, but until it also
   // called session.setRuntime() the live session kept using the old tool belt:
   // the UI said "light" while the engine still had the full one. The /runtime

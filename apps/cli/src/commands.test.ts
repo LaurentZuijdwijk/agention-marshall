@@ -39,6 +39,7 @@ function setup(overrides: Partial<CommandDeps> & {
   agents?: AgentJob[];
   activity?: Record<string, string[]>;
   runtime?: RuntimeMode;
+  busy?: boolean;
 } = {}) {
   const t = fakeTranscript();
   const modes: Mode[] = [];
@@ -82,6 +83,7 @@ function setup(overrides: Partial<CommandDeps> & {
   let safetyLevel: SafetyLevel = 2;
 
   const session: CommandSession = {
+    busy: overrides.busy ?? false,
     plan: async (task) => { calls.plan.push(task); },
     goal: async (task) => { calls.goal.push(task); },
     review: async (notes) => { calls.review.push(notes); },
@@ -781,5 +783,79 @@ describe('/config', () => {
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(pushed[0].role, 'error');
     assert.match(pushed[0].content, /unavailable/);
+  });
+});
+
+// ── refuses to open a wizard while a turn owns the session ─────────────────────
+//
+// Everything else here is safe at any time — reads, background-job/agent
+// management, and config the engine re-reads fresh each turn — either because
+// it touches nothing an active turn depends on or because the engine's own
+// guard (`refuseIfBusy`, `Session.clear()`) already covers it. Only the
+// wizard-opening commands, which replace `mode` outright, need App.tsx's own
+// guard: see `refuseWhileBusy` in commands.ts.
+describe('refuses a wizard while busy', () => {
+  it('/setup', () => {
+    const { deps, pushed, modes } = setup({ busy: true });
+    runSlashCommand('/setup', deps);
+    assert.equal(pushed[0].role, 'error');
+    assert.match(pushed[0].content, /task is running/);
+    assert.deepEqual(modes, []);
+  });
+
+  it('/model deep', () => {
+    const { deps, pushed, modes } = setup({ busy: true });
+    runSlashCommand('/model deep', deps);
+    assert.equal(pushed[0].role, 'error');
+    assert.deepEqual(modes, []);
+  });
+
+  it('/model off still applies — it is a config change, not a wizard', () => {
+    const { deps, pushed, calls } = setup({ busy: true });
+    runSlashCommand('/model off', deps);
+    assert.equal(pushed.length, 0);
+    assert.deepEqual(calls.applied, [[PROFILE, undefined]]);
+  });
+
+  it('/safety agentic', () => {
+    const { deps, pushed, modes } = setup({ busy: true });
+    runSlashCommand('/safety agentic', deps);
+    assert.equal(pushed[0].role, 'error');
+    assert.deepEqual(modes, []);
+  });
+
+  it('/safety yolo still applies — it is a config change, not a wizard', () => {
+    const { deps, pushed, calls } = setup({ busy: true });
+    runSlashCommand('/safety yolo', deps);
+    assert.deepEqual(calls.safetyLevel, [1]);
+    assert.ok(!pushed.some(p => p.role === 'error'));
+  });
+
+  it('/mcp add', () => {
+    const { deps, pushed, modes } = setup({ busy: true });
+    runSlashCommand('/mcp add', deps);
+    assert.equal(pushed[0].role, 'error');
+    assert.deepEqual(modes, []);
+  });
+
+  it('/team add', () => {
+    const { deps, pushed, modes } = setup({ busy: true });
+    runSlashCommand('/team add', deps);
+    assert.equal(pushed[0].role, 'error');
+    assert.deepEqual(modes, []);
+  });
+
+  it('/login', () => {
+    const { deps, pushed, modes } = setup({ busy: true });
+    runSlashCommand('/login', deps);
+    assert.equal(pushed[0].role, 'error');
+    assert.deepEqual(modes, []);
+  });
+
+  it('none of these refuse when idle', () => {
+    const { deps, pushed, modes } = setup({ busy: false });
+    runSlashCommand('/setup', deps);
+    assert.deepEqual(modes, [{ type: 'settings-menu', scope: 'project' }]);
+    assert.equal(pushed.length, 0);
   });
 });

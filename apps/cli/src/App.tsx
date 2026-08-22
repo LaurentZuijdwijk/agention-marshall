@@ -351,28 +351,34 @@ export function App({
 
   // ── submitting ─────────────────────────────────────────────────────────────
   const handleSubmit = (value: string) => {
-    // While a turn is active, capture the prompt explicitly instead of dropping it
-    // or starting a concurrent engine run with ambiguous ordering.
+    // Expand before anything reads the text — the placeholder is a display
+    // device, and every branch below (login code, slash command, task) wants
+    // what the user actually pasted.
+    const text = pasteBuffer.expand(value).trim();
+
+    // While a turn is active, capture the prompt explicitly instead of dropping
+    // it or starting a concurrent engine run with ambiguous ordering — except a
+    // slash command, which is a local/session command, not agent input. Queuing
+    // it here would silently turn "/model" into a chat message once it was
+    // finally dequeued and sent to `run`, rather than the command it looks like.
+    // Individual commands that would genuinely conflict with an active turn
+    // (opening a wizard) refuse on their own — see `refuseWhileBusy` in
+    // commands.ts — so this can hand off unconditionally.
     //
     // `session.busy` is asked as well as the mode, because the two can disagree:
     // a turn the *engine* started — a finished background job waking the agent —
     // claims the session while this UI is still sitting at an idle prompt. Going
     // by the mode alone, that prompt went to `run`, came back as "A task is
     // already running." and was lost.
-    if (mode.type === 'running' || mode.type === 'approval'
-      || (mode.type === 'idle' && session?.busy === true)) {
-      const queued = pasteBuffer.expand(value).trim();
-      if (!queued) return;
-      setPendingPrompts(previous => [...previous, queued]);
+    if (!text.startsWith('/') && (mode.type === 'running' || mode.type === 'approval'
+      || (mode.type === 'idle' && session?.busy === true))) {
+      if (!text) return;
+      setPendingPrompts(previous => [...previous, text]);
       setInput('');
       pasteBuffer.clear();
       transcript.push('info', `queued prompt ${pendingPrompts.length + 1} — it will run after the active request`);
       return;
     }
-    // Expand before anything reads the text — the placeholder is a display
-    // device, and every branch below (login code, slash command, task) wants
-    // what the user actually pasted.
-    const text = pasteBuffer.expand(value).trim();
     // Read off the submitted text, so an image whose label the user deleted is
     // dropped rather than sent invisibly.
     const images = attachments.attachedTo(text);
