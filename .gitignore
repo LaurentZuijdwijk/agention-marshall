@@ -31,3 +31,4 @@ config-issues.md
 *.tgz
 bench/*.log
 bench/results.json
+__pycache__/
