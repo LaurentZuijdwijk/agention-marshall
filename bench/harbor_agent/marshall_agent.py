@@ -20,6 +20,7 @@ Usage, from the repo root:
         --model anthropic/claude-sonnet-4-6
 """
 
+import asyncio
 import json
 import shlex
 import subprocess
@@ -45,6 +46,14 @@ _PROVIDER_TO_MARSHALL = {
     "google": "gemini",
 }
 
+# Module-level, not per-instance: Harbor runs several trials concurrently
+# within one process (--n-concurrent, default 4), each with its own
+# MarshallAgent instance, and every one of them would otherwise race to
+# `npm pack` the same checkout into the same dist/ output. Built once, shared
+# by whichever instance asks first.
+_pack_lock = asyncio.Lock()
+_cached_tarball: Path | None = None
+
 
 class MarshallAgent(BaseInstalledAgent):
     """Runs marshall — a terminal coding agent — via its `--message` headless mode."""
@@ -56,14 +65,16 @@ class MarshallAgent(BaseInstalledAgent):
     def name() -> str:
         return "marshall"
 
-    def _pack_local_cli(self) -> Path:
+    @staticmethod
+    def _build_and_pack() -> Path:
         """`npm pack` this checkout's apps/cli into a fresh temp dir, built first.
 
-        Rebuilt on every call rather than cached — correct beats fast while
-        headless mode is still local-only. @agentionai/marshall-engine and
-        -tools aren't touched here: their published versions already match
-        this checkout (see the module docstring), so the packed tarball's
-        `"*"` dependency on them resolves from the registry as normal.
+        Blocking — always called through `_pack_local_cli`, which keeps it off
+        the event loop and runs it at most once per process.
+        @agentionai/marshall-engine and -tools aren't touched here: their
+        published versions already match this checkout (see the module
+        docstring), so the packed tarball's `"*"` dependency on them resolves
+        from the registry as normal.
         """
         subprocess.run(
             ["npm", "run", "build:all"], cwd=_REPO_ROOT, check=True, capture_output=True, text=True,
@@ -76,10 +87,25 @@ class MarshallAgent(BaseInstalledAgent):
         tarball_name = result.stdout.strip().splitlines()[-1]
         return pack_dir / tarball_name
 
+    async def _pack_local_cli(self) -> Path:
+        """The build+pack, done at most once per process and shared.
+
+        The lock alone would only stop two builds from *overlapping* — the
+        actual `subprocess.run` calls are synchronous and would otherwise
+        block the single event loop for the whole build, stalling every other
+        concurrent trial's install too. `asyncio.to_thread` keeps that off
+        the loop; the lock is what stops it from running twice.
+        """
+        global _cached_tarball
+        async with _pack_lock:
+            if _cached_tarball is None or not _cached_tarball.exists():
+                _cached_tarball = await asyncio.to_thread(self._build_and_pack)
+            return _cached_tarball
+
     @override
     async def install(self, environment: BaseEnvironment) -> None:
         await self.ensure_system_dependencies(environment, ("curl",))
-        local_tarball = self._pack_local_cli()
+        local_tarball = await self._pack_local_cli()
         remote_tarball = "/tmp/marshall-cli.tgz"
         await environment.upload_file(local_tarball, remote_tarball)
         await self.exec_as_agent(
