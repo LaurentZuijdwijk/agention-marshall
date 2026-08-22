@@ -12,10 +12,13 @@ export function endpointFor(profile: AgentProfile): string {
  *
  * The provider SDKs bury this: an `ECONNREFUSED` surfaces as the rather
  * unhelpful `llama.cpp API error: Connection error.`, several `cause` levels up
- * from the address that actually refused.
+ * from the address that actually refused. `terminated` is undici's own wording
+ * (`TypeError: terminated`, `cause.code: 'UND_ERR_SOCKET'`) for a socket the
+ * far end closed mid-response — the failure a very long tool-calling turn is
+ * most likely to hit, since it is the one held open longest.
  */
 export function isConnectionError(message: string): boolean {
-  return /connection error|fetch failed|ECONNREFUSED|ENOTFOUND|EHOSTUNREACH|ETIMEDOUT|ECONNRESET|socket hang up/i
+  return /connection error|fetch failed|terminated|ECONNREFUSED|ENOTFOUND|EHOSTUNREACH|ETIMEDOUT|ECONNRESET|socket hang up/i
     .test(message);
 }
 

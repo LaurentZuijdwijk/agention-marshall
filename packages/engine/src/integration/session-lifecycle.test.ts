@@ -367,3 +367,66 @@ test('a provider that names the context window is compressed for', async (t) => 
   assert.ok(contextFull, 'an explicit overflow must reach compression');
   assert.equal((contextFull as { compressed: boolean }).compressed, true);
 });
+
+// ── connection-error retry ─────────────────────────────────────────────────────
+//
+// A dropped connection is not the provider saying no — nothing was answered —
+// so unlike every error above, it is retried rather than reported or
+// compressed for. `connectionRetryBaseMs: 1` keeps these on the order of
+// milliseconds instead of waiting out a real multi-second backoff.
+//
+// Status 400, not the 500+ a real dropped connection would answer with: the
+// `openai` client underneath already retries 5xx/408/409/429 itself (default
+// `maxRetries: 2`, not something marshall configures), which would silently
+// eat these scripted failures before Session's own retry loop ever saw them.
+// `classifyProviderError` reads the *message* for `'connection'`, not the
+// status, so 400 exercises marshall's own retry in isolation from the SDK's.
+
+test('a dropped connection is retried, silently, and the turn still succeeds', async (t) => {
+  const root = tempRoot();
+  const fake = await startFakeProvider(
+    { error: { status: 400, message: 'terminated' } },
+    { text: 'recovered after the retry' },
+  );
+  t.after(() => fake.close());
+  const { client, events } = collector();
+  const session = makeSession(root, fake, client, { connectionRetryBaseMs: 1 });
+  t.after(() => session.dispose());
+
+  await session.run('do the thing');
+
+  assert.ok(!events.some(e => e.type === 'error'),
+    'a connection error that recovers on retry should never reach the client');
+  const response = events.find(e => e.type === 'response');
+  assert.ok(response, 'the turn should complete once the retry succeeds');
+  assert.equal((response as { text: string }).text, 'recovered after the retry');
+
+  assert.equal(fake.requests.length, 2, 'the failed attempt, then one retry');
+  const retryMessages = fake.requests[1].messages;
+  const lastMessage = retryMessages[retryMessages.length - 1];
+  assert.equal(lastMessage.role, 'user',
+    'the retry should be a short new turn, not a resend of the original task');
+  assert.match(String(lastMessage.content), /dropped before this reply finished/);
+});
+
+test('a connection that never recovers is reported once, after retries are exhausted', async (t) => {
+  const root = tempRoot();
+  const droppedTurn: ScriptedTurn = { error: { status: 400, message: 'terminated' } };
+  // maxConnectionRetries: 2 below → 3 attempts total; script exactly that many
+  // failures, so a bug that retried past the bound would fall through to
+  // EXHAUSTED's plain-text turn and this test would see a false 'response'.
+  const fake = await startFakeProvider(droppedTurn, droppedTurn, droppedTurn);
+  t.after(() => fake.close());
+  const { client, events } = collector();
+  const session = makeSession(root, fake, client, { connectionRetryBaseMs: 1, maxConnectionRetries: 2 });
+  t.after(() => session.dispose());
+
+  await session.run('do the thing');
+
+  assert.ok(!events.some(e => e.type === 'response'), 'no answer without a single successful attempt');
+  const errors = events.filter(e => e.type === 'error');
+  assert.equal(errors.length, 1,
+    `the exhausted connection error should be reported exactly once: ${JSON.stringify(events.map(e => e.type))}`);
+  assert.match((errors[0] as { message: string }).message, /cannot reach/);
+  assert.equal(fake.requests.length, 3, 'the initial attempt plus exactly maxConnectionRetries retries');
+});

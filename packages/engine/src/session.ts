@@ -104,6 +104,42 @@ const MIXED_RESUME_INSTRUCTION =
   'with the work they were part of. If nothing further is needed, say so in one short sentence ' +
   'and stop.';
 
+/**
+ * What a connection-error retry sends instead of resending the original task.
+ *
+ * History already has everything the turn did before the drop — tool calls,
+ * their results, any reasoning — untouched (see the `'connection'` branch in
+ * `run()`). There is nothing to re-explain; the model only needs telling that
+ * the wire, not the work, is what failed.
+ */
+const CONNECTION_RETRY_INSTRUCTION =
+  'The connection to the model provider dropped before this reply finished, through no fault of ' +
+  'the work above. Continue exactly where you left off — do not repeat or restart what is already done.';
+
+/**
+ * Bounded, backed-off retry for a dropped connection mid-turn.
+ *
+ * Not for a rejection (rate limit, bad model, overlong prompt, ...) — those
+ * are the provider answering; only `classifyProviderError`'s `'connection'`
+ * kind, the request never actually being answered, reaches this at all.
+ * Overridable per session via `EngineConfig.maxConnectionRetries`/
+ * `connectionRetryBaseMs` — tests use that rather than waiting out a real
+ * multi-second backoff.
+ */
+const DEFAULT_MAX_CONNECTION_RETRIES = 3;
+const DEFAULT_CONNECTION_RETRY_BASE_MS = 2000;
+const CONNECTION_RETRY_MAX_MS = 30000;
+
+/**
+ * `baseMs, 2×baseMs, 4×baseMs, ...`, capped, with jitter (`±25%`) so several
+ * turns that hit the same outage together — concurrent trials in a benchmark
+ * harness, say — do not all retry on the exact same beat.
+ */
+function connectionRetryDelayMs(attempt: number, baseMs: number): number {
+  const capped = Math.min(baseMs * 2 ** (attempt - 1), CONNECTION_RETRY_MAX_MS);
+  return Math.round(capped * (0.75 + Math.random() * 0.5));
+}
+
 /** A queued report, and what produced it — the kind picks the wake-up wording. */
 interface PendingReport {
   kind: 'job' | 'agent';
@@ -158,6 +194,15 @@ function raceAbort<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
       reject(new DOMException('Task interrupted by user', 'AbortError'));
     }, { once: true });
   });
+}
+
+/**
+ * A connection-retry backoff wait, abortable the same way every other wait in
+ * a turn is: Esc during the pause ends the turn (as an interrupt, via
+ * `raceAbort`) rather than being silently absorbed into the retry.
+ */
+function sleepAbortable(ms: number, signal: AbortSignal): Promise<void> {
+  return raceAbort(new Promise<void>(resolve => setTimeout(resolve, ms)), signal);
 }
 
 export class Session {
@@ -1185,7 +1230,11 @@ export class Session {
         if (signal.aborted) return;
         const message = err instanceof Error ? err.message : String(err);
         const verdict = classifyProviderError(err, message);
-        const recoverable = verdict.compressible;
+        // Connection errors join `compressible` here for the same reason:
+        // the catch block below has its own recovery plan for both (retry,
+        // or compress) and reports the error itself, exactly once, only once
+        // that plan is exhausted — see the `'connection'` branch in `run()`.
+        const recoverable = verdict.compressible || verdict.kind === 'connection';
         this.log(
           `AGENT_ERROR ${diag} kind=${verdict.kind} recoverable=${recoverable} ` +
           `because=${JSON.stringify(verdict.reason)} ${JSON.stringify(message)} ` +
@@ -1196,7 +1245,7 @@ export class Session {
         // error reaches the try/catch below regardless of whether it's reported
         // here. Reporting it here too would show the raw provider error and end
         // the turn in the client's UI before the try/catch below gets a chance
-        // to compress and hand back a friendlier `context-full` event instead.
+        // to retry or compress and hand back a friendlier outcome instead.
         if (recoverable) return;
         errorReported = true;
         this.client.onOutput({ type: 'error', message });
@@ -1218,61 +1267,95 @@ export class Session {
             : { type: 'token', text: chunk.content });
         }), signal);
 
+      const maxConnectionRetries = this.config.maxConnectionRetries ?? DEFAULT_MAX_CONNECTION_RETRIES;
+      const connectionRetryBaseMs = this.config.connectionRetryBaseMs ?? DEFAULT_CONNECTION_RETRY_BASE_MS;
+
       let response: string;
-      try {
-        throwIfAborted(signal);
-        response = await stream(buildInput(effectiveTask, images));
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        const verdict = classifyProviderError(err, message);
-        this.log(
-          `STREAM_ERROR ${diag} kind=${verdict.kind} shouldCompress=${verdict.compressible} ` +
-          `because=${JSON.stringify(verdict.reason)} aborted=${signal.aborted} ` +
-          `${JSON.stringify(message)} details=${providerErrorDiagnostics(err)}`,
-        );
-        if (!verdict.compressible || signal.aborted) {
-          this.log(`NO_COMPRESSION ${diag} kind=${verdict.kind} — reporting the provider error as-is`);
-          throw err;
+      // Set on the first attempt, and replaced with a short continuation nudge
+      // after each connection retry — see CONNECTION_RETRY_INSTRUCTION. Reset
+      // to 0 by being a local: every top-level task gets its own retry budget.
+      let nextInput: string | ReturnType<typeof buildInput> = buildInput(effectiveTask, images);
+      let connectionRetries = 0;
+      for (;;) {
+        try {
+          throwIfAborted(signal);
+          response = await stream(nextInput);
+          break;
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          const verdict = classifyProviderError(err, message);
+          this.log(
+            `STREAM_ERROR ${diag} kind=${verdict.kind} shouldCompress=${verdict.compressible} ` +
+            `because=${JSON.stringify(verdict.reason)} aborted=${signal.aborted} ` +
+            `${JSON.stringify(message)} details=${providerErrorDiagnostics(err)}`,
+          );
+
+          // A dropped connection is not the provider saying no — the request was
+          // never actually answered — so unlike every kind below, simply asking
+          // again is worth it. Bounded and backed off: a genuinely dead endpoint
+          // still ends the turn rather than retrying forever.
+          if (verdict.kind === 'connection' && !signal.aborted && connectionRetries < maxConnectionRetries) {
+            connectionRetries++;
+            const waitMs = connectionRetryDelayMs(connectionRetries, connectionRetryBaseMs);
+            this.log(
+              `CONNECTION_RETRY ${diag} attempt=${connectionRetries}/${maxConnectionRetries} waitMs=${waitMs}`,
+            );
+            // Unlike the compressible path below, nothing here is popped: history
+            // already holds everything this turn did up to the drop (tool calls,
+            // their results, reasoning), and that is exactly what makes a bare
+            // "continue" enough. The one real risk is a tool call the drop caught
+            // between finishing and its result being recorded — the same repair
+            // every turn already runs at start, run here for the same reason.
+            this.repairDanglingToolCalls('the connection dropped before the tool result was recorded');
+            await sleepAbortable(waitMs, signal);
+            nextInput = CONNECTION_RETRY_INSTRUCTION;
+            continue;
+          }
+
+          if (!verdict.compressible || signal.aborted) {
+            this.log(`NO_COMPRESSION ${diag} kind=${verdict.kind} — reporting the provider error as-is`);
+            throw err;
+          }
+          this.log(`COMPRESSION_TRIGGERED_BY_ERROR ${diag} kind=${verdict.kind} because=${JSON.stringify(verdict.reason)}`);
+
+          // Our own token estimate is unreliable for code-heavy content (see
+          // contextErrorTarget's comment) — it can miss by 15k+ tokens on a
+          // single large file read — so a blind retry is a gamble that can burn
+          // a long time and still fail. Rather than guess again, compress once
+          // and hand the turn back to the user: fold the abandoned task into
+          // `steeringContext`, the same mechanism an Esc-interrupt uses, so
+          // their next message carries this one as context instead of losing it.
+          //
+          // A rejected request has already appended its final assistant/user
+          // turn to history. Remove that invalid tail before compressing,
+          // otherwise the bad message survives into the summary.
+          this.popLastHistoryMessage();
+          // Popping an entry can strand a tool result whose call went with it, so
+          // the retry would fail on a pairing error instead of the overflow it was
+          // sent back to fix.
+          this.repairDanglingToolCalls('the request it belonged to was rejected');
+          const compressed = await this.compression.compressForContextError(message);
+
+          // A 400 only *might* be an overflow: providers that report one without
+          // saying so (llama.cpp answers a bare "Provider returned error") are the
+          // reason this path accepts any bad request. When compression could not
+          // free a single token and the provider never mentioned context, the
+          // window is not what went wrong — an OpenAI tool-schema rejection spent
+          // a release being reported as a full context window over 921 tokens.
+          // Show what the provider actually said instead of guessing.
+          if (!compressed && verdict.kind !== 'context-length') {
+            this.log(`BAD_REQUEST_NOT_CONTEXT ${diag} kind=${verdict.kind} nothing compressed — reporting the provider error instead ${JSON.stringify(message)}`);
+            throw err;
+          }
+
+          // Worth reading in the log next to the line above: when the guess was
+          // `maybe-context` and compression *did* free tokens, this is reported as
+          // a full context window without the provider ever having said so.
+          this.log(`CONTEXT_ERROR_HANDED_BACK ${diag} kind=${verdict.kind} compressed=${compressed}`);
+          this.steeringContext = task;
+          this.client.onOutput({ type: 'context-full', compressed });
+          return;
         }
-        this.log(`COMPRESSION_TRIGGERED_BY_ERROR ${diag} kind=${verdict.kind} because=${JSON.stringify(verdict.reason)}`);
-
-        // Our own token estimate is unreliable for code-heavy content (see
-        // contextErrorTarget's comment) — it can miss by 15k+ tokens on a
-        // single large file read — so a blind retry is a gamble that can burn
-        // a long time and still fail. Rather than guess again, compress once
-        // and hand the turn back to the user: fold the abandoned task into
-        // `steeringContext`, the same mechanism an Esc-interrupt uses, so
-        // their next message carries this one as context instead of losing it.
-        //
-        // A rejected request has already appended its final assistant/user
-        // turn to history. Remove that invalid tail before compressing,
-        // otherwise the bad message survives into the summary.
-        this.popLastHistoryMessage();
-        // Popping an entry can strand a tool result whose call went with it, so
-        // the retry would fail on a pairing error instead of the overflow it was
-        // sent back to fix.
-        this.repairDanglingToolCalls('the request it belonged to was rejected');
-        const compressed = await this.compression.compressForContextError(message);
-
-        // A 400 only *might* be an overflow: providers that report one without
-        // saying so (llama.cpp answers a bare "Provider returned error") are the
-        // reason this path accepts any bad request. When compression could not
-        // free a single token and the provider never mentioned context, the
-        // window is not what went wrong — an OpenAI tool-schema rejection spent
-        // a release being reported as a full context window over 921 tokens.
-        // Show what the provider actually said instead of guessing.
-        if (!compressed && verdict.kind !== 'context-length') {
-          this.log(`BAD_REQUEST_NOT_CONTEXT ${diag} kind=${verdict.kind} nothing compressed — reporting the provider error instead ${JSON.stringify(message)}`);
-          throw err;
-        }
-
-        // Worth reading in the log next to the line above: when the guess was
-        // `maybe-context` and compression *did* free tokens, this is reported as
-        // a full context window without the provider ever having said so.
-        this.log(`CONTEXT_ERROR_HANDED_BACK ${diag} kind=${verdict.kind} compressed=${compressed}`);
-        this.steeringContext = task;
-        this.client.onOutput({ type: 'context-full', compressed });
-        return;
       }
 
       // Answer first, then the tally: the usage line accounts for the turn, so

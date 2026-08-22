@@ -220,6 +220,17 @@ export interface EngineConfig {
   compressionThreshold?: number;
   /** @deprecated Use `roleProfiles.summarizer`. Model-only override, kept as an alias. */
   compressionModel?: string;
+  /**
+   * How many times a dropped connection mid-turn is retried before the turn
+   * gives up and reports it. Default: 3. A rejection (rate limit, bad model,
+   * overlong prompt, ...) never reaches this — only a request that was never
+   * actually answered does.
+   */
+  maxConnectionRetries?: number;
+  /** Base delay before the first connection retry, doubling each attempt
+   *  after (`±25%` jitter), capped at 30s. Default: 2000. Tests set this low
+   *  rather than waiting out a real backoff. */
+  connectionRetryBaseMs?: number;
   /** When set, the main agent gets a `context` tool backed by this agent profile.
    *  The context agent has read-only file tools and runs in its own isolated history.
    *  Presence still controls whether the tool exists; the profile itself is an
