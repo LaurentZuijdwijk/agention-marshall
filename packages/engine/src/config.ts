@@ -272,6 +272,18 @@ export interface EngineConfig {
   safetyLevel?: SafetyLevel;
   /** Required when `safetyLevel` is 3 — the model that reviews each call. */
   safetyAgent?: SafetyAgentConfig;
+  /**
+   * No session log, no history/reasoning trace, no scratchpad notes — and
+   * OpenRouter requests are routed with `provider.dataCollection: 'deny'`, so
+   * OpenRouter restricts itself to upstreams that do not retain the prompt.
+   * Every other provider has no equivalent request-level flag in this SDK, so
+   * private mode cannot enforce anything about them; it is on the caller to
+   * warn when the active provider isn't OpenRouter or a local model.
+   *
+   * Session-scoped by design — never read from a settings file, so it cannot
+   * silently persist past the run it was asked for.
+   */
+  privateMode?: boolean;
 }
 
 // ── tier resolution ───────────────────────────────────────────────────────────

@@ -89,5 +89,13 @@ export function useTranscriptPort({
       if (show) setMode({ type: 'question', request: show });
       return promise;
     },
+    // No `turnEnded` call here (see the `image-rejected` case in
+    // useEngineClient.ts) — this sets the same activity a plain error would,
+    // but the panel mode instead of `idle`, so the choice replaces the plain
+    // prompt rather than sitting behind it.
+    imageRejected: (message, task) => {
+      setActivity('error');
+      setMode({ type: 'image-rejected', message, task });
+    },
   }), []);
 }

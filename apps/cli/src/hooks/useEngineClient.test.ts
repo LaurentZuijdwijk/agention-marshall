@@ -36,6 +36,8 @@ function harness(opts: { reasoning?: string; stream?: string } = {}) {
     turnEnded: (o: TurnOutcome) => calls.push(`turnEnded:${o}`),
     reportUsage: (u) => usage.push(u),
     requestApproval: async () => 'approve',
+    askUser: async () => 'answered',
+    imageRejected: (message, task) => calls.push(`imageRejected:${message}:${task}`),
   };
 
   const client = createEngineClient(port);
@@ -259,6 +261,15 @@ describe('turn completion', () => {
     h.send({ type: 'error', message: 'boom' });
     assert.deepEqual(h.pushed.map(p => p.role), ['error']);
     assert.equal(h.calls.at(-1), 'turnEnded:error');
+  });
+
+  it('a rejected image is shown and handed to the port, not turnEnded', () => {
+    const h = harness();
+    h.send({ type: 'image-rejected', message: 'image input is not supported', task: 'build a door' });
+    assert.deepEqual(h.pushed.map(p => p.role), ['error']);
+    assert.equal(h.pushed[0].content, 'image input is not supported');
+    assert.equal(h.calls.at(-1), 'imageRejected:image input is not supported:build a door');
+    assert.ok(!h.calls.some(c => c.startsWith('turnEnded')), 'imageRejected owns ending the turn itself');
   });
 });
 

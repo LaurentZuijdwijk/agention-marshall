@@ -43,7 +43,7 @@ if (flags.version) {
 
 const workspaceRoot = resolveWorkspaceRoot(flags.workspace);
 loadEnvFiles(workspaceRoot);
-installHttpTrace(workspaceRoot);
+installHttpTrace(workspaceRoot, flags.private);
 
 // One owner for everything on disk: the two config files, their merge, and
 // every write back to them. Constructed here and handed down, so nothing
@@ -51,7 +51,7 @@ installHttpTrace(workspaceRoot);
 // or how to persist a change to it. Errors are wired to the transcript by the
 // App; before it renders there is nowhere to put them but stderr.
 const config = new ConfigService(workspaceRoot, { light: flags.light },
-  message => console.error(message));
+  message => console.error(message), flags.private);
 
 // The flat provider/model/host keys are the pre-tier format and are still read
 // as the deep tier, so existing workspaces keep working untouched.
@@ -69,7 +69,7 @@ if (flags.message !== undefined) {
   process.exit(code);
 }
 
-installCrashLogging(workspaceRoot);
+installCrashLogging(workspaceRoot, flags.private);
 
 // Started before render so the round trip overlaps with boot; the App shows the
 // result as a transcript row once the banner is done.
@@ -97,6 +97,7 @@ inkInstance = render(
     enableGitHub={flags.github}
     enableWebSearch={flags.webSearch}
     maxTokens={profiles.maxTokens}
+    privateMode={flags.private}
     config={config}
     updateCheck={updateCheck}
     registerRedraw={fn => { replayTranscript = fn; }}

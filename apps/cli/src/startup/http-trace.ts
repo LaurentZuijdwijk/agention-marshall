@@ -27,8 +27,11 @@
 import { dirname, join } from 'node:path';
 import { mkdirSync, appendFileSync } from 'node:fs';
 
-export function installHttpTrace(workspaceRoot: string): void {
-  if (!process.env.OPENAI_LOG) return;
+export function installHttpTrace(workspaceRoot: string, privateMode?: boolean): void {
+  // Private mode overrides the env var rather than reading it: `OPENAI_LOG`
+  // dumps full request/response bodies (prompts included) to disk, exactly
+  // what private mode promises not to do.
+  if (privateMode || !process.env.OPENAI_LOG) return;
 
   const logPath = join(workspaceRoot, '.marshall', 'logs', 'http.log');
   try {

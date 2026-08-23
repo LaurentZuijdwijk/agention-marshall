@@ -369,6 +369,7 @@ export async function runSafetyJudge(
   kind: SafetyAgentKind,
   context: SafetyContext,
   maxOutputTokens: number = DEFAULT_SAFETY_MAX_TOKENS,
+  privateMode?: boolean,
 ): Promise<SafetyVerdict> {
   const { systemPrompt, userPrompt } = judgeMessages(kind, context);
 
@@ -389,6 +390,7 @@ export async function runSafetyJudge(
     systemPrompt,
     maxTokens: maxOutputTokens,
     temperature: 0,
+    privateMode,
   });
 
   const raw = await agent.execute(userPrompt);
@@ -416,6 +418,8 @@ export interface SafetyAgentHooks {
   log?: (line: string) => void;
   /** A verdict just landed — for a UI to show next to the call it judged. */
   onVerdict?: (event: SafetyVerdictEvent) => void;
+  /** Forwarded to `runSafetyJudge` — see `EngineConfig.privateMode`. */
+  privateMode?: boolean;
 }
 
 const MAX_REASON_LENGTH = 140;
@@ -494,7 +498,7 @@ export function createSafetyAgentDecider(
   safety: SafetyAgentConfig,
   hooks: SafetyAgentHooks = {},
 ): ApprovalDecider {
-  const { log = () => {}, onVerdict } = hooks;
+  const { log = () => {}, onVerdict, privateMode } = hooks;
   const kind = safety.kind ?? 'chat-judge';
   const label = `${safety.profile.provider}/${resolveModel(safety.profile)}`;
   const maxOutputTokens = safety.maxOutputTokens ?? DEFAULT_SAFETY_MAX_TOKENS;
@@ -505,7 +509,7 @@ export function createSafetyAgentDecider(
 
     let verdict: SafetyVerdict;
     try {
-      verdict = await runSafetyJudge(safety.profile, kind, context, maxOutputTokens);
+      verdict = await runSafetyJudge(safety.profile, kind, context, maxOutputTokens, privateMode);
     } catch (err) {
       // The prompt is rebuilt here (cheap, pure) rather than taken from
       // `verdict`, because there is no verdict on this path — `runSafetyJudge`

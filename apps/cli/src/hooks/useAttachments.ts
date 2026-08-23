@@ -26,6 +26,16 @@ export function labelFor(id: number): string {
   return `[image #${id}]`;
 }
 
+/**
+ * Every `[image #N]` label stripped out, for resending a task after its image
+ * was dropped — the image-rejected retry flow, currently the only caller.
+ * Left in, the model would be told to look at an image that is no longer
+ * attached.
+ */
+export function stripImageLabels(value: string): string {
+  return value.replace(/\[image #\d+\]\s*/g, '').trim();
+}
+
 /** Reports the image, not the base64 it inflates to — and shares the engine's
  *  measure, so the size shown here is the one a refusal would quote back. */
 export function describeImage(image: ImageAttachment): string {

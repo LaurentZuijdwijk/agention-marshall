@@ -16,6 +16,7 @@ export interface UseHeaderOptions {
   runtimeMode: RuntimeMode;
   enableWebSearch: boolean;
   enableGitHub: boolean;
+  privateMode?: boolean;
   transcript: Transcript;
 }
 
@@ -26,7 +27,7 @@ export interface UseHeaderOptions {
  * sentence rather than rolling it twice.
  */
 export function useHeader({
-  workspaceRoot, safetyLevel, runtimeMode, enableWebSearch, enableGitHub, transcript,
+  workspaceRoot, safetyLevel, runtimeMode, enableWebSearch, enableGitHub, privateMode, transcript,
 }: UseHeaderOptions) {
   const [sessionTagline] = useState(
     () => STARTUP_TAGLINES[Math.floor(Math.random() * STARTUP_TAGLINES.length)],
@@ -45,6 +46,7 @@ export function useHeader({
     runtime: runtimeMode,
     webSearch: enableWebSearch,
     github: enableGitHub,
+    private: privateMode,
   });
 
   const headerMessage = (deep: AgentProfile, fast?: AgentProfile, compact = false): Message =>

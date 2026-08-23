@@ -24,6 +24,12 @@ at the top of the setup wizard.
   working. No telemetry, no vendor who can deprecate your model out from under
   you. The only network call that leaves your machine is a version check
   against the npm registry.
+- **`--private` for a session that leaves nothing behind.** No session log, no
+  history/reasoning/http trace, no scratchpad notes, and nothing written to
+  `config.json`. OpenRouter requests are routed to deny data collection;
+  local models (llama.cpp, Ollama) need no such flag. Every other provider
+  has no equivalent request-level option, so marshall warns rather than
+  silently trusting it.
 - **It knows what's actually loaded.** The model picker reads llama.cpp's
   router and Ollama's `/api/ps` for live state: which models are resident
   right now, the real runtime context vs. what a preset merely asks for, the

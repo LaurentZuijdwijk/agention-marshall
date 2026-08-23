@@ -97,11 +97,46 @@ export function isUnsupportedRequestError(message: string): boolean {
     || /invalid image|unsupported image|failed to (?:parse|decode) image/i.test(message);
 }
 
+/**
+ * A provider could not carry the request through because of an attached
+ * image — either it flatly does not support one (a local model with no
+ * mmproj loaded), or it does but choked on this particular one (llama.cpp's
+ * multimodal pipeline — "mtmd", its own name for the module — failing mid
+ * chunk is usually the image's token count blowing the remaining context,
+ * not a corrupt file). Both land here rather than only the first: the fix a
+ * client can offer is the same either way — resend without the image, or
+ * try a different model — and neither is a shape problem compression could
+ * fix by trimming history text.
+ *
+ * Not checked against `isUnsupportedRequestError`'s patterns above: those
+ * require wording like "unsupported image" or "not supported for this
+ * model", and neither of llama.cpp's actual answers — "image input is not
+ * supported ... you may need to provide the mmproj", "failed to process
+ * mtmd chunk" — matches. Worded loosely because no provider standardises
+ * this phrasing. Callers only check this when the turn actually carried an
+ * image, so an unrelated error that happens to mention "image" (or, more
+ * easily confused, some other engine's unrelated "chunk" wording) elsewhere
+ * in a stack trace does not get misread as this.
+ */
+export function isImageRejectionError(message: string): boolean {
+  // `\w*` rather than a trailing `\b image \b`, so an OpenAI-shaped field name
+  // like `image_url` still counts — the underscore is a word character, so a
+  // plain word boundary would stop matching right at "image" and miss it.
+  return /\bimage\w*.{0,40}\b(?:not supported|unsupported|not accepted|rejected)\b/i.test(message)
+    || /\b(?:unsupported|invalid|rejected|does(?:n't| not) support|do not support)\b.{0,40}\bimage\w*/i.test(message)
+    || /mmproj/i.test(message)
+    // llama.cpp's multimodal module — "mtmd" — never appears in a message
+    // unless an image (or other multimodal input) was actually being
+    // processed, so this alone is trusted without the "image" wording the
+    // patterns above require.
+    || /\bmtmd\b/i.test(message);
+}
+
 /** How a provider failure was read, and the rule that read it that way. */
 export interface ProviderErrorClass {
   kind:
     | 'connection' | 'rate-limit' | 'context-length' | 'model-not-found'
-    | 'dangling-tool-call' | 'unsupported-request' | 'maybe-context' | 'other';
+    | 'dangling-tool-call' | 'image-rejected' | 'unsupported-request' | 'maybe-context' | 'other';
   /** Whether compressing history is worth attempting for this. */
   compressible: boolean;
   /** One line naming the rule that fired, for the session log. */
@@ -124,8 +159,17 @@ export interface ProviderErrorClass {
  * `isBadRequestError` reads any `400` in the message text and a quota payload
  * can contain one. `context-length` comes before the shape checks because a
  * provider naming the context window outranks our guess about the wording.
+ *
+ * `hasImages` gates the `image-rejected` check — it needs to run ahead of the
+ * `maybe-context` fallback below, since a local model with no mmproj loaded
+ * answers with a bare 400 exactly like an overflow does, and compressing
+ * history does nothing for a request whose image is the problem. Without the
+ * gate, `isImageRejectionError`'s loose wording match (it has to be loose;
+ * providers do not standardise this phrasing) could misread an unrelated 400
+ * that happens to mention "image" — passing `false` when the turn carried
+ * none keeps that from ever being reachable.
  */
-export function classifyProviderError(err: unknown, message: string): ProviderErrorClass {
+export function classifyProviderError(err: unknown, message: string, hasImages = false): ProviderErrorClass {
   if (isConnectionError(message)) {
     return { kind: 'connection', compressible: false, reason: 'the server could not be reached' };
   }
@@ -140,6 +184,9 @@ export function classifyProviderError(err: unknown, message: string): ProviderEr
   }
   if (isDanglingToolCallError(message)) {
     return { kind: 'dangling-tool-call', compressible: false, reason: 'a tool call and its result were not paired' };
+  }
+  if (hasImages && isImageRejectionError(message)) {
+    return { kind: 'image-rejected', compressible: false, reason: 'the provider rejected the attached image, which a smaller history will not fix' };
   }
   if (isUnsupportedRequestError(message)) {
     return { kind: 'unsupported-request', compressible: false, reason: 'the request shape was rejected, which a smaller history will not fix' };

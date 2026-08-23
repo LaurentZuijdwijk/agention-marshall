@@ -141,6 +141,16 @@ export type OutputEvent =
       ttftMs?: number;
     }
   | { type: 'error'; message: string }
+  /**
+   * A provider rejected the turn specifically because of an attached image —
+   * llama.cpp answering a model with no mmproj loaded, most often. Split from
+   * the plain `error` case because it has a recovery the user can act on that
+   * a generic failure does not: resend the same `task` without the image, or
+   * switch models first. The rejected turn is already popped from history by
+   * the time this fires, so either is a clean retry rather than a repeat of
+   * the same broken request.
+   */
+  | { type: 'image-rejected'; message: string; task: string }
   | { type: 'interrupted' }
   /**
    * The model's context window filled up mid-turn and the task was abandoned

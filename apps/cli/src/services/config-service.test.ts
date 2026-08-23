@@ -443,6 +443,36 @@ describe('atomic writes', () => {
   });
 });
 
+describe('private mode', () => {
+  it('does not write the global or project file', async () => {
+    const root = ws();
+    const config = new ConfigService(root, {}, undefined, true);
+    const ok = await config.saveProfiles(ROUTER, LOCAL);
+
+    assert.equal(ok, false);
+    assert.equal(existsSync(globalConfigPath()), false);
+    assert.equal(existsSync(configPath(root)), false);
+  });
+
+  it('does not report the no-op as an error — that reads as a failure, and nothing failed', async () => {
+    const root = ws();
+    const errors: string[] = [];
+    const config = new ConfigService(root, {}, message => errors.push(message), true);
+
+    await config.saveProfiles(ROUTER, undefined);
+    assert.deepEqual(errors, []);
+  });
+
+  it('leaves an existing config file untouched rather than clearing it', async () => {
+    const root = ws();
+    writeGlobal({ providers: [{ provider: 'openrouter', apiKey: 'was-here' }] });
+    const config = new ConfigService(root, {}, undefined, true);
+
+    await config.saveProfiles(LOCAL, undefined);
+    assert.deepEqual(readGlobal().providers, [{ provider: 'openrouter', apiKey: 'was-here' }]);
+  });
+});
+
 describe('refresh', () => {
   // Display data re-reads on demand; what the session runs on stays pinned.
   // This is the display half: a change made outside the process is invisible

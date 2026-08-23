@@ -300,6 +300,13 @@ export interface CreateAgentOptions {
    * without `promptCaching: true`; harmless on every other provider.
    */
   sessionId?: string;
+  /**
+   * OpenRouter only: routes the request with `provider.dataCollection: 'deny'`,
+   * restricting OpenRouter to upstreams that do not retain the prompt.
+   * Silently ignored by every other provider — see `EngineConfig.privateMode`,
+   * which is where a caller should be getting this from.
+   */
+  privateMode?: boolean;
 }
 
 /** `createAgent`'s default `CreateAgentOptions.name` — exported so a caller
@@ -350,6 +357,7 @@ export async function createAgent(
     temperature,
     promptCaching,
     sessionId,
+    privateMode,
   } = options;
   const { key: apiKey, authType } = resolveAuth(profile);
   const model = resolveModel(profile);
@@ -439,6 +447,7 @@ export async function createAgent(
           defaultHeaders: { ...OPENROUTER_ATTRIBUTION },
           ...(promptCaching ? { promptCaching: true } : {}),
           ...(sessionId ? { sessionId } : {}),
+          ...(privateMode ? { provider: { dataCollection: 'deny' } } : {}),
         } as OpenRouterConfig, history);
       }
       case 'cerebras': {

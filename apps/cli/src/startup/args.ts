@@ -18,6 +18,7 @@ const OPTIONS = {
   github:           { type: 'boolean' },
   'no-web-search':  { type: 'boolean' },
   light:            { type: 'boolean' },
+  private:          { type: 'boolean' },
   'context-model':  { type: 'string'  },
   'planner-model':  { type: 'string'  },
   'reviewer-model': { type: 'string'  },
@@ -51,6 +52,14 @@ export interface CliFlags {
   webSearch: boolean;
   /** Undefined means "not asked for on the CLI" — the config still gets a say. */
   light?: boolean;
+  /**
+   * No session log, no history/reasoning/http trace, no scratchpad notes, no
+   * writes to config.json — and OpenRouter requests are routed with
+   * `dataCollection: deny`. Session-only: unlike `light`, there is no
+   * `/private` command and nothing persists it, by design — see
+   * `EngineConfig.privateMode`.
+   */
+  private?: boolean;
   /** A single task to run non-interactively, then exit. No Ink, no REPL. */
   message?: string;
   /** Same words as `/safety` — `yolo`, `default`, `agentic`. Headless mode
@@ -90,6 +99,7 @@ export function parseCliArgs(argv: string[] = process.argv.slice(2)): CliFlags {
     safety:         str(values.safety),
     github:         values.github === true,
     light:          values.light === true ? true : undefined,
+    private:        values.private === true ? true : undefined,
     webSearch:      values['no-web-search'] !== true,
     version:        values.version === true,
     help:           values.help === true,
@@ -125,6 +135,10 @@ Options:
                            sub-agents, and a prompt with only the rules that still apply
                            (~1100 fewer tokens per request). Also /runtime light in the
                            session, which saves it for next time
+      --private           No session/history/reasoning/http log, no scratchpad notes, no
+                           writes to config.json. Routes OpenRouter requests to deny data
+                           collection; warns (but does not block) for any other non-local
+                           provider. Session-only — never persisted, no /private command
       --message <task>    Run one task non-interactively and exit — no Ink, no REPL.
                            For scripting and benchmark harnesses. Requires --safety yolo.
       --safety <word>     Same words as /safety: yolo, default, agentic. --message needs

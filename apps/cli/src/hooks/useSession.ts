@@ -47,6 +47,7 @@ export interface UseSessionOptions {
   maxTokens?: number;
   light?: boolean;
   swarm?: boolean;
+  privateMode?: boolean;
   safetyLevel?: SafetyLevel;
   safetyAgent?: SafetyAgentConfig;
   /** Servers loaded from the global config, connected at session start. */
@@ -65,7 +66,7 @@ export function useSession(options: UseSessionOptions): SessionController {
   const {
     workspaceRoot, config, agentProfile, fastProfile: initialFast,
     contextAgentProfile, plannerAgentProfile, reviewerAgentProfile,
-    enableGitHub, enableWebSearch, maxTokens, light, swarm,
+    enableGitHub, enableWebSearch, maxTokens, light, swarm, privateMode,
     client, onProfilesChanged, SessionCtor = Session, safetyLevel, safetyAgent,
   } = options;
 
@@ -77,6 +78,7 @@ export function useSession(options: UseSessionOptions): SessionController {
       agent: deep,
       models: { deep, fast },
       workspaceRoot, enableGitHub, enableWebSearch, maxTokens, light, swarm,
+      privateMode,
       mcpServers: options.mcpServers,
       namedAgents: options.namedAgents,
       ...(safetyLevel ? { safetyLevel } : {}),

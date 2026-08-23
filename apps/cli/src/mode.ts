@@ -19,6 +19,10 @@ export type Mode =
   | { type: 'login-pending'; session: LoginSession }
   | { type: 'approval'; request: ApprovalRequest }
   | { type: 'question'; request: AskRequest }
+  /** A provider rejected an attached image (no vision support / no mmproj
+   *  loaded) — `task` is what to resend if the user chooses to drop the
+   *  image, verbatim, since it was already popped from history. */
+  | { type: 'image-rejected'; message: string; task: string }
   /** The `/mcp add` wizard, asking for url, name and token. */
   | { type: 'mcp-setup' }
   /** The `/team add` wizard, asking for name, provider, model and description. */

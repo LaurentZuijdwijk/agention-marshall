@@ -100,6 +100,14 @@ export class ConfigService {
     private readonly workspaceRoot: string,
     private readonly flags: SettingsFlags = {},
     private onError: (message: string) => void = () => {},
+    /**
+     * When set, `writeMany` never touches disk — every save resolves as a
+     * no-op instead. Config here includes API keys and MCP server addresses,
+     * so "no local config" in private mode means this session cannot leave
+     * any of that behind, the same as a change made and then reverted before
+     * the process next reads the file.
+     */
+    private readonly privateMode: boolean = false,
   ) {}
 
   /**
@@ -368,6 +376,15 @@ export class ConfigService {
   private writeMany(
     writes: Array<{ scope: SettingsScope; what: string; transform: (files: ConfigFiles) => SavedConfig }>,
   ): Promise<boolean> {
+    // Every public mutation funnels through here, so this is the one gate
+    // private mode needs: nothing reaches disk. `onError` renders as an error
+    // row (a red ✖) — right for a real write failure, misleading for this,
+    // which is expected on every setting change for the rest of the session.
+    // The boot banner says so once, up front; repeating it here as an
+    // "error" every time would just be alarming noise.
+    if (this.privateMode) {
+      return Promise.resolve(false);
+    }
     const task: Promise<boolean> = this.queue.then(async () => {
       const paths = { global: globalConfigPath(), project: configPath(this.workspaceRoot) };
       for (let attempt = 1; ; attempt++) {

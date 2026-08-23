@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { createAttachments, describeImage, labelFor } from './useAttachments.js';
+import { createAttachments, describeImage, labelFor, stripImageLabels } from './useAttachments.js';
 import type { ImageAttachment } from '@agentionai/marshall-engine';
 
 const image = (data = 'AAAA'): ImageAttachment => ({ data, mimeType: 'image/png' });
@@ -18,6 +18,23 @@ describe('describeImage', () => {
 
   it('never rounds a real image down to nothing', () => {
     assert.equal(describeImage(image('AA')), '1 KB png');
+  });
+});
+
+describe('stripImageLabels', () => {
+  it('removes a label and the space after it', () => {
+    assert.equal(stripImageLabels(`${labelFor(1)} what is this?`), 'what is this?');
+  });
+
+  it('removes every label, wherever it sits in the text', () => {
+    assert.equal(
+      stripImageLabels(`compare ${labelFor(1)} with ${labelFor(2)} please`),
+      'compare with please',
+    );
+  });
+
+  it('leaves text with no label untouched', () => {
+    assert.equal(stripImageLabels('just words'), 'just words');
   });
 });
 

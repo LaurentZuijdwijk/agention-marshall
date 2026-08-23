@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>marshall — documentation</title>
-<meta name="description" content="marshall CLI documentation: installation, configuration, models, commands, tools, MCP and troubleshooting.">
+<meta name="description" content="marshall CLI documentation: installation, configuration, privacy, models, commands, tools, MCP and troubleshooting.">
 <meta name="color-scheme" content="dark">
 <!-- Google tag (gtag.js) -->
 <script async src="https://www.googletagmanager.com/gtag/js?id=G-L248LRLBS9"></script>
@@ -21,7 +21,7 @@
 <body>
 <nav><div class="wrap nav"><span class="logo"><a href="index.html">marshall</a></span><a class="optional" href="index.html">home</a><a class="optional" href="index.html#commands">commands</a><span class="spacer"></span><a href="https://github.com/LaurentZuijdwijk/agention-marshall">github ↗</a></div></nav>
 <main class="wrap layout">
-<aside class="toc" aria-label="On this page"><strong>docs</strong><a href="#install">install</a><a href="#config">configuration</a><a href="#models">models & tiering</a><a href="#commands">commands</a><a href="#tools">tools & approvals</a><a href="#jobs">background jobs</a><a href="#mcp">MCP</a><a href="#team">named agents</a><a href="#memory">project memory</a><a href="#troubleshooting">troubleshooting</a></aside>
+<aside class="toc" aria-label="On this page"><strong>docs</strong><a href="#install">install</a><a href="#config">configuration</a><a href="#privacy">privacy</a><a href="#models">models & tiering</a><a href="#commands">commands</a><a href="#tools">tools & approvals</a><a href="#jobs">background jobs</a><a href="#mcp">MCP</a><a href="#team">named agents</a><a href="#memory">project memory</a><a href="#troubleshooting">troubleshooting</a></aside>
 <article>
 <h1>documentation</h1><p>marshall is a terminal coding agent. It plans, reads, edits and runs your project, while keeping you in control of every mutation.</p>
 <h2 id="install">install & first run</h2>
@@ -54,6 +54,9 @@ marshall</code></pre>
   }
 }</code></pre>
 <p><code>/runtime light</code> pins the mode for the current workspace; <code>/runtime light --global</code> pins it for every workspace, and a workspace that pins its own still wins. <code>/safety</code> records levels 2 and 3 the same way, with the judge's provider and model but never its key. Level 1 (<code>yolo</code>) is never written. A settings block from a version marshall does not recognise is ignored rather than half-read, and anything invalid is reported at startup instead of silently changing what you configured.</p>
+<h2 id="privacy">privacy</h2>
+<p><code>--private</code> runs a session that writes nothing to disk beyond the workspace files you actually asked it to edit: no session log, no history/reasoning/http trace, no scratchpad notes, and no writes to <code>config.json</code> — a setting changed mid-session (model, safety level, …) simply isn't saved. It's session-only by design: there's no <code>/private</code> command and nothing persists it, so it can't quietly outlive the run it was asked for. The header shows <code>private on</code> while it's active.</p>
+<p>On OpenRouter, requests are routed with <code>provider.dataCollection: deny</code>, restricting routing to upstreams that don't retain the prompt. llama.cpp and Ollama need no such flag, since nothing leaves the machine. Every other provider has no equivalent request-level option, so marshall warns once, at startup, naming whichever provider isn't enforced rather than assuming the same guarantee applies everywhere.</p>
 <h2 id="models">models & tiering</h2>
 <p>Marshall supports local and hosted providers. The deep model handles coding, planning and review; the fast model reads files and summarises context. Use <code>/model</code> to choose them, or <code>/model off</code> to use one model for everything.</p>
 <h2 id="commands">slash commands</h2>
@@ -73,7 +76,7 @@ marshall</code></pre>
 <h2 id="troubleshooting">troubleshooting</h2>
 <h3>Context window full</h3><p>Start a fresh task or use <code>/clear</code>. Reduce unnecessary context and use the fast tier for file-reading work.</p>
 <h3>Local server unreachable</h3><p>Check that llama.cpp or Ollama is running, its host and port are correct, and the selected model is loaded.</p>
-<h3>Where are logs?</h3><p>Session logs are stored under <code>.marshall/logs/session.log</code> in the workspace.</p>
+<h3>Where are logs?</h3><p>Session logs are stored under <code>.marshall/logs/session.log</code> in the workspace — unless the session was started with <code>--private</code>, which writes none. See <a href="#privacy">privacy</a>.</p>
 </article></main>
 <footer><div class="wrap"><span>◆ marshall — built on <a href="https://docs.agention.ai">agention</a></span><span style="float:right"><a href="index.html">home</a> · <a href="https://github.com/LaurentZuijdwijk/agention-marshall">github</a> · MIT licensed</span></div></footer>
 </body></html>

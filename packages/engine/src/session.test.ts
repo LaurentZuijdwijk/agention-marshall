@@ -523,6 +523,29 @@ test('without a fast tier every role stays on the main agent', async () => {
 });
 
 // ---------------------------------------------------------------------------
+// private mode
+// ---------------------------------------------------------------------------
+
+test('privateMode never creates .marshall/logs, even for the TIERS line every construction logs', async () => {
+  const root = tempRoot();
+  new Session(
+    {
+      agent: { provider: 'claude', apiKey: 'test-key' },
+      workspaceRoot: root,
+      compressionThreshold: 0,
+      privateMode: true,
+    },
+    makeClient(),
+  );
+
+  // Same wait a real TIERS line would need to land, were logging not
+  // suppressed — readSessionLog can't be reused here since it polls until
+  // the line *appears*, which is exactly the outcome under test.
+  await new Promise(r => setTimeout(r, 100));
+  assert.equal(existsSync(join(root, '.marshall', 'logs')), false);
+});
+
+// ---------------------------------------------------------------------------
 // always-approve coalescing for parallel tool calls
 // ---------------------------------------------------------------------------
 

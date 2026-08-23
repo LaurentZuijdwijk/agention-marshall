@@ -261,7 +261,10 @@ export class CompressionManager {
       // tier the summariser is the same small-context model that keeps
       // failing, so a few compressions in, it starts failing on its *own*
       // accumulated history — the exact problem it exists to fix.
-      this.summaryAgent = await createAgent(summaryProfile, [], new History([], { transient: true }), { maxTokens: 1024 });
+      this.summaryAgent = await createAgent(summaryProfile, [], new History([], { transient: true }), {
+        maxTokens: 1024,
+        privateMode: config.privateMode,
+      });
       this.threshold = threshold;
       this.log(`COMPRESSION_READY summariser=${summaryProfile.provider}/${resolveModel(summaryProfile)} threshold=${threshold}`);
     } catch (err) {

@@ -217,6 +217,10 @@ export class ToolBelt {
   }): TurnBelt {
     const config = this.deps.getConfig();
     const light = config.light === true;
+    // Scratchpad notes and the session-log tool write to .marshall/ — the one
+    // thing `light` strips that private mode needs stripped too, independent
+    // of light: jobs/conflict/swarm tools don't touch disk, so they stay.
+    const privateMode = config.privateMode === true;
     const { context, search, planner, reviewer } = opts.roleTools;
 
     const toolConfig: ToolConfig = {
@@ -253,7 +257,7 @@ export class ToolBelt {
       ...createFileTools(toolConfig, this.deps.dedupeCache),
       createShellTool(toolConfig),
       ...(light ? [] : createJobTools(toolConfig)),
-      ...(light ? [] : createScratchTools(toolConfig)),
+      ...(light || privateMode ? [] : createScratchTools(toolConfig)),
       ...(light ? [] : createConflictTools(toolConfig)),
       ...(config.enableGitHub ? createGitHubTools(toolConfig) : []),
       // Light mode is single-agent by definition, so spawning is out there for
@@ -591,6 +595,7 @@ export class ToolBelt {
       maxTokens: config.maxTokens,
       systemPrompt: buildSwarmPrompt(opts.toolset, named?.description),
       name: opts.id,
+      privateMode: config.privateMode,
     });
     this.deps.events.attachSubAgentListeners(agent, tools, opts.id);
     for (const t of tools) {
@@ -654,6 +659,7 @@ export class ToolBelt {
         maxTokens: opts.maxTokens ?? this.deps.getConfig().maxTokens,
         systemPrompt: opts.systemPrompt,
         name: opts.name,
+        privateMode: this.deps.getConfig().privateMode,
         ...(opts.builtInTools ? { builtInTools: opts.builtInTools } : {}),
       });
       // Mirror the sub-agent's own reads to the transcript, tagged with the call

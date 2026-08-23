@@ -103,6 +103,7 @@ export async function runHeadless(
     contextAgent: profiles.contextAgentProfile,
     plannerAgent: profiles.plannerAgentProfile,
     reviewerAgent: profiles.reviewerAgentProfile,
+    privateMode: flags.private,
   };
 
   const session = new SessionCtor(engineConfig, client);

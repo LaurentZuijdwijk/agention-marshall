@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   describeAgentError, isConnectionError, isContextLengthError, isModelNotFoundError, isDanglingToolCallError,
-  endpointFor, providerErrorDiagnostics,
+  isImageRejectionError, endpointFor, providerErrorDiagnostics,
 } from './errors.js';
 import type { AgentProfile } from './config.js';
 
@@ -111,6 +111,25 @@ test('an unanswered tool call is not mistaken for an overlong prompt', () => {
     'request (14231 tokens) exceeds the available context size (13312 tokens)',
   ), false);
   assert.equal(isDanglingToolCallError('This model\'s maximum context length is 8192 tokens'), false);
+});
+
+test('image rejections are recognised across the wordings providers use', () => {
+  for (const m of [
+    'image input is not supported - hint: if this is unexpected, you may need to provide the mmproj',
+    'This model does not support image inputs',
+    'unsupported image content',
+    'invalid image_url',
+    'rejected: image not accepted by this endpoint',
+    // A vision model that does support images, but chokes on this one —
+    // llama.cpp's own wording, no "image" in it at all.
+    'failed to process mtmd chunk',
+  ]) {
+    assert.equal(isImageRejectionError(m), true, m);
+  }
+
+  assert.equal(isImageRejectionError('prompt is too long for the model context'), false);
+  assert.equal(isImageRejectionError('rate limit exceeded'), false);
+  assert.equal(isImageRejectionError('tool_call_id \'call_abc123\' not found in the conversation'), false);
 });
 
 test('provider response details are included when the wrapper message is generic', () => {

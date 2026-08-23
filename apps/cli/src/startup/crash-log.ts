@@ -10,11 +10,19 @@
 import { dirname, join } from 'node:path';
 import { mkdirSync, appendFileSync } from 'node:fs';
 
-export function installCrashLogging(workspaceRoot: string): void {
+export function installCrashLogging(workspaceRoot: string, privateMode?: boolean): void {
   const logPath = join(workspaceRoot, '.marshall', 'logs', 'session.log');
 
   const note = (kind: string, err: unknown) => {
     const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
+    // Private mode still needs to keep the process alive — that's the whole
+    // point of this file — it just can't write the error (which may quote
+    // the prompt) to disk. stderr instead of dropping it silently: still
+    // visible to whoever is running the session, never persisted.
+    if (privateMode) {
+      console.error(`[${new Date().toISOString()}] ${kind} ${message}`);
+      return;
+    }
     try {
       mkdirSync(dirname(logPath), { recursive: true });
       appendFileSync(logPath, `[${new Date().toISOString()}] ${kind} ${message}\n`);

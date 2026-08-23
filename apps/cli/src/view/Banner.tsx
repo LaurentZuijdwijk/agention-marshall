@@ -132,13 +132,18 @@ export interface HeaderMeta {
   runtime?: RuntimeMode;
   webSearch?: boolean;
   github?: boolean;
+  private?: boolean;
 }
 
 /** The key/value block that sits under the wordmark. `keys` is boot-time
  *  orientation, so it is dropped once the user is already oriented. */
 function Meta({ meta, dim, showKeys = true }: { meta: HeaderMeta; dim?: boolean; showKeys?: boolean }) {
+  // padEnd(8) so shorter labels line up under the widest one, "settings" —
+  // but padEnd is a no-op on a string already at its target length, so
+  // "settings" itself never got a trailing space and ran into its value.
+  // +1 guarantees a gap after every label, "settings" included.
   const label = (text: string) => (
-    <Text color={dim ? C.faint : C.muted}>{text.padEnd(8)}</Text>
+    <Text color={dim ? C.faint : C.muted}>{text.padEnd(9)}</Text>
   );
 
   return (
@@ -179,11 +184,12 @@ function Meta({ meta, dim, showKeys = true }: { meta: HeaderMeta; dim?: boolean;
           <Text color={dim ? C.faint : C.muted}>v{meta.version}</Text>
         </Box>
       )}
-      {(meta.webSearch === false || meta.github) && (
+      {(meta.webSearch === false || meta.github || meta.private) && (
         <Box>
           {label('settings')}
           <Text color={dim ? C.faint : C.muted}>
-            {[meta.webSearch === false && 'web off', meta.github && 'GitHub on'].filter(Boolean).join('  ·  ')}
+            {[meta.webSearch === false && 'web off', meta.github && 'GitHub on', meta.private && 'private on']
+              .filter(Boolean).join('  ·  ')}
           </Text>
         </Box>
       )}

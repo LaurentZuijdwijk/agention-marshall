@@ -10,6 +10,8 @@ import { G } from './view/theme.js';
 import { MessageRow } from './view/MessageRow.js';
 import { ApprovalPanel, APPROVAL_LABELS } from './view/ApprovalPanel.js';
 import { QuestionPanel } from './view/QuestionPanel.js';
+import { ImageRejectedPanel } from './view/ImageRejectedPanel.js';
+import type { ImageRejectedChoice } from './view/ImageRejectedPanel.js';
 import { PromptFrame } from './view/PromptFrame.js';
 import { InputPrompt } from './view/InputPrompt.js';
 import { LiveOutput } from './view/LiveOutput.js';
@@ -25,7 +27,7 @@ import { useTranscriptPort } from './hooks/useTranscriptPort.js';
 import type { Activity } from './hooks/useTranscriptPort.js';
 import { usePreferences } from './hooks/usePreferences.js';
 import { usePasteBuffer } from './hooks/usePasteBuffer.js';
-import { useAttachments, describeImage } from './hooks/useAttachments.js';
+import { useAttachments, describeImage, stripImageLabels } from './hooks/useAttachments.js';
 import { readClipboardImage } from './services/clipboard.js';
 import { fetchOpenRouterPricing } from './services/pricing.js';
 import { useSession } from './hooks/useSession.js';
@@ -61,6 +63,8 @@ export interface AppProps {
   enableGitHub?: boolean;
   enableWebSearch?: boolean;
   maxTokens?: number;
+  /** `--private`. No logs, no local config writes — see `EngineConfig.privateMode`. */
+  privateMode?: boolean;
   /**
    * The one owner of configuration: both files, their merge, and every write.
    *
@@ -108,6 +112,7 @@ export function App({
   enableGitHub = false,
   enableWebSearch = true,
   maxTokens,
+  privateMode = false,
   config: configProp,
   updateCheck,
   registerRedraw,
@@ -126,8 +131,8 @@ export function App({
   // changes identity only when a file does, so a write re-renders and nothing
   // else does.
   const config = useMemo(
-    () => configProp ?? new ConfigService(workspaceRoot),
-    [configProp, workspaceRoot],
+    () => configProp ?? new ConfigService(workspaceRoot, {}, undefined, privateMode),
+    [configProp, workspaceRoot], // eslint-disable-line react-hooks/exhaustive-deps
   );
   const savedConfig = useConfig(config);
   const settings = savedConfig.settings;
@@ -173,7 +178,7 @@ export function App({
 
   // ── the header row ─────────────────────────────────────────────────────────
   const { headerMeta, headerMessage, sessionTagline } = useHeader({
-    workspaceRoot, safetyLevel, runtimeMode, enableWebSearch, enableGitHub, transcript,
+    workspaceRoot, safetyLevel, runtimeMode, enableWebSearch, enableGitHub, privateMode, transcript,
   });
 
   // ── engine client ──────────────────────────────────────────────────────────
@@ -190,7 +195,7 @@ export function App({
     useSession({
       workspaceRoot, config, agentProfile, fastProfile: initialFastProfile,
       contextAgentProfile, plannerAgentProfile, reviewerAgentProfile,
-      enableGitHub, enableWebSearch, maxTokens,
+      enableGitHub, enableWebSearch, maxTokens, privateMode,
       mcpServers: savedConfig.mcpServers,
       namedAgents: toNamedAgents(savedConfig.agents, config.credentialsFor),
       client, SessionCtor,
@@ -245,6 +250,31 @@ export function App({
     // failed connection; keep it in the informational MCP status style.
     for (const warning of savedConfig.warnings) {
       transcript.push('info', warning);
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Private mode only enforces anything at the request level for OpenRouter
+  // (routed with dataCollection: deny) and local models — every other
+  // provider has no equivalent flag in this SDK, so a session that starts on
+  // one is told once, up front, rather than left to assume the same guarantee
+  // applies everywhere.
+  useEffect(() => {
+    if (!privateMode) return;
+    transcript.push('info',
+      'Private mode is on: no session log, no history/reasoning/http trace, no scratchpad '
+      + 'notes, nothing saved to config.json this run.');
+    const local = new Set(['ollama', 'llamacpp']);
+    const providers = [...new Set(
+      [activeProfile, fastProfile]
+        .filter((p): p is AgentProfile => !!p)
+        .map(p => p.provider)
+        .filter(p => p !== 'openrouter' && !local.has(p)),
+    )];
+    if (providers.length > 0) {
+      transcript.push('info',
+        `Private mode: ${providers.join(', ')} has no "don't retain" request option in this `
+        + 'build, so data handling there depends on its own policy — only OpenRouter (routed '
+        + 'to deny data collection here) and local models (ollama, llamacpp) are enforced.');
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -342,6 +372,28 @@ export function App({
     setMode(next.show ? { type: 'approval', request: next.show } : { type: 'running' });
   };
 
+  // ── a rejected image ──────────────────────────────────────────────────────
+  const resolveImageRejected = (choice: ImageRejectedChoice) => {
+    if (mode.type !== 'image-rejected') return;
+    if (choice === 'retry') {
+      // The label the model would otherwise be told to look at, with nothing
+      // behind it now that the image is dropped.
+      const task = stripImageLabels(mode.task);
+      transcript.push('info', 'retrying without the image…');
+      setActivity('thinking');
+      setMode({ type: 'running' });
+      session?.run(task, []).catch((err) => {
+        transcript.push('error', err instanceof Error ? err.message : String(err));
+        setMode({ type: 'idle' });
+      });
+      return;
+    }
+    // Opens the same wizard `/model` does — the user resends manually once a
+    // vision-capable model is in place, the same as switching models any
+    // other time.
+    setMode({ type: 'setup', tier: 'deep', chain: false });
+  };
+
   // ── wizard completion (setup / mcp add / safety judge) ─────────────────────
   const wizardActions = useWizardActions({
     session, config, transcript, activeProfile, fastProfile,
@@ -371,7 +423,7 @@ export function App({
     // by the mode alone, that prompt went to `run`, came back as "A task is
     // already running." and was lost.
     if (!text.startsWith('/') && (mode.type === 'running' || mode.type === 'approval'
-      || (mode.type === 'idle' && session?.busy === true))) {
+      || mode.type === 'image-rejected' || (mode.type === 'idle' && session?.busy === true))) {
       if (!text) return;
       setPendingPrompts(previous => [...previous, text]);
       setInput('');
@@ -506,7 +558,8 @@ export function App({
     />
   );
 
-  const accepting = mode.type === 'idle' || mode.type === 'running' || mode.type === 'login-pending' || mode.type === 'approval';
+  const accepting = mode.type === 'idle' || mode.type === 'running' || mode.type === 'login-pending'
+    || mode.type === 'approval' || mode.type === 'image-rejected';
 
   // Everything below <Static> shares one height budget, and blowing it makes Ink
   // repaint the whole screen — transcript included — on every render. That is
@@ -515,7 +568,7 @@ export function App({
   // See view/layout.ts.
   const columns = stdout?.columns ?? 80;
   const rows = stdout?.rows ?? 24;
-  const modal = mode.type === 'approval' || mode.type === 'question';
+  const modal = mode.type === 'approval' || mode.type === 'question' || mode.type === 'image-rejected';
   const panel = panelLayout(rows);
 
   return (
@@ -577,6 +630,13 @@ export function App({
           rows={panel.rows}
           onAnswer={(answer) => { const next = questions.resolve(answer); transcript.push('user', answer); setMode(next?.show ? { type: 'question', request: next.show } : { type: 'running' }); }}
           onCancel={() => { const next = questions.resolve(NO_ANSWER); setMode(next?.show ? { type: 'question', request: next.show } : { type: 'running' }); }}
+        />
+      )}
+      {mode.type === 'image-rejected' && (
+        <ImageRejectedPanel
+          columns={columns}
+          onSelect={resolveImageRejected}
+          onCancel={() => setMode({ type: 'idle' })}
         />
       )}
 

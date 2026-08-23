@@ -136,6 +136,7 @@ export function createApprovalGate({ getConfig, client, log }: ApprovalGateDeps)
         ? [createSafetyAgentDecider(config.safetyAgent, {
             log,
             onVerdict: (verdict) => client.onOutput({ type: 'safety-verdict', ...verdict }),
+            privateMode: config.privateMode,
           })]
         : []),
       askHuman,

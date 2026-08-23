@@ -52,6 +52,12 @@ export interface TranscriptPort {
   }): void;
   requestApproval(request: ApprovalRequest): Promise<ApprovalDecision>;
   askUser(request: AskRequest): Promise<string>;
+  /**
+   * A provider rejected an attached image. Not folded into `turnEnded('error')`
+   * — the caller has an actual recovery to offer (resend without the image, or
+   * switch models first), which a plain error message does not.
+   */
+  imageRejected(message: string, task: string): void;
 }
 
 /**
@@ -260,6 +266,12 @@ export function createEngineClient(port: TranscriptPort): ClientInterface {
           commitStep();
           port.push('error', event.message);
           port.turnEnded('error');
+          break;
+
+        case 'image-rejected':
+          commitStep();
+          port.push('error', event.message);
+          port.imageRejected(event.message, event.task);
           break;
 
         case 'interrupted':

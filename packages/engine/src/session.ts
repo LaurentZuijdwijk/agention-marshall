@@ -349,7 +349,12 @@ export class Session {
     if (!this.mcp.isEmpty) void this.mcp.connectAll().then(() => this.reportMcpState());
 
     this.logPath = join(config.workspaceRoot, '.marshall', 'logs', 'session.log');
-    this.logDirReady = mkdir(dirname(this.logPath), { recursive: true }).then(() => {});
+    // Private mode never creates the log directory in the first place — `log`/
+    // `traceHistory`/`traceReasoning` below no-op instead of writing into it,
+    // but there is no reason to leave an empty `.marshall/logs/` behind either.
+    this.logDirReady = config.privateMode
+      ? Promise.resolve()
+      : mkdir(dirname(this.logPath), { recursive: true }).then(() => {});
 
     // Last: its constructor builds the sub-agent tools, which needs everything
     // above it (the events sink, the approval gate, the job registry).
@@ -614,6 +619,7 @@ export class Session {
   }
 
   private log(entry: string): void {
+    if (this.config.privateMode) return;
     const line = `[${new Date().toISOString()}] ${entry}\n`;
     this.logDirReady
       .then(() => appendFile(this.logPath, line))
@@ -628,6 +634,7 @@ export class Session {
    * with the variable set and turning it off costs nothing at all.
    */
   private traceHistory(label: string): void {
+    if (this.config.privateMode) return;
     const mode = traceMode(process.env.MARSHALL_TRACE_HISTORY);
     if (mode === 'off') return;
     const record = formatTrace(this.history, label, mode);
@@ -649,7 +656,7 @@ export class Session {
    * is a restart and disabling it costs nothing.
    */
   private traceReasoning(text: string): void {
-    if (process.env.MARSHALL_TRACE_REASONING !== '1') return;
+    if (this.config.privateMode || process.env.MARSHALL_TRACE_REASONING !== '1') return;
     this.logDirReady
       .then(() => appendFile(join(dirname(this.logPath), 'reasoning.log'), `${JSON.stringify(text)}\n`))
       .catch(() => {});
@@ -1235,6 +1242,7 @@ export class Session {
 
     try {
       const light = this.config.light === true;
+      const privateMode = this.config.privateMode === true;
 
       const { tools, extraInstructions } = this.toolBelt.forTurn({
         signal,
@@ -1250,7 +1258,7 @@ export class Session {
       // turn does not have. The guidance blocks already work this way — they
       // key off whether their tool resolved — and this closes the same gap for
       // the fixed rules.
-      const turnSystemPrompt = buildSystemPrompt({ scratch: !light, background: !light });
+      const turnSystemPrompt = buildSystemPrompt({ scratch: !light && !privateMode, background: !light });
       // Ahead of createAgent, not after: this is what keeps a prompt that
       // legitimately differs from last turn's (`/runtime light`, tool
       // availability) from leaving a stale, no-longer-first system entry in
@@ -1270,6 +1278,7 @@ export class Session {
         // (sub-agents, the compression summariser) leaves this off.
         promptCaching: true,
         sessionId: this.sessionId,
+        privateMode: this.config.privateMode,
       });
       if (coderProfile.provider === 'llamacpp') this.llamaModelLoaded = true;
       this.currentAgent = agent;
@@ -1284,7 +1293,7 @@ export class Session {
       agent.on(AgentEvent.ERROR, (err: unknown) => {
         if (signal.aborted) return;
         const message = err instanceof Error ? err.message : String(err);
-        const verdict = classifyProviderError(err, message);
+        const verdict = classifyProviderError(err, message, images.length > 0);
         // Connection errors join `compressible` here for the same reason:
         // the catch block below has its own recovery plan for both (retry,
         // or compress) and reports the error itself, exactly once, only once
@@ -1303,6 +1312,21 @@ export class Session {
         // to retry or compress and hand back a friendlier outcome instead.
         if (recoverable) return;
         errorReported = true;
+
+        // A rejected image gets its own event rather than the generic one: the
+        // client can offer "resend without the image" or "switch models",
+        // neither of which a plain error message lets it do.
+        if (verdict.kind === 'image-rejected') {
+          // The rejected turn's user entry (the one carrying the image) is
+          // still in history — leave it and a retry resends the same broken
+          // request. Same cleanup the compressible path uses below.
+          this.popLastHistoryMessage();
+          this.repairDanglingToolCalls('the request carrying an image was rejected');
+          this.client.onOutput({ type: 'image-rejected', message, task });
+          this.log(`IMAGE_REJECTED ${diag} ${JSON.stringify(message)}`);
+          return;
+        }
+
         this.client.onOutput({ type: 'error', message });
         this.log(`ERROR ${message}`);
       });
@@ -1338,7 +1362,7 @@ export class Session {
           break;
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          const verdict = classifyProviderError(err, message);
+          const verdict = classifyProviderError(err, message, images.length > 0);
           this.log(
             `STREAM_ERROR ${diag} kind=${verdict.kind} shouldCompress=${verdict.compressible} ` +
             `because=${JSON.stringify(verdict.reason)} aborted=${signal.aborted} ` +
@@ -1488,6 +1512,7 @@ export class Session {
         systemPrompt,
         extraInstructions: contextTool ? SURVEY_TOOL_GUIDANCE : undefined,
         name: eventType,
+        privateMode: this.config.privateMode,
       });
       this.currentAgent = agent;
 
