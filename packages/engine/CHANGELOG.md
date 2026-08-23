@@ -1,5 +1,65 @@
 # @agentionai/marshall-engine
 
+## 0.22.0
+
+### Minor Changes
+
+- Give a provider's rejection of an attached image its own recovery path instead of dying as a
+  generic error. Attaching an image to a local model with no vision support loaded (no mmproj) used
+  to surface as an opaque failure with nothing to do but retype the task — the image itself was
+  never the thing at fault, so there was always a clean way forward, the UI just didn't offer one.
+
+  `classifyProviderError` now takes whether the turn carried images and, when it did, checks the
+  message against the two patterns providers actually use for this — llama.cpp's own wording
+  ("mmproj", "failed to process mtmd chunk") and the more generic "image ... not supported" shape —
+  ahead of the context-length fallback, since a model with no vision support answers with a bare 400
+  that reads exactly like a context overflow otherwise. Compressing history would do nothing for it.
+
+  The engine reports it as its own `image-rejected` event (message + the original task, already
+  popped from history) rather than folding it into `error`. The CLI shows a panel with the two real
+  options: remove the image and resend the same task (`stripImageLabels` strips the `[image #N]`
+  placeholders so the model isn't told to look at something no longer attached), or switch to a
+  vision-capable model first via the same wizard `/model` opens.
+
+- Add `--private`: a session that writes nothing to disk beyond the workspace files you actually
+  asked it to edit, and prefers a model that doesn't retain the prompt.
+
+  No session log, no history/reasoning/http trace, no scratchpad notes (`note_*`/`log_*` drop out of
+  the belt, same as `light` mode). `ConfigService` refuses every write for the session — no API key,
+  model pick, MCP config or safety setting lands in `config.json` — leaving whatever was already on
+  disk untouched. A crash still gets reported, to stderr instead of `.marshall/logs/session.log`, so
+  the process doesn't die silently but nothing about it persists either.
+
+  Every agent the session can spawn — the coder, sub-agents, the compression summariser, the safety
+  judge — now threads a `privateMode` flag through `createAgent`. On OpenRouter this sets
+  `provider: { dataCollection: 'deny' }`, restricting routing to upstreams that don't retain the
+  prompt; llama.cpp and Ollama need no such flag, since nothing leaves the machine. Every other
+  provider has no equivalent request-level option in this SDK, so the session posts a one-time
+  warning naming whichever provider isn't enforced instead of pretending the guarantee is universal.
+
+  Session-scoped by design: there is no `/private` command and nothing persists it to a settings
+  file, so it can't quietly outlive the run it was asked for. The header shows `private on` while
+  it's active.
+
+### Patch Changes
+
+- a25ad81: Fix a stale system message surviving a mid-session prompt change (`/runtime light`,
+  `/runtime agentic`, or any change to which tools are available) and ending up no longer first in
+  the request — several providers reject that outright (llama.cpp's Jinja chat template: "System
+  message must be at the beginning").
+
+  The SDK's own system-message guard only skips re-adding when the content is byte-identical to
+  what's already there; otherwise it appends a second entry rather than replacing the first, since
+  the underlying `History.addSystem` is a plain push. The session's History is shared and long-lived
+  — a fresh agent is constructed every turn against the same object — so a prompt that legitimately
+  differs from last turn's used to leave the old entry in place and land the new one wherever
+  history currently ended, after real user/assistant turns.
+
+  `Session` now keeps its own system entry first and current, using the exact content
+  `createAgent`'s own call is about to ask for (`agentSystemMessage`/`buildAgentDescription`, both
+  now exported from `agent-factory.ts` for this): a no-op when nothing changed, a clean
+  replace-and-reposition when it did.
+
 ## 0.21.0
 
 ### Minor Changes

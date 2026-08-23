@@ -1,5 +1,74 @@
 # @agentionai/marshall-cli
 
+## 0.23.0
+
+### Minor Changes
+
+- Give a provider's rejection of an attached image its own recovery path instead of dying as a
+  generic error. Attaching an image to a local model with no vision support loaded (no mmproj) used
+  to surface as an opaque failure with nothing to do but retype the task — the image itself was
+  never the thing at fault, so there was always a clean way forward, the UI just didn't offer one.
+
+  `classifyProviderError` now takes whether the turn carried images and, when it did, checks the
+  message against the two patterns providers actually use for this — llama.cpp's own wording
+  ("mmproj", "failed to process mtmd chunk") and the more generic "image ... not supported" shape —
+  ahead of the context-length fallback, since a model with no vision support answers with a bare 400
+  that reads exactly like a context overflow otherwise. Compressing history would do nothing for it.
+
+  The engine reports it as its own `image-rejected` event (message + the original task, already
+  popped from history) rather than folding it into `error`. The CLI shows a panel with the two real
+  options: remove the image and resend the same task (`stripImageLabels` strips the `[image #N]`
+  placeholders so the model isn't told to look at something no longer attached), or switch to a
+  vision-capable model first via the same wizard `/model` opens.
+
+- Add `--private`: a session that writes nothing to disk beyond the workspace files you actually
+  asked it to edit, and prefers a model that doesn't retain the prompt.
+
+  No session log, no history/reasoning/http trace, no scratchpad notes (`note_*`/`log_*` drop out of
+  the belt, same as `light` mode). `ConfigService` refuses every write for the session — no API key,
+  model pick, MCP config or safety setting lands in `config.json` — leaving whatever was already on
+  disk untouched. A crash still gets reported, to stderr instead of `.marshall/logs/session.log`, so
+  the process doesn't die silently but nothing about it persists either.
+
+  Every agent the session can spawn — the coder, sub-agents, the compression summariser, the safety
+  judge — now threads a `privateMode` flag through `createAgent`. On OpenRouter this sets
+  `provider: { dataCollection: 'deny' }`, restricting routing to upstreams that don't retain the
+  prompt; llama.cpp and Ollama need no such flag, since nothing leaves the machine. Every other
+  provider has no equivalent request-level option in this SDK, so the session posts a one-time
+  warning naming whichever provider isn't enforced instead of pretending the guarantee is universal.
+
+  Session-scoped by design: there is no `/private` command and nothing persists it to a settings
+  file, so it can't quietly outlive the run it was asked for. The header shows `private on` while
+  it's active.
+
+### Patch Changes
+
+- Fix the header's `settings` row running into its value with no space (`settingsweb off` instead
+  of `settings  web off`). Every other label in that column is shorter than the 8-character width
+  `padEnd(8)` pads to, so it always left at least one space — `"settings"` is exactly 8 characters,
+  so `padEnd` was a no-op for that one row specifically. Padding to 9 instead guarantees a gap after
+  every label, "settings" included.
+- 89d4fce: A slash command typed while a task is actively running now applies immediately instead of being
+  silently queued as if it were agent input. Queuing captured every submission the same way while
+  the session was busy, with no exception for `/model`, `/clear`, `/jobs`, and the rest — so
+  `/clear` typed mid-turn used to sit in the queue and, once dequeued, get sent to the model as the
+  literal text `"/clear"` rather than actually clearing anything.
+
+  Most commands are safe to run at any time — reads, background-job/agent management, and config
+  the engine already re-reads fresh each turn (`/runtime`, `/safety <level>`) either touch nothing
+  an active turn depends on, or the engine's own guard (`Session.refuseIfBusy`, `Session.clear()`)
+  already covers them cleanly. The exception is the handful that open a wizard and replace `mode`
+  outright (`/setup`, `/model deep|fast|both`, `/safety agentic`, `/mcp add`, `/team add`, `/login`)
+  — letting one of those steal `mode` out from under a turn that is still actually running would
+  manufacture the exact "mode says idle, `session.busy` says otherwise" mismatch `handleSubmit`
+  already has to account for elsewhere. Those now refuse clearly ("a task is running — interrupt it
+  first") rather than being let through.
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies [a25ad81]
+  - @agentionai/marshall-engine@0.22.0
+
 ## 0.22.0
 
 ### Minor Changes
