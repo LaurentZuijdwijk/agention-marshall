@@ -1,5 +1,11 @@
 # @agentionai/marshall-cli
 
+## 0.23.1
+
+### Patch Changes
+
+- The startup banner now rolls one of seven wordmark gradients per session (nebula, aurora, sunset, reef, candy, ultraviolet, citrus) instead of always painting the same violet-to-cyan gradient. Every gradient is sampled from colors already used elsewhere in the UI, so the banner looks fresh across launches without going off-brand.
+
 ## 0.23.0
 
 ### Minor Changes
