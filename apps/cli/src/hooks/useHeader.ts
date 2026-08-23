@@ -4,6 +4,7 @@ import type { AgentProfile, SafetyLevel } from '@agentionai/marshall-engine';
 import { shortenPath } from '../format.js';
 import { STARTUP_TAGLINES } from '../view/Banner.js';
 import type { HeaderMeta } from '../view/Banner.js';
+import { pickPaletteVariant } from '../view/theme.js';
 import type { RuntimeMode } from '../services/settings.js';
 import { SAFETY_LEVEL_LABELS } from '../slashCommands.js';
 import { currentVersion } from '../update-check.js';
@@ -22,9 +23,10 @@ export interface UseHeaderOptions {
 
 /**
  * The header row: the banner's static replacement and every `header` message
- * pushed after a model switch. The tagline is chosen once here so the
- * animated banner and the static header that replaces it settle on the same
- * sentence rather than rolling it twice.
+ * pushed after a model switch. The tagline and wordmark palette are each
+ * chosen once here so the animated banner and the static header that
+ * replaces it settle on the same sentence and colours rather than rolling
+ * them twice.
  */
 export function useHeader({
   workspaceRoot, safetyLevel, runtimeMode, enableWebSearch, enableGitHub, privateMode, transcript,
@@ -32,6 +34,7 @@ export function useHeader({
   const [sessionTagline] = useState(
     () => STARTUP_TAGLINES[Math.floor(Math.random() * STARTUP_TAGLINES.length)],
   );
+  const [sessionPalette] = useState(() => pickPaletteVariant());
 
   const headerMeta = (deep: AgentProfile, fast?: AgentProfile): HeaderMeta => ({
     provider: deep.provider,
@@ -50,7 +53,10 @@ export function useHeader({
   });
 
   const headerMessage = (deep: AgentProfile, fast?: AgentProfile, compact = false): Message =>
-    ({ key: transcript.nextKey(), role: 'header', content: '', meta: headerMeta(deep, fast), compact, tagline: sessionTagline });
+    ({
+      key: transcript.nextKey(), role: 'header', content: '', meta: headerMeta(deep, fast), compact,
+      tagline: sessionTagline, palette: sessionPalette.name,
+    });
 
-  return { headerMeta, headerMessage, sessionTagline };
+  return { headerMeta, headerMessage, sessionTagline, sessionPalette };
 }

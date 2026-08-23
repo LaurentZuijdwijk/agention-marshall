@@ -89,7 +89,7 @@ export function MessageRow({ msg, columns = process.stdout.columns ?? 80 }: {
 }) {
   switch (msg.role) {
     case 'header':
-      return msg.meta ? <Header meta={msg.meta} compact={msg.compact} tagline={msg.tagline} /> : null;
+      return msg.meta ? <Header meta={msg.meta} compact={msg.compact} tagline={msg.tagline} palette={msg.palette} /> : null;
 
     case 'user':
       return (

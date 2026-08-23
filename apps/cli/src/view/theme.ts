@@ -54,6 +54,7 @@ export const C = {
   muted:    LIGHT ? '#4B5563' : '#6B7280', // labels, hints, chrome
   faint:    LIGHT ? '#6B7280' : '#4B5563', // rules, gutters
   text:     LIGHT ? '#1F2937' : '#E5E7EB',
+  fuchsia:  LIGHT ? '#A21CAF' : '#E879F9', // wordmark variants only — see PALETTE_VARIANTS
 } as const;
 
 export const G = {
@@ -99,3 +100,39 @@ export function mix(a: string, b: string, t: number): string {
 
 /** Brand gradient sample at position `t` (0 = violet, 1 = cyan). */
 export const brand = (t: number): string => mix(C.brandFrom, C.brandTo, t);
+
+// ── wordmark palette variants ─────────────────────────────────────────────────
+//
+// The startup banner rolls one of these per session so the wordmark doesn't
+// look identical every time you open the terminal. Every endpoint is a token
+// already used elsewhere in the UI (the site's CSS variables are these same
+// hex values), so a fresh combination still reads as "this app", not a
+// clashing one-off. `nebula` — the original violet → cyan — stays first and
+// is what the spinner, wizard and markdown accents stick to; only the banner
+// wordmark rotates.
+
+export interface PaletteVariant {
+  name: string;
+  from: string;
+  to: string;
+}
+
+export const PALETTE_VARIANTS: readonly PaletteVariant[] = [
+  { name: 'nebula',      from: C.brandFrom, to: C.brandTo },
+  { name: 'aurora',      from: C.user,      to: C.accent  },
+  { name: 'sunset',      from: C.tool,      to: C.warn    },
+  { name: 'reef',        from: C.brandTo,   to: C.ok      },
+  { name: 'candy',       from: C.tool,      to: C.code    },
+  { name: 'ultraviolet', from: C.accent,    to: C.fuchsia },
+  { name: 'citrus',      from: C.warn,      to: C.ok      },
+] as const;
+
+export const pickPaletteVariant = (): PaletteVariant =>
+  PALETTE_VARIANTS[Math.floor(Math.random() * PALETTE_VARIANTS.length)];
+
+export const paletteVariant = (name?: string): PaletteVariant =>
+  PALETTE_VARIANTS.find(v => v.name === name) ?? PALETTE_VARIANTS[0];
+
+/** Gradient sample at position `t` (0..1) for a given palette variant. */
+export const gradient = (variant: PaletteVariant, t: number): string =>
+  mix(variant.from, variant.to, t);

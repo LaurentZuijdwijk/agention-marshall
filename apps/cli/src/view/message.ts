@@ -21,6 +21,8 @@ export interface Message {
   compact?: boolean;
   /** Startup tagline chosen for this session's banner. */
   tagline?: string;
+  /** Wordmark palette variant chosen for this session's banner. */
+  palette?: string;
   /** Tool name, or the heading above a markdown block. */
   title?: string;
   /** Dim aside next to the title. */

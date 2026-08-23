@@ -177,7 +177,7 @@ export function App({
   const attachments = useAttachments();
 
   // ── the header row ─────────────────────────────────────────────────────────
-  const { headerMeta, headerMessage, sessionTagline } = useHeader({
+  const { headerMeta, headerMessage, sessionTagline, sessionPalette } = useHeader({
     workspaceRoot, safetyLevel, runtimeMode, enableWebSearch, enableGitHub, privateMode, transcript,
   });
 
@@ -597,6 +597,7 @@ export function App({
         <Banner
           meta={headerMeta(agentProfile, initialFastProfile)}
           tagline={sessionTagline}
+          palette={sessionPalette.name}
           onDone={() => {
             transcript.reset([headerMessage(agentProfile, initialFastProfile)]);
             setBooting(false);

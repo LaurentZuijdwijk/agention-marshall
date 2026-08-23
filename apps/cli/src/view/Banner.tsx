@@ -1,6 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Box, Text } from 'ink';
-import { C, G, brand, mix } from './theme.js';
+import {
+  C, G, mix,
+  type PaletteVariant, gradient, pickPaletteVariant, paletteVariant,
+} from './theme.js';
 import type { RuntimeMode } from '../services/settings.js';
 
 // ── wordmark ──────────────────────────────────────────────────────────────────
@@ -36,8 +39,12 @@ const BANDS = 18;
  * by spaces rather than dropped, so the layout never reflows mid-animation.
  * `sweep` is the column position of a white highlight that rides along the
  * reveal edge and then makes one shimmer pass; put it off-screen for a still.
+ * `variant` picks which two colours the gradient runs between — see
+ * `PALETTE_VARIANTS` in theme.ts.
  */
-function Wordmark({ rows, reveal, sweep }: { rows: string[]; reveal: number; sweep: number }) {
+function Wordmark({ rows, reveal, sweep, variant }: {
+  rows: string[]; reveal: number; sweep: number; variant: PaletteVariant;
+}) {
   const width = rows[0].length;
   const band = Math.ceil(width / BANDS);
   const shown = Math.round(reveal * width);
@@ -54,7 +61,7 @@ function Wordmark({ rows, reveal, sweep }: { rows: string[]; reveal: number; swe
             const masked = seg.slice(0, visible) + ' '.repeat(seg.length - visible);
 
             const centre = start + seg.length / 2;
-            let color = brand(centre / width);
+            let color = gradient(variant, centre / width);
             const distance = Math.abs(centre - sweep);
             if (distance < glowRadius) {
               color = mix(color, '#FFFFFF', 1 - distance / glowRadius);
@@ -88,7 +95,7 @@ function Tagline({ text, dim }: { text: string; dim?: boolean }) {
 }
 
 /** Gradient rule under the wordmark; grows with `reveal`. */
-function Rule({ width, reveal }: { width: number; reveal: number }) {
+function Rule({ width, reveal, variant }: { width: number; reveal: number; variant: PaletteVariant }) {
   const drawn = Math.round(reveal * width);
   const band = Math.ceil(width / BANDS);
 
@@ -99,7 +106,7 @@ function Rule({ width, reveal }: { width: number; reveal: number }) {
         const len = Math.min(band, width - start);
         const visible = Math.max(0, Math.min(len, drawn - start));
         return (
-          <Text key={b} color={brand((start + len / 2) / width)}>
+          <Text key={b} color={gradient(variant, (start + len / 2) / width)}>
             {G.rule.repeat(visible) + ' '.repeat(len - visible)}
           </Text>
         );
@@ -216,11 +223,13 @@ function Meta({ meta, dim, showKeys = true }: { meta: HeaderMeta; dim?: boolean;
  * what `/clear` does, and which would throw away the conversation above — or
  * to print something that reads as a continuation. This is that.
  */
-export function Header({ meta, columns = process.stdout.columns ?? 80, compact = false, tagline }: {
+export function Header({ meta, columns = process.stdout.columns ?? 80, compact = false, tagline, palette }: {
   meta: HeaderMeta;
   columns?: number;
   compact?: boolean;
   tagline?: string;
+  /** Wordmark palette variant name (see `PALETTE_VARIANTS`); random if absent. */
+  palette?: string;
 }) {
   // Pin the fallback at first render, same as the animated banner below — a
   // re-render must not roll a fresh sentence. Callers hand the session's pick in
@@ -228,6 +237,7 @@ export function Header({ meta, columns = process.stdout.columns ?? 80, compact =
   const [effectiveTagline] = useState(
     () => tagline ?? STARTUP_TAGLINES[Math.floor(Math.random() * STARTUP_TAGLINES.length)],
   );
+  const [variant] = useState(() => palette ? paletteVariant(palette) : pickPaletteVariant());
   if (compact) {
     return (
       <Box flexDirection="column" marginTop={1} marginBottom={1}>
@@ -243,8 +253,8 @@ export function Header({ meta, columns = process.stdout.columns ?? 80, compact =
   const rows = pickLogo(columns);
   return (
     <Box flexDirection="column" marginBottom={1}>
-      <Wordmark rows={rows} reveal={1} sweep={-9999} />
-      <Rule width={rows[0].length} reveal={1} />
+      <Wordmark rows={rows} reveal={1} sweep={-9999} variant={variant} />
+      <Rule width={rows[0].length} reveal={1} variant={variant} />
       <Tagline text={effectiveTagline} />
       <Box marginTop={1}><Meta meta={meta} /></Box>
     </Box>
@@ -263,19 +273,22 @@ const TOTAL_FRAMES  = REVEAL_FRAMES + SHIMMER_FRAMES;
  * final frame is swapped for the static header the wordmark simply locks in
  * place instead of jumping.
  */
-export function Banner({ meta, onDone, columns = process.stdout.columns ?? 80, tagline }: {
+export function Banner({ meta, onDone, columns = process.stdout.columns ?? 80, tagline, palette }: {
   meta: HeaderMeta;
   onDone: () => void;
   columns?: number;
   tagline?: string;
+  /** Wordmark palette variant name (see `PALETTE_VARIANTS`); random if absent. */
+  palette?: string;
 }) {
   const rows = pickLogo(columns);
   // Pick once at mount — the banner re-renders every animation frame, and
-  // computing this in the render body would draw a new random sentence each
-  // frame, flashing through the whole list.
+  // computing this in the render body would draw a new random sentence (or
+  // gradient) each frame, flashing through the whole list.
   const [selectedTagline] = useState(
     () => tagline ?? STARTUP_TAGLINES[Math.floor(Math.random() * STARTUP_TAGLINES.length)],
   );
+  const [variant] = useState(() => palette ? paletteVariant(palette) : pickPaletteVariant());
   const width = rows[0].length;
 
   const [frame, setFrame] = useState(0);
@@ -308,8 +321,8 @@ export function Banner({ meta, onDone, columns = process.stdout.columns ?? 80, t
 
   return (
     <Box flexDirection="column" marginBottom={1}>
-      <Wordmark rows={rows} reveal={reveal} sweep={sweep} />
-      <Rule width={width} reveal={reveal} />
+      <Wordmark rows={rows} reveal={reveal} sweep={sweep} variant={variant} />
+      <Rule width={width} reveal={reveal} variant={variant} />
       <Tagline text={selectedTagline} dim={revealing} />
       <Box marginTop={1}>
         {revealing
