@@ -31,4 +31,7 @@ config-issues.md
 *.tgz
 bench/*.log
 bench/results.json
+# benchmark run artifacts: ~600 MB of session/reasoning logs per sweep, regenerated
+# by `npx tsx bench/run.ts` and meaningful only next to the run that produced them.
+bench/runs/
 __pycache__/
