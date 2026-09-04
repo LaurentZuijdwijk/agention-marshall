@@ -27,7 +27,17 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const RUNS = join(HERE, 'runs');
-const TASK = 'multi-file-migration';
+/**
+ * The task the report leads with, and the ones it summarises underneath.
+ *
+ * `HEADLINE_TASK` is the 28-file migration: long, mechanical, and the one where
+ * harness overhead is large enough to measure. The short tasks are a control —
+ * if a harness only looks good on the task it was tuned against, that shows up
+ * as the two sections disagreeing.
+ */
+const HEADLINE_TASK = 'multi-file-migration';
+const TASK = HEADLINE_TASK;
+const SHORT_TASKS = ['bug-fix', 'feature-add', 'refactor', 'iterate'];
 
 /** Which harness a config name belongs to, and which model it ran on. */
 function classify(config, modelFromHeader) {
@@ -60,11 +70,11 @@ function collect() {
     try { results = JSON.parse(readFileSync(join(dir, 'results.json'), 'utf8')); } catch { continue; }
 
     for (const r of results) {
-      if (r.task !== TASK) continue;
+      if (r.task !== TASK && !SHORT_TASKS.includes(r.task)) continue;
       const model = models[r.config];
       if (!model || !MODEL_LABEL[model]) continue;
       const { harness } = classify(r.config, model);
-      const key = `${harness}|${model}|${r.config}`;
+      const key = `${harness}|${model}|${r.config}|${r.task}`;
       const prev = byKey.get(key);
       // marshall: latest run only. external CLIs: pool every trial.
       if (harness === 'marshall' && prev && prev.runId !== runId) byKey.set(key, { runId, runIds: new Set([runId]), rows: [r] });
@@ -85,7 +95,7 @@ function collect() {
  * CLIs' `transcript.ndjson` — so no harness is being described in another's
  * vocabulary.
  */
-function toolMix(runDirs, cellDirPrefix) {
+function toolMix(runDirs, cellDirPrefix, task) {
   const mix = {};
   // Every run that contributed a row, so the mix and the call counts describe
   // the same trials — `pi` and `opencode` pool across runs, and reading only
@@ -97,7 +107,7 @@ function toolMix(runDirs, cellDirPrefix) {
         // Task included, not just the config: `pi-luna__` is also a prefix of
         // `pi-luna__multi-file-migration-manual__`, and pooling that in
         // captioned this task's counts with another task's behaviour.
-        if (d.startsWith(`${cellDirPrefix}__${TASK}__`)) bases.push(join(RUNS, runDir, d));
+        if (d.startsWith(`${cellDirPrefix}__${task}__`)) bases.push(join(RUNS, runDir, d));
       }
     } catch { /* run dir vanished */ }
   }
@@ -133,7 +143,7 @@ const median = xs => { const s = [...xs].sort((a, b) => a - b); const m = s.leng
 function summarise(byKey) {
   const out = [];
   for (const [key, { runId, runIds, rows }] of byKey) {
-    const [harness, model, config] = key.split('|');
+    const [harness, model, config, task] = key.split('|');
     const tokened = rows.filter(r => Number.isFinite(r.inputTokens) && r.inputTokens > 0);
     // A timed-out external run reports 0 tool calls because the harness kills
     // the CLI and never parses its transcript — the number is an artifact of
@@ -146,7 +156,7 @@ function summarise(byKey) {
     const counted = rows.filter(r => !(r.timedOut && (r.toolCalls ?? 0) === 0));
     const costed = rows.filter(r => Number.isFinite(r.costUsd) && r.costUsd > 0);
     out.push({
-      harness, model, config, runId,
+      harness, model, config, task, runId,
       trials: rows.length,
       passed: rows.filter(r => r.pass).length,
       timedOut: rows.filter(r => r.timedOut).length,
@@ -158,7 +168,7 @@ function summarise(byKey) {
       inTok: tokened.length ? mean(tokened.map(r => r.inputTokens)) : null,
       outTok: tokened.length ? mean(tokened.map(r => r.outputTokens)) : null,
       costUsd: costed.length ? mean(costed.map(r => r.costUsd)) : null,
-      mix: toolMix(runIds, config),
+      mix: toolMix(runIds, config, task),
       perTrial: rows.map(r => ({
         pass: r.pass, timedOut: !!r.timedOut, calls: r.toolCalls ?? null,
         seconds: r.durationMs / 1000, inTok: r.inputTokens ?? null, outTok: r.outputTokens ?? null,
@@ -169,9 +179,11 @@ function summarise(byKey) {
   return out.sort((a, b) => a.model.localeCompare(b.model) || a.harness.localeCompare(b.harness) || a.config.localeCompare(b.config));
 }
 
-const rows = summarise(collect());
+const allRows = summarise(collect());
+const rows = allRows.filter(r => r.task === HEADLINE_TASK);
+const shortRows = allRows.filter(r => SHORT_TASKS.includes(r.task));
 if (process.argv.includes('--json')) {
-  console.log(JSON.stringify(rows, null, 2));
+  console.log(JSON.stringify(allRows, null, 2));
   process.exit(0);
 }
 
@@ -262,7 +274,60 @@ function renderMarkdown({ headline, rows }) {
     + ` | ${t.calls && t.inTok ? Math.round(t.inTok / t.calls).toLocaleString('en-US') : '—'}`
     + ` | ${money(t.costUsd)} |`)).join('\n');
 
-  const totalTrials = rows.reduce((a, r) => a + r.trials, 0);
+  const totalTrials = allRows.reduce((a, r) => a + r.trials, 0);
+
+  // The short tasks, as a control on the long one. Grouped by task so a
+  // harness that only wins where it was tuned has nowhere to hide.
+  const shortByTask = {};
+  for (const r of shortRows) (shortByTask[r.task] ??= []).push(r);
+  const shortSection = Object.keys(shortByTask).length === 0 ? '' : `
+## The short tasks, as a control
+
+Everything above is one long, mechanical task. That is the shape where harness overhead is large
+enough to measure — and also the shape a harness can be over-fitted to. These are the short ones:
+a one-line bug fix, adding a function, a rename across a few files, and an iterative fix. Same
+harnesses, same models, same verifiers.
+
+| task | harness | configuration | passed | calls | median s | in tok | out tok |
+|---|---|---|---:|---:|---:|---:|---:|
+${Object.entries(shortByTask).flatMap(([task, rs]) => rs
+    .sort((a, b) => a.harness.localeCompare(b.harness) || a.config.localeCompare(b.config))
+    .map(r => `| ${task} | ${r.harness} | \`${r.config}\` | ${r.passed}/${r.trials}`
+      + `${r.timedOut ? ` ⏱${r.timedOut}` : ''} | ${r.calls === null ? '—' : r.calls.toFixed(1)}`
+      + ` | ${r.seconds.toFixed(1)} | ${n(r.inTok)} | ${n(r.outTok)} |`)).join('\n')}
+
+${(() => {
+  const byHarnessConfig = {};
+  for (const r of shortRows) {
+    const k = r.config;
+    (byHarnessConfig[k] ??= { harness: r.harness, passed: 0, trials: 0, out: [] });
+    byHarnessConfig[k].passed += r.passed;
+    byHarnessConfig[k].trials += r.trials;
+    if (r.outTok !== null) byHarnessConfig[k].out.push(r.outTok);
+  }
+  const line = Object.entries(byHarnessConfig)
+    .map(([c, v]) => `\`${c}\` ${v.passed}/${v.trials}`).join(', ');
+  const broken = Object.entries(byHarnessConfig).filter(([, v]) => v.passed < v.trials);
+  if (broken.length === 0) {
+    return `Across all four, every harness passed everything (${line}). On work this small the tool layer
+barely matters — which is itself the finding: it earns its keep on long mechanical work and is close
+to irrelevant on a one-file fix.`;
+  }
+  const names = broken.map(([c]) => `\`${c}\``).join(' and ');
+  const isare = broken.length === 1 ? 'is the only configuration' : 'are the only configurations';
+  return `Across all four: ${line}.
+
+**This is where the reduced belt stops looking good.** ${names} ${isare} to fail anything here, while marshall's default belt, pi and opencode each went clean. The failures are not
+subtle: on a task the default belt finishes in ~10 seconds and ~320 output tokens, the reduced belt
+twice ran to ~16,000 output tokens and truncated its own tool call mid-JSON, having made two calls
+total. Taking \`read_file\` away removes the cheap way to look at a small file, and the model
+sometimes substitutes one enormous edit instead.
+
+So the belt that wins the migration task by 3× is also the one that breaks on trivial work. That is
+a straightforward argument against shipping it as a default, and the reason it stays a benchmark
+row.`;
+})()}
+`;
   const lunaM = at('openai/gpt-5.6-luna', 'marshall'), lunaP = at('openai/gpt-5.6-luna', 'pi');
   const lunaO = at('openai/gpt-5.6-luna', 'opencode');
 
@@ -370,6 +435,7 @@ ${trialRows}
 Some of these spreads are larger than the differences between harnesses. That is the single most
 important thing to hold in mind when reading any of the numbers above.
 
+${shortSection}
 ## What actually moved the needle
 
 Starting from ${worst.calls.toFixed(0)} tool calls at the worst (\`${worst.config}\`) and
