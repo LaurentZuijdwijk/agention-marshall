@@ -162,6 +162,7 @@ function summarise(byKey) {
       perTrial: rows.map(r => ({
         pass: r.pass, timedOut: !!r.timedOut, calls: r.toolCalls ?? null,
         seconds: r.durationMs / 1000, inTok: r.inputTokens ?? null, outTok: r.outputTokens ?? null,
+        costUsd: Number.isFinite(r.costUsd) && r.costUsd > 0 ? r.costUsd : null,
       })),
     });
   }
@@ -230,11 +231,13 @@ function renderMarkdown({ headline, rows }) {
   const range = r => r ? (r[0] === r[1] ? `${r[0]}` : `${r[0]}–${r[1]}`) : '—';
 
   const detail = [
-    '| harness | model | configuration | passed | tool calls | range | median s | in tok | out tok | $/run |',
-    '|---|---|---|---:|---:|---:|---:|---:|---:|---:|',
+    '| harness | model | configuration | passed | calls | call range | median s | s range | in tok | out tok | $/run | run |',
+    '|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|',
     ...rows.map(r => `| ${r.harness} | ${MODEL_LABEL[r.model]} | \`${r.config}\` | ${r.passed}/${r.trials}`
       + `${r.timedOut ? ` ⏱${r.timedOut}` : ''} | ${r.calls === null ? '—' : r.calls.toFixed(1) + (r.callsPartial ? '\\*' : '')}`
-      + ` | ${range(r.callsRange)} | ${r.seconds.toFixed(1)} | ${n(r.inTok)} | ${n(r.outTok)} | ${money(r.costUsd)} |`),
+      + ` | ${range(r.callsRange)} | ${r.seconds.toFixed(1)}`
+      + ` | ${r.secondsRange[0].toFixed(0)}–${r.secondsRange[1].toFixed(0)}`
+      + ` | ${n(r.inTok)} | ${n(r.outTok)} | ${money(r.costUsd)} | \`${r.runId.slice(0, 19)}\` |`),
   ].join('\n');
 
   // What each harness actually *did*, which is the part that explains the
@@ -255,10 +258,33 @@ function renderMarkdown({ headline, rows }) {
   // Every individual trial, because the aggregates hide how noisy this is.
   const trialRows = rows.flatMap(r => r.perTrial.map((t, i) =>
     `| \`${r.config}\` | ${i + 1} | ${t.timedOut ? '⏱ timeout' : t.pass ? 'pass' : 'fail'} `
-    + `| ${t.calls ?? '—'} | ${t.seconds.toFixed(1)} | ${n(t.inTok)} | ${n(t.outTok)} |`)).join('\n');
+    + `| ${t.calls ?? '—'} | ${t.seconds.toFixed(1)} | ${n(t.inTok)} | ${n(t.outTok)}`
+    + ` | ${t.calls && t.inTok ? Math.round(t.inTok / t.calls).toLocaleString('en-US') : '—'}`
+    + ` | ${money(t.costUsd)} |`)).join('\n');
 
   const totalTrials = rows.reduce((a, r) => a + r.trials, 0);
   const lunaM = at('openai/gpt-5.6-luna', 'marshall'), lunaP = at('openai/gpt-5.6-luna', 'pi');
+  const lunaO = at('openai/gpt-5.6-luna', 'opencode');
+
+  // Every figure quoted in the prose below is looked up here rather than typed.
+  // These moved four times in two days — an earlier draft still said "18.7 -> 5.0"
+  // and "3/3" after a rerun had made them 14.3, 5.7 and 2/3, which is precisely
+  // the drift a generated page is supposed to make impossible.
+  const byConfig = Object.fromEntries(rows.map(r => [r.config, r]));
+  const q = (config, field, digits = 1) => {
+    const r = byConfig[config];
+    if (!r || r[field] === null || r[field] === undefined) return '—';
+    return typeof r[field] === 'number' ? r[field].toFixed(digits).replace(/\.0$/, '') : String(r[field]);
+  };
+  const score = config => byConfig[config] ? `${byConfig[config].passed}/${byConfig[config].trials}` : '—';
+  const mixOf = (config, tool) => {
+    const r = byConfig[config];
+    if (!r) return '—';
+    const total = Object.values(r.mix).reduce((a, b) => a + b, 0);
+    return total ? String(r.mix[tool] ?? 0) : '—';
+  };
+  const worst = rows.filter(r => r.calls !== null).reduce((a, b) => (a.calls > b.calls ? a : b));
+  const bestLuna = lunaM;
 
   return `# Three coding agents on the same task
 
@@ -285,15 +311,11 @@ ${grid}
 
 Three things worth pulling out.
 
-**Marshall is 3× leaner than either competitor on Luna** — ${lunaM ? lunaM.calls.toFixed(1) : '5.0'} tool calls against
-pi's ${lunaP ? lunaP.calls.toFixed(1) : '14.8'} and opencode's 13.0, at the same 3/3 correctness and less than a
-quarter of opencode's wall-clock time.
+**Marshall is the leanest of the three on Luna** — ${lunaM ? lunaM.calls.toFixed(1) : '—'} tool calls against pi's ${lunaP ? lunaP.calls.toFixed(1) : '—'} and opencode's ${lunaO ? lunaO.calls.toFixed(1) : '—'}, at ${lunaM ? `${lunaM.passed}/${lunaM.trials}` : '—'} correctness and ${lunaM && lunaO ? `${(lunaO.seconds / lunaM.seconds).toFixed(1)}×` : '—'} faster than opencode by median run.
 
-**Marshall is the only one that finishes Qwen3.8-flash.** pi and opencode both hit the ceiling on
-all four attempts between them; Marshall completed all three.
+**Marshall is the only one that finishes Qwen3.8 Flash.** pi and opencode timed out on every attempt between them (${(byConfig['pi-qwen38flash']?.trials ?? 0) + (byConfig['opencode-qwen38flash']?.trials ?? 0)} in total); Marshall completed ${score('qwen38flash-or-shell-edit')}.
 
-**pi is still ahead on GLM-5.3-flash** — 7.0 calls to Marshall's 10.0, and comfortably faster. One
-model out of three, and I did not close it.
+**pi is still ahead on GLM-5.3 Flash** — ${q('pi-glm', 'calls')} calls to Marshall's ${q('glm-shell-edit', 'calls')}, and faster by median run (${q('pi-glm', 'seconds')}s against ${q('glm-shell-edit', 'seconds')}s). One model out of three, and I did not close it.
 
 ## Every configuration measured
 
@@ -307,8 +329,12 @@ ${detail}
 ## What each harness actually did
 
 Call counts say how many round trips; this says what they were spent on. It is the part that
-explains the rest — the distance between 37 calls and 5 is not tidiness, it is one harness reading
-thirty files one at a time and another running a shell loop.
+explains the rest — the distance between ${q('glm-hybrid-batch-prompt', 'calls')} calls and
+${q('luna-shell-edit', 'calls')} is not tidiness, it is one harness reading files one at a time
+(\`read_file\` ${mixOf('glm-hybrid-batch-prompt', 'read_file')} of its
+${Object.values(byConfig['glm-hybrid-batch-prompt']?.mix ?? {}).reduce((a, b) => a + b, 0)} calls) and another
+running a shell loop (\`run_shell\` ${mixOf('luna-shell-edit', 'run_shell')} of
+${Object.values(byConfig['luna-shell-edit']?.mix ?? {}).reduce((a, b) => a + b, 0)}).
 
 | harness | configuration | trials | calls | composition |
 |---|---|---:|---:|---|
@@ -326,8 +352,8 @@ Three patterns are visible in that table.
   \`list_dir\` and \`run_shell\` — and the \`read_file\` share is where its extra calls live.
 - **The reduced belt collapses to \`run_shell\`** — 100% of calls on Luna, 95% on GLM. On those two
   the model then does what \`pi\` does and the call count follows. On Qwen3.8 Flash it does not: the
-  belt still pushes it to 83% shell, but it issues 23 calls doing so rather than 5. Same belt, same
-  instruction, different model.
+  belt still pushes it mostly to shell, but it issues ${q('qwen38flash-or-shell-edit', 'calls')} calls
+  doing so rather than ${q('luna-shell-edit', 'calls')}. Same belt, same instruction, different model.
 
 Rows marked ⏱ timed out on every trial. Their composition is still real — it is what the harness
 did before the ceiling — but it is a partial run, which is why the tables above report no call
@@ -337,8 +363,8 @@ count for them.
 
 The aggregates above hide how noisy this is. Identical inputs, three trials:
 
-| configuration | trial | result | calls | seconds | in tok | out tok |
-|---|---:|---|---:|---:|---:|---:|
+| configuration | trial | result | calls | seconds | in tok | out tok | in tok/call | $ |
+|---|---:|---|---:|---:|---:|---:|---:|---:|
 ${trialRows}
 
 Some of these spreads are larger than the differences between harnesses. That is the single most
@@ -346,24 +372,33 @@ important thing to hold in mind when reading any of the numbers above.
 
 ## What actually moved the needle
 
-Starting from 91 tool calls at the worst and 5.0 at the best, on the same model and task:
+Starting from ${worst.calls.toFixed(0)} tool calls at the worst (\`${worst.config}\`) and
+${bestLuna ? bestLuna.calls.toFixed(1) : '—'} at the best (\`${bestLuna ? bestLuna.config : '—'}\`):
 
 - **Batching the file tools** (\`edits[]\` on edit, \`patterns[]\` on search, \`paths[]\` on list) —
-  real, but small. It targeted tools that were only 2–5 calls of a 37-call run.
+  real, but small. It targeted \`search\` and \`list_dir\`, which together were
+  ${Number(mixOf('glm-hybrid-batch-prompt', 'search')) + Number(mixOf('glm-hybrid-batch-prompt', 'list_dir'))}
+  of that config's ${Object.values(byConfig['glm-hybrid-batch-prompt']?.mix ?? {}).reduce((a, b) => a + b, 0)} calls.
 - **Dropping the read-before-edit gate** — larger. Marshall required a \`read_file\` before any
   edit; the \`oldString\` already has to match exactly once, so the gate bought no safety and cost a
-  round trip per file. On GLM this took \`read_file\` from 37 calls to 10.
+  round trip per file. On GLM this took a run from ${q('glm-hybrid-batch-prompt', 'calls')} calls to
+  ${q('glm-openrouter', 'calls')}.
 - **Pointing bulk reads at the shell** — largest. One \`grep -rl PATTERN src | xargs cat\` replaces
   thirty \`read_file\` calls. This only became honest advice *after* the gate came out, since shell
-  output is now enough to edit from. Together the two took a GLM run from 37 calls with a timeout
-  to 14 calls passing cleanly.
-- **Cutting the tool belt** to shell + edit + write — biggest single effect on Luna (18.7 → 5.0),
-  half the effect on GLM, and *none at all* on Qwen3.8-flash. Not shipped as a default for exactly
-  that reason.
+  output is now enough to edit from. Together the two took a GLM run from
+  ${q('glm-hybrid-batch-prompt', 'calls')} calls at ${score('glm-hybrid-batch-prompt')} to
+  ${q('glm-openrouter', 'calls')} at ${score('glm-openrouter')}.
+- **Cutting the tool belt** to shell + edit + write — biggest single effect on Luna
+  (${q('luna-openrouter', 'calls')} → ${q('luna-shell-edit', 'calls')}), smaller on GLM
+  (${q('glm-openrouter', 'calls')} → ${q('glm-shell-edit', 'calls')}), and *none at all* on
+  Qwen3.8 Flash (${q('qwen38flash-or-solo', 'calls')} → ${q('qwen38flash-or-shell-edit', 'calls')}).
+  Not shipped as a default for exactly that reason.
 
 And what did not: four different system-prompt variants. One of them — telling the model to work
 incrementally rather than reading everything first — made things dramatically *worse*, pushing it
-from a 5-call scripted rewrite into a 45-call edit-by-edit loop. Prompt wording moved between
+to ${q('luna-incremental-prompt', 'calls')} calls, of which
+${mixOf('luna-incremental-prompt', 'edit_file')} were single \`edit_file\` calls and
+${mixOf('luna-incremental-prompt', 'read_file')} were \`read_file\`. Prompt wording moved between
 models and never transferred.
 
 ## Caveats
@@ -373,7 +408,8 @@ I would rather state these than have someone find them.
 - **One task, one fixture.** Everything here is the migration task. A harness tuned on one fixture
   is tuned on one fixture.
 - **Small samples.** Two to five trials per cell. Trial-to-trial variance is large — one Marshall
-  configuration produced 23, 17 and 21 calls on identical inputs. Treat gaps under ~20% as noise.
+  configuration's call counts ranged ${range(byConfig['luna-openrouter']?.callsRange)} across
+  ${byConfig['luna-openrouter']?.trials ?? '—'} trials on identical inputs. Treat gaps under ~20% as noise.
 - **Marshall is the home team.** I wrote the harness these numbers come from, and I had its
   internals available to tune while treating the others as black boxes. The comparison is
   like-for-like on task, model and grading; it is not like-for-like on effort spent.
