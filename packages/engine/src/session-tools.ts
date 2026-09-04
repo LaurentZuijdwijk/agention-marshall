@@ -29,6 +29,8 @@ import {
   SPAWN_TOOL_DESCRIPTION,
   buildSwarmPrompt,
 } from './agent-factory.js';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { agentTool } from './agent-tool.js';
 import { describeAgentError, providerErrorDiagnostics } from './errors.js';
 import { summariseAgentJob } from './agent-jobs.js';
@@ -113,6 +115,44 @@ export interface ToolBeltDeps {
   mcp: McpRegistry;
   /** Where `ToolConfig.attachImages` lands a screenshot — see `forTurn`. */
   history: SessionHistory;
+}
+
+
+/**
+ * Whether this workspace is mid-merge, and so has anything for the conflict
+ * tools to act on.
+ *
+ * `list_conflicts` and `resolve_conflicts` are ~284 tokens of schema on every
+ * request, and across 107 benchmark runs and 4,012 tool calls neither was ever
+ * called once — because a repository is almost never mid-merge. The belt is
+ * rebuilt per turn, so this can be a per-turn question rather than a fixed
+ * cost.
+ *
+ * Git's own in-progress markers are the signal, checked with `existsSync`
+ * rather than by scanning the tree for `<<<<<<<`: a conflict scan is what
+ * `list_conflicts` is *for*, and running one every turn to decide whether to
+ * offer it would cost more than the schema does. The trade is a file carrying
+ * conflict markers with no merge in progress — committed by hand, say — where
+ * the tools are no longer offered. `run_shell` still reaches it, and that case
+ * did not occur in any measured run.
+ */
+function mergeInProgress(workspaceRoot: string): boolean {
+  const git = join(workspaceRoot, '.git');
+  return ['MERGE_HEAD', 'rebase-merge', 'rebase-apply', 'CHERRY_PICK_HEAD', 'REVERT_HEAD']
+    .some(marker => existsSync(join(git, marker)));
+}
+
+/**
+ * Whether the scratch area has anything worth reading back.
+ *
+ * `note_write` and `log_append` are always offered — they are how the area
+ * gets populated — but `note_read`, `note_list` and `log_read` can only ever
+ * return "nothing there" until something has been written. Offering a reader
+ * for an empty store is ~73 tokens a request to describe a guaranteed miss.
+ */
+function scratchHasContent(workspaceRoot: string): boolean {
+  const scratch = join(workspaceRoot, '.marshall');
+  return existsSync(join(scratch, 'notes')) || existsSync(join(scratch, 'session.log'));
 }
 
 export class ToolBelt {
@@ -270,8 +310,12 @@ export class ToolBelt {
       ...createFileTools(toolConfig, this.deps.dedupeCache),
       createShellTool(toolConfig),
       ...(light ? [] : createJobTools(toolConfig)),
-      ...(light || privateMode ? [] : createScratchTools(toolConfig)),
-      ...(light ? [] : createConflictTools(toolConfig)),
+      // Readers are dropped until the scratch area has something in it; the
+      // writers that create it are always present. See scratchHasContent.
+      ...(light || privateMode ? [] : createScratchTools(toolConfig).filter(t =>
+        scratchHasContent(config.workspaceRoot) || !['note_read', 'note_list', 'log_read'].includes(t.name))),
+      // Only while a merge is actually in progress — see mergeInProgress.
+      ...(light || !mergeInProgress(config.workspaceRoot) ? [] : createConflictTools(toolConfig)),
       ...(config.enableGitHub ? createGitHubTools(toolConfig) : []),
       // Light mode is single-agent by definition, so spawning is out there for
       // the same reason the sub-agent tools are.

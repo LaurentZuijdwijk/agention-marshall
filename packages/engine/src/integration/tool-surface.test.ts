@@ -7,7 +7,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Session } from '../session.js';
@@ -101,4 +101,113 @@ test('guidance never describes a tool the allowlist removed', async (t) => {
     'the context guidance survived its tool');
   assert.doesNotMatch(prompt, /`planner`|`reviewer`/,
     'planner/reviewer guidance survived their tools');
+});
+
+// ~284 tokens of schema on every request, for tools that across 107 benchmark
+// runs and 4,012 tool calls were never invoked once — because a repository is
+// almost never mid-merge. The belt is rebuilt per turn, so this is a per-turn
+// question rather than a fixed cost.
+test('conflict tools are absent until a merge is actually in progress', async (t) => {
+  const root = tempRoot();
+  const fake = await startFakeProvider({ text: 'ok' });
+  t.after(() => fake.close());
+  const session = makeSession(root, fake);
+  t.after(() => session.dispose());
+
+  await session.run('anything');
+  const tools = fake.requests[0].tools;
+  assert.equal(tools.includes('list_conflicts'), false);
+  assert.equal(tools.includes('resolve_conflicts'), false);
+  assert.ok(tools.includes('edit_file'), 'the rest of the belt is untouched');
+});
+
+test('a merge in progress brings them back', async (t) => {
+  const root = tempRoot();
+  mkdirSync(join(root, '.git'), { recursive: true });
+  writeFileSync(join(root, '.git', 'MERGE_HEAD'), 'deadbeef\n');
+  const fake = await startFakeProvider({ text: 'ok' });
+  t.after(() => fake.close());
+  const session = makeSession(root, fake);
+  t.after(() => session.dispose());
+
+  await session.run('anything');
+  assert.ok(fake.requests[0].tools.includes('list_conflicts'));
+  assert.ok(fake.requests[0].tools.includes('resolve_conflicts'));
+});
+
+// The writers are how the scratch area comes to exist, so they are always
+// offered; the readers can only report "nothing there" until it does.
+test('scratch readers wait until there is something to read', async (t) => {
+  const root = tempRoot();
+  const fake = await startFakeProvider({ text: 'ok' });
+  t.after(() => fake.close());
+  const session = makeSession(root, fake);
+  t.after(() => session.dispose());
+
+  await session.run('anything');
+  const tools = fake.requests[0].tools;
+  assert.ok(tools.includes('note_write'), 'the writer that creates the area stays');
+  assert.ok(tools.includes('log_append'));
+  for (const reader of ['note_read', 'note_list', 'log_read']) {
+    assert.equal(tools.includes(reader), false, `${reader} has nothing to read yet`);
+  }
+});
+
+test('once a note exists, the readers are offered', async (t) => {
+  const root = tempRoot();
+  mkdirSync(join(root, '.marshall', 'notes'), { recursive: true });
+  const fake = await startFakeProvider({ text: 'ok' });
+  t.after(() => fake.close());
+  const session = makeSession(root, fake);
+  t.after(() => session.dispose());
+
+  await session.run('anything');
+  for (const reader of ['note_read', 'note_list', 'log_read']) {
+    assert.ok(fake.requests[0].tools.includes(reader), `${reader} should be back`);
+  }
+});
+
+// The belt is rebuilt every turn, so the check has to be a per-turn question
+// rather than a per-session one: a merge can start at any point in a long
+// session — the agent itself may run `git merge` through run_shell — and the
+// tools have to appear for the turn that needs them, in the session that is
+// already running.
+test('a merge starting mid-session brings the conflict tools back on the next turn', async (t) => {
+  const root = tempRoot();
+  const fake = await startFakeProvider({ text: 'ok' }, { text: 'ok' });
+  t.after(() => fake.close());
+  const session = makeSession(root, fake);
+  t.after(() => session.dispose());
+
+  await session.run('first turn, no merge');
+  assert.equal(fake.requests[0].tools.includes('resolve_conflicts'), false,
+    'precondition: nothing to resolve yet');
+
+  // What `git merge` leaves behind when it stops on a conflict — written here
+  // directly so the test does not depend on git being installed.
+  mkdirSync(join(root, '.git'), { recursive: true });
+  writeFileSync(join(root, '.git', 'MERGE_HEAD'), 'deadbeef\n');
+
+  await session.run('second turn, mid-merge');
+  assert.ok(fake.requests[1].tools.includes('resolve_conflicts'),
+    'the same session must pick the tools up without being restarted');
+  assert.ok(fake.requests[1].tools.includes('list_conflicts'));
+});
+
+test('and they go away again once the merge is resolved', async (t) => {
+  const root = tempRoot();
+  mkdirSync(join(root, '.git'), { recursive: true });
+  writeFileSync(join(root, '.git', 'MERGE_HEAD'), 'deadbeef\n');
+  const fake = await startFakeProvider({ text: 'ok' }, { text: 'ok' });
+  t.after(() => fake.close());
+  const session = makeSession(root, fake);
+  t.after(() => session.dispose());
+
+  await session.run('mid-merge');
+  assert.ok(fake.requests[0].tools.includes('resolve_conflicts'), 'precondition');
+
+  rmSync(join(root, '.git', 'MERGE_HEAD'));  // what a completed merge commit does
+
+  await session.run('after resolving');
+  assert.equal(fake.requests[1].tools.includes('resolve_conflicts'), false);
 });

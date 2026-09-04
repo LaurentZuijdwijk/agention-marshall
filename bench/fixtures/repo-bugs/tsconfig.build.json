@@ -1,0 +1,11 @@
+{
+  // Build config. Identical to tsconfig.json except that tests are left out of
+  // `dist`, which `files: ["dist"]` publishes wholesale — compiled test files
+  // and their fixtures were shipping to every consumer.
+  //
+  // Deliberately a separate file rather than an `exclude` on the base config:
+  // `typecheck` runs against that one, and excluding tests there would quietly
+  // stop type-checking them.
+  "extends": "./tsconfig.json",
+  "exclude": ["node_modules", "dist", "src/**/*.test.ts", "src/**/*.test.tsx"]
+}

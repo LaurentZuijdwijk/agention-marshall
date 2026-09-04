@@ -38,11 +38,19 @@ const RUNS = join(HERE, 'runs');
 const HEADLINE_TASK = 'multi-file-migration';
 const TASK = HEADLINE_TASK;
 const SHORT_TASKS = ['bug-fix', 'feature-add', 'refactor', 'iterate'];
+/**
+ * The realistic one: 45 real TypeScript files with three faults planted, two
+ * visible only to the test suite and one only to `tsc`. Every other fixture is
+ * small enough for a harness to hold whole, which flatters any approach that
+ * front-loads context and never has to search.
+ */
+const REALISTIC_TASK = 'repo-bugs';
 
 /** Which harness a config name belongs to, and which model it ran on. */
 function classify(config, modelFromHeader) {
   if (config.startsWith('pi-') || config === 'pi') return { harness: 'pi', model: modelFromHeader };
   if (config.startsWith('opencode')) return { harness: 'opencode', model: modelFromHeader };
+  if (config.startsWith('aider')) return { harness: 'aider', model: modelFromHeader };
   return { harness: 'marshall', model: modelFromHeader };
 }
 
@@ -70,7 +78,7 @@ function collect() {
     try { results = JSON.parse(readFileSync(join(dir, 'results.json'), 'utf8')); } catch { continue; }
 
     for (const r of results) {
-      if (r.task !== TASK && !SHORT_TASKS.includes(r.task)) continue;
+      if (r.task !== TASK && r.task !== REALISTIC_TASK && !SHORT_TASKS.includes(r.task)) continue;
       const model = models[r.config];
       if (!model || !MODEL_LABEL[model]) continue;
       const { harness } = classify(r.config, model);
@@ -153,16 +161,22 @@ function summarise(byKey) {
     // as the most economical harness on the model it could not finish at all.
     // marshall counts calls live from its own client, so its timeouts keep
     // real numbers and stay in.
-    const counted = rows.filter(r => !(r.timedOut && (r.toolCalls ?? 0) === 0));
+    // Two different reasons a row has no usable count, both of which must stay
+    // out of the mean: a timed-out external run reports 0 because it was killed
+    // before its transcript was parsed, and aider reports null because it has no
+    // tool-calling concept at all. Coercing either to 0 would rank the harness
+    // that did the least measurable work first.
+    const counted = rows.filter(r =>
+      r.toolCalls !== null && r.toolCalls !== undefined && !(r.timedOut && r.toolCalls === 0));
     const costed = rows.filter(r => Number.isFinite(r.costUsd) && r.costUsd > 0);
     out.push({
       harness, model, config, task, runId,
       trials: rows.length,
       passed: rows.filter(r => r.pass).length,
       timedOut: rows.filter(r => r.timedOut).length,
-      calls: counted.length ? mean(counted.map(r => r.toolCalls ?? 0)) : null,
+      calls: counted.length ? mean(counted.map(r => r.toolCalls)) : null,
       callsPartial: counted.length !== rows.length,
-      callsRange: counted.length ? [Math.min(...counted.map(r => r.toolCalls ?? 0)), Math.max(...counted.map(r => r.toolCalls ?? 0))] : null,
+      callsRange: counted.length ? [Math.min(...counted.map(r => r.toolCalls)), Math.max(...counted.map(r => r.toolCalls))] : null,
       seconds: median(rows.map(r => r.durationMs / 1000)),
       secondsRange: [Math.min(...rows.map(r => r.durationMs / 1000)), Math.max(...rows.map(r => r.durationMs / 1000))],
       inTok: tokened.length ? mean(tokened.map(r => r.inputTokens)) : null,
@@ -182,6 +196,7 @@ function summarise(byKey) {
 const allRows = summarise(collect());
 const rows = allRows.filter(r => r.task === HEADLINE_TASK);
 const shortRows = allRows.filter(r => SHORT_TASKS.includes(r.task));
+const realRows = allRows.filter(r => r.task === REALISTIC_TASK);
 if (process.argv.includes('--json')) {
   console.log(JSON.stringify(allRows, null, 2));
   process.exit(0);
@@ -198,8 +213,8 @@ for (const r of rows.filter(r => r.harness === 'marshall')) {
     || (r.passed / r.trials === cur.passed / cur.trials && (r.calls ?? Infinity) < (cur.calls ?? Infinity))) best.set(r.model, r);
 }
 
-const PALETTE = { marshall: ['#2a78d6', '#3987e5'], pi: ['#eb6834', '#d95926'], opencode: ['#1baf7a', '#199e70'] };
-const HARNESSES = ['marshall', 'pi', 'opencode'];
+const PALETTE = { marshall: ['#2a78d6', '#3987e5'], pi: ['#eb6834', '#d95926'], opencode: ['#1baf7a', '#199e70'], aider: ['#eda100', '#c98500'] };
+const HARNESSES = ['marshall', 'pi', 'opencode', 'aider'];
 const MODELS = Object.keys(MODEL_LABEL);
 
 const headline = [];
@@ -224,17 +239,20 @@ console.log(`wrote ${out} — ${rows.length} config/model cells, ${rows.reduce((
 function renderMarkdown({ headline, rows }) {
   const cell = r => {
     if (!r) return '_not run_';
-    // A cell with no usable count says so instead of printing a dash where a
-    // number goes — the reader should not have to decode a placeholder.
-    if (r.calls === null) return `⏱ _timed out_ · 0/${r.trials}`;
-    const calls = r.calls.toFixed(1) + (r.callsPartial ? '\\*' : '');
-    return `**${calls}** calls · ${r.seconds.toFixed(0)}s · ${r.passed}/${r.trials}`;
+    // Two different reasons a count is missing, and they must not read alike.
+    // Every trial timing out means we never got a number; a harness with no
+    // tool-calling concept ran perfectly well and the metric does not apply.
+    // Rendering aider's runs as "timed out" was wrong on both counts — it
+    // finished in 87s and simply changed nothing.
+    if (r.calls === null && r.timedOut === r.trials) return `⏱ _timed out_ · 0/${r.trials}`;
+    const calls = r.calls === null ? '_n/a_' : `**${r.calls.toFixed(1)}** calls`;
+    return `${calls} · ${r.seconds.toFixed(0)}s · ${r.passed}/${r.trials}`;
   };
   const at = (model, harness) => headline.find(d => d.model === model && d.harness === harness)?.r ?? null;
 
   const grid = [
-    '| model | marshall | pi | opencode |',
-    '|---|---|---|---|',
+    `| model | ${HARNESSES.join(' | ')} |`,
+    `|${'---|'.repeat(HARNESSES.length + 1)}`,
     ...MODELS.map(m => `| **${MODEL_LABEL[m]}** | ${HARNESSES.map(h => cell(at(m, h))).join(' | ')} |`),
   ].join('\n');
 
@@ -275,6 +293,50 @@ function renderMarkdown({ headline, rows }) {
     + ` | ${money(t.costUsd)} |`)).join('\n');
 
   const totalTrials = allRows.reduce((a, r) => a + r.trials, 0);
+
+  // The realistic task, and the one that reverses the migration's conclusion.
+  const realSection = realRows.length === 0 ? '' : `
+## A realistic codebase
+
+Every fixture above is small enough that a harness can hold all of it at once. That flatters any
+approach which front-loads context and never has to search, so it is worth one task where finding
+the work *is* the work.
+
+\`repo-bugs\` is 45 real TypeScript files — marshall's own \`packages/tools\` — with three faults
+planted in them: an off-by-one in a shared line-window primitive, an inverted glob guard in search,
+and a type error in a function no test executes. 248 tests, of which exactly 2 fail. Nothing in the
+prompt names the faulty files, the failing tests are not all in the files that cause them, and the
+type error is invisible to the test run, so the verifier requires both a green suite and a clean
+\`tsc\`.
+
+| harness | configuration | passed | calls | median s | in tok | out tok | $/run |
+|---|---|---:|---:|---:|---:|---:|---:|
+${realRows
+    .sort((a, b) => (b.passed / b.trials) - (a.passed / a.trials) || (a.inTok ?? 1e9) - (b.inTok ?? 1e9))
+    .map(r => `| ${r.harness} | \`${r.config}\` | ${r.passed}/${r.trials} | ${r.calls === null ? 'n/a' : r.calls.toFixed(1)}`
+      + ` | ${r.seconds.toFixed(1)} | ${n(r.inTok)} | ${n(r.outTok)} | ${money(r.costUsd)} |`).join('\n')}
+
+Two things reverse here.
+
+**aider does nothing at all.** ${(() => {
+  const a = realRows.find(r => r.harness === 'aider');
+  return a ? `${a.passed}/${a.trials}, ${n(a.inTok)} input tokens, ${a.seconds.toFixed(0)}s` : 'It failed every trial';
+})()} — and the fixture came back byte-identical, the same 2 of 248 tests failing. It is not running
+out of budget; it is declining to start. Its repo-map ships with the instruction *"treat them as
+read-only — if you need to edit any of these files, ask me to add them to the chat first"*, because
+the map exists for a **human** to read and then name the files. Given \`--yes-always -m\` there is
+nobody to answer. On the two-file fixtures it worked because there was nothing to choose. That is
+the whole of its 20× economy on small tasks: a person doing the file selection.
+
+**And the reduced belt loses to the plain one.** ${(() => {
+  const d = realRows.find(r => r.config.endsWith('-openrouter'));
+  const se = realRows.find(r => r.config.endsWith('-shell-edit'));
+  if (!d || !se) return '';
+  return `\`${se.config}\` spends ${n(se.inTok)} input tokens and ${se.seconds.toFixed(0)}s against `
+    + `\`${d.config}\`'s ${n(d.inTok)} and ${d.seconds.toFixed(0)}s, for the same ${d.passed}/${d.trials}.`;
+})()} It won the migration by 3×, lost the short tasks, and loses here — which is the argument
+against shipping it as a default, made a third time on a third task shape.
+`;
 
   // The short tasks, as a control on the long one. Grouped by task so a
   // harness that only wins where it was tuned has nowhere to hide.
@@ -372,7 +434,9 @@ allowed, and which one a harness picks turns out to be most of the story.
 
 ${grid}
 
-⏱ = every trial hit the 7-minute ceiling. ${totalTrials} trials total; means for calls, medians for time.
+⏱ = every trial hit the 7-minute ceiling. _n/a_ under calls = the harness has no tool-calling
+concept, not zero: aider applies SEARCH/REPLACE blocks from its own reply rather than calling tools.
+${totalTrials} trials total; means for calls, medians for time.
 
 Three things worth pulling out.
 
@@ -435,7 +499,7 @@ ${trialRows}
 Some of these spreads are larger than the differences between harnesses. That is the single most
 important thing to hold in mind when reading any of the numbers above.
 
-${shortSection}
+${realSection}${shortSection}
 ## What actually moved the needle
 
 Starting from ${worst.calls.toFixed(0)} tool calls at the worst (\`${worst.config}\`) and
@@ -459,6 +523,21 @@ ${bestLuna ? bestLuna.calls.toFixed(1) : '—'} at the best (\`${bestLuna ? best
   (${q('glm-openrouter', 'calls')} → ${q('glm-shell-edit', 'calls')}), and *none at all* on
   Qwen3.8 Flash (${q('qwen38flash-or-solo', 'calls')} → ${q('qwen38flash-or-shell-edit', 'calls')}).
   Not shipped as a default for exactly that reason.
+
+**Masking made things worse, and the mechanism is legible.** Marshall replaces tool results older
+than a few turns with a marker the model can fetch back via \`retrieve_tool_result\`, to keep long
+conversations small. Measured on the migration with masking on against off:
+${(() => {
+  const on = byConfig['luna-openrouter'], off = byConfig['luna-nomask'];
+  if (!on || !off) return 'the A/B has not been run.';
+  return `${on.calls.toFixed(1)} calls and ${n(on.inTok)} input tokens with it on, against `
+    + `${off.calls.toFixed(1)} and ${n(off.inTok)} with it off — the same tokens, ${(on.calls - off.calls).toFixed(1)} more calls, `
+    + `and ${(on.seconds - off.seconds).toFixed(0)}s slower.`;
+})()} Reading the tool logs explains it: \`retrieve_tool_result\` was called **zero** times across
+107 runs and 4,012 tool calls, while \`read_file\` ran 6.0 times per masked run against 1.7
+unmasked. The model does not use the retrieval tool it is given — it simply re-reads the file. The
+content returns to the context anyway, and a round trip is spent putting it there. Masking pays
+calls to save context it does not end up saving.
 
 And what did not: four different system-prompt variants. One of them — telling the model to work
 incrementally rather than reading everything first — made things dramatically *worse*, pushing it
@@ -523,8 +602,14 @@ function render({ headline, rows }) {
           // trials timed out has no usable call count (see summarise), and a
           // zero-length bar would read as "did it in no calls".
           if (v === null || v === undefined) {
-            return `<div class="row" tabindex="0" data-tip="${esc(harness)} · ${esc(MODEL_LABEL[model])}\nno usable ${metric}: every trial timed out\n${r.timedOut}/${r.trials} timed out\nconfig: ${esc(r.config)}">
-              ${label}<div class="track"><div class="notrun">timed out — not measured</div></div></div>`;
+            // "Timed out" and "the metric does not apply" are different facts.
+            // aider finished in 87s and changed nothing; calling that a timeout
+            // would be simply false.
+            const why = r.timedOut === r.trials
+              ? { label: 'timed out — not measured', tip: `every trial timed out (${r.timedOut}/${r.trials})` }
+              : { label: `n/a — no tool calls · ${r.passed}/${r.trials}`, tip: 'this harness has no tool-calling concept' };
+            return `<div class="row" tabindex="0" data-tip="${esc(harness)} · ${esc(MODEL_LABEL[model])}\n${esc(why.tip)}\nconfig: ${esc(r.config)}">
+              ${label}<div class="track"><div class="notrun">${esc(why.label)}</div></div></div>`;
           }
           const pct = Math.max(1.5, (v / max) * 100);
           const failed = r.passed < r.trials;
@@ -555,12 +640,12 @@ function render({ headline, rows }) {
 :root{
   --surface:#fcfcfb; --plane:#f9f9f7; --ink:#0b0b0b; --ink2:#52514e; --muted:#898781;
   --grid:#e1e0d9; --axis:#c3c2b7; --border:rgba(11,11,11,0.10);
-  --marshall:#2a78d6; --pi:#eb6834; --opencode:#1baf7a;
+  --marshall:#2a78d6; --pi:#eb6834; --opencode:#1baf7a; --aider:#eda100;
 }
 @media (prefers-color-scheme:dark){:root{
   --surface:#1a1a19; --plane:#0d0d0d; --ink:#fff; --ink2:#c3c2b7; --muted:#898781;
   --grid:#2c2c2a; --axis:#383835; --border:rgba(255,255,255,0.10);
-  --marshall:#3987e5; --pi:#d95926; --opencode:#199e70;
+  --marshall:#3987e5; --pi:#d95926; --opencode:#199e70; --aider:#c98500;
 }}
 *{box-sizing:border-box}
 body{margin:0;background:var(--plane);color:var(--ink);
@@ -583,7 +668,7 @@ h2{font-size:16px;margin:0 0 4px}
 .hname{width:74px;flex:none;font-size:12px;color:var(--muted);text-align:right}
 .track{position:relative;flex:1;display:flex;align-items:center;gap:9px;height:22px}
 .bar{height:13px;border-radius:0 4px 4px 0;box-shadow:0 0 0 2px var(--surface)}
-.h-marshall{background:var(--marshall)} .h-pi{background:var(--pi)} .h-opencode{background:var(--opencode)}
+.h-marshall{background:var(--marshall)} .h-pi{background:var(--pi)} .h-opencode{background:var(--opencode)} .h-aider{background:var(--aider)}
 .val{font-size:12.5px;color:var(--ink2);font-variant-numeric:tabular-nums}
 .notrun{font-size:12px;color:var(--muted);font-style:italic}
 table{width:100%;border-collapse:collapse;font-size:13px}
@@ -598,12 +683,13 @@ td{padding:7px 9px;border-bottom:1px solid var(--grid);color:var(--ink2)}
 #tip{position:fixed;pointer-events:none;opacity:0;transition:opacity .1s;background:var(--ink);
   color:var(--surface);padding:8px 11px;border-radius:7px;font-size:12px;white-space:pre-line;z-index:9;max-width:280px}
 .note{font-size:12.5px;color:var(--muted);margin-top:14px;padding-top:12px;border-top:1px solid var(--grid)}
-</style></head><body data-palette="#2a78d6,#eb6834,#1baf7a"><div class="wrap">
+</style></head><body data-palette="#2a78d6,#eb6834,#1baf7a,#eda100"><div class="wrap">
 
 <h1>Coding agents on the same task</h1>
-<p class="sub">Three harnesses run the identical 28-file logging migration, from identical fixtures,
-graded by the identical <code>check()</code> — 122 tests that must pass. Lower is better on both
-charts. Each bar is the mean (calls) or median (time) of that cell's trials.</p>
+<p class="sub">${HARNESSES.length} harnesses run the identical 28-file logging migration, from identical
+fixtures, graded by the identical <code>check()</code> — 122 tests that must pass. Lower is better on
+both charts. Each bar is the mean (calls) or median (time) of that cell's trials. <em>n/a</em> means
+the harness has no such metric, not zero.</p>
 
 <div class="card">
   <h2>Tool calls per run</h2>

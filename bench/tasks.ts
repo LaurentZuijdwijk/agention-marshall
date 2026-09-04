@@ -23,6 +23,45 @@ async function runNodeTests(workspaceDir: string, _response: string): Promise<Ch
   }
 }
 
+
+/**
+ * Both gates the repo-bugs fixture needs: the suite green *and* the project
+ * typechecking.
+ *
+ * They are separate on purpose. The planted type error sits in a function no
+ * test executes, so `node --test` passes straight over it — an agent that only
+ * runs the tests will report success on a codebase that does not compile. The
+ * two failing tests, conversely, are invisible to `tsc`. Neither check alone
+ * distinguishes a real fix from a partial one.
+ */
+async function runTestsAndTypecheck(workspaceDir: string, _response: string): Promise<CheckResult> {
+  const parts: string[] = [];
+  let pass = true;
+
+  try {
+    const { stdout } = await execFileAsync(
+      'node', ['--import', 'tsx/esm', '--test', 'src/**/*.test.ts'],
+      { cwd: workspaceDir, timeout: 180_000, maxBuffer: 32 * 1024 * 1024 },
+    );
+    parts.push(tail(stdout));
+  } catch (err) {
+    pass = false;
+    parts.push(tail((err as { stdout?: string }).stdout ?? String(err)));
+  }
+
+  try {
+    await execFileAsync('npx', ['tsc', '--noEmit', '-p', 'tsconfig.build.json'],
+      { cwd: workspaceDir, timeout: 180_000, maxBuffer: 32 * 1024 * 1024 });
+    parts.push('tsc: clean');
+  } catch (err) {
+    pass = false;
+    const out = (err as { stdout?: string }).stdout ?? String(err);
+    parts.push('tsc: ' + out.trim().split('\n').slice(0, 3).join(' | '));
+  }
+
+  return { pass, summary: parts.join(' || ') };
+}
+
 function tail(output: string): string {
   const lines = output.trim().split('\n');
   // Node's test runner prints its summary as `ℹ tests N` on current versions
@@ -158,6 +197,31 @@ export const TASKS: BenchTask[] = [
     fixtureDir: 'iterate',
     prompt: 'Multiple tests are failing in src/validator.test.js. Run the tests, find all the bugs in src/validator.js, and fix them one by one until the full suite passes.',
     check: runNodeTests,
+  },
+  // ── a real codebase, not a toy ────────────────────────────────────────────
+  //
+  // 45 TypeScript files lifted from marshall's own `packages/tools`, with three
+  // faults planted in it: an off-by-one in a shared line-window primitive, an
+  // inverted glob guard in search, and a type error in a function no test
+  // executes. 248 tests, of which exactly 2 fail.
+  //
+  // The point is scale. Every other fixture here is small enough that a harness
+  // can hold all of it at once, which flatters any approach that front-loads
+  // context and never has to search. Here nothing names the faulty files, the
+  // tests that fail are not in the files that cause them, and the type error is
+  // invisible to the test run — so finding the work is most of the work.
+  //
+  // `node_modules` is a symlink to the repo's own, so copying a workspace stays
+  // instant rather than duplicating 168 MB per trial.
+  {
+    id: 'repo-bugs',
+    fixtureDir: 'repo-bugs',
+    prompt: 'This TypeScript project has bugs. Two tests in the suite are failing, and the project '
+      + 'does not typecheck. Run `node --import tsx/esm --test "src/**/*.test.ts"` to see the test '
+      + 'failures and `npx tsc --noEmit -p tsconfig.build.json` to see the type error. Find and fix '
+      + 'the underlying causes so both are clean. Do not modify any test file, and do not weaken or '
+      + 'delete assertions.',
+    check: runTestsAndTypecheck,
   },
   // ── question-answering: no edits, the workspace is a trap ──────────────────
   //

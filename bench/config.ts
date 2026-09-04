@@ -382,6 +382,12 @@ export const CONFIGURATIONS: BenchConfiguration[] = [
   // finding this session has been model-specific and there is no reason to
   // assume a belt finding is not. glm-shell-edit went 37 -> 10 calls at 2/2;
   // whether that is a property of the belt or of GLM is what this answers.
+  // Masking is on by default: tool results older than `maskingKeepRecent` are
+  // replaced by a marker the model can fetch back with retrieve_tool_result.
+  // On the migration, 83% of input spend is accumulated context re-sent every
+  // turn, so this row is the direct test of whether masking reclaims that or
+  // merely trades it for retrievals.
+  { name: 'luna-nomask', agent: { provider: 'openrouter', model: 'openai/gpt-5.6-luna' }, noMasking: true },
   {
     name: 'luna-shell-edit',
     agent: { provider: 'openrouter', model: 'openai/gpt-5.6-luna' },
@@ -445,6 +451,11 @@ export const EXTERNAL_HARNESSES: import('./external-harness.js').ExternalHarness
   // three-harness comparison is like-for-like rather than three harnesses on
   // three different models.
   { name: 'opencode-luna', harness: 'opencode', model: 'openai/gpt-5.6-luna' },
+  // aider, on the same model through the same key. It reports no tool calls
+  // because it has none — it applies SEARCH/REPLACE blocks from its own reply
+  // rather than calling tools — so it is measured on pass rate, wall clock,
+  // tokens and cost, and reads n/a on the metric it does not have.
+  { name: 'aider-luna', harness: 'aider', model: 'openai/gpt-5.6-luna' },
   { name: 'opencode-glm', harness: 'opencode', model: 'z-ai/glm-5.3-flash' },
   { name: 'pi-qwen38flash', harness: 'pi', model: 'qwen/qwen3.8-flash' },
   { name: 'opencode-qwen38flash', harness: 'opencode', model: 'qwen/qwen3.8-flash' },

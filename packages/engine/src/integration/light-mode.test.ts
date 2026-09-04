@@ -7,7 +7,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Session } from '../session.js';
@@ -52,6 +52,11 @@ function systemPrompt(fake: FakeProvider, index = 0): string {
 
 test('light mode drops the scratchpad, job and sub-agent tools', async (t) => {
   const root = tempRoot();
+  // The scratch *readers* are only offered once the area has something in
+  // them (see scratchHasContent in session-tools.ts), so seed it — otherwise
+  // the precondition below would be asserting that the full belt carries a
+  // reader for an empty store, which it deliberately no longer does.
+  mkdirSync(join(root, '.marshall', 'notes'), { recursive: true });
   const fake = await startFakeProvider({ text: 'ok' }, { text: 'ok' });
   t.after(() => fake.close());
 

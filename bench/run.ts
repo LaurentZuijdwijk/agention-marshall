@@ -35,7 +35,8 @@ interface RunResult {
   /** USD, when the provider has a known price — absent for local models
    *  (llamacpp/ollama) and for any harness that doesn't report cost. */
   costUsd?: number;
-  toolCalls: number;
+  /** `null` for a harness with no tool-calling concept — see ExternalRunOutcome. */
+  toolCalls: number | null;
   checkSummary: string;
 
   /**
@@ -371,7 +372,7 @@ function printTable(results: RunResult[]) {
     inTok: r.inputTokens ?? '-',
     outTok: r.outputTokens ?? '-',
     costUsd: r.costUsd !== undefined ? `$${r.costUsd.toFixed(4)}` : '-',
-    toolCalls: r.toolCalls,
+    toolCalls: r.toolCalls ?? 'n/a',
   })));
 }
 
@@ -439,7 +440,9 @@ function printSummary(results: RunResult[]) {
       avgInTok: avg(group.map(r => r.inputTokens ?? NaN).filter(n => !Number.isNaN(n))),
       avgOutTok: avg(group.map(r => r.outputTokens ?? NaN).filter(n => !Number.isNaN(n))),
       avgCostUsd: avg(group.map(r => r.costUsd ?? NaN).filter(n => !Number.isNaN(n))),
-      avgToolCalls: avg(group.map(r => r.toolCalls)),
+      // Averaged over the rows that have the concept, so a harness without
+      // it reports n/a rather than dragging a real mean toward zero.
+      avgToolCalls: avg(group.map(r => r.toolCalls ?? NaN).filter(n => !Number.isNaN(n))),
     };
   });
 
@@ -546,7 +549,7 @@ async function main() {
         results.push(result);
         process.stdout.write(
           `[${label}] ${result.timedOut ? 'TIMEOUT' : result.pass ? 'PASS' : 'FAIL'} ` +
-          `in ${(result.durationMs / 1000).toFixed(1)}s, ${result.toolCalls} tool calls, ` +
+          `in ${(result.durationMs / 1000).toFixed(1)}s, ${result.toolCalls ?? 'n/a'} tool calls, ` +
           `tokens ${result.inputTokens ?? '?'}/${result.outputTokens ?? '?'}\n`,
         );
       }
@@ -561,7 +564,7 @@ async function main() {
         results.push(result);
         process.stdout.write(
           `[${label}] ${result.timedOut ? 'TIMEOUT' : result.pass ? 'PASS' : 'FAIL'} ` +
-          `in ${(result.durationMs / 1000).toFixed(1)}s, ${result.toolCalls} tool calls, ` +
+          `in ${(result.durationMs / 1000).toFixed(1)}s, ${result.toolCalls ?? 'n/a'} tool calls, ` +
           `tokens ${result.inputTokens ?? '?'}/${result.outputTokens ?? '?'}` +
           `${result.error ? ` (error: ${result.error})` : ''}\n`,
         );

@@ -95,7 +95,7 @@ function execViaPtyStreaming(
 
 export interface ExternalHarnessConfig {
   name: string;
-  harness: 'pi' | 'opencode';
+  harness: 'pi' | 'opencode' | 'aider';
   /** `provider/model`, exactly as each CLI's `--model` flag expects it. */
   model: string;
   /**
@@ -120,7 +120,14 @@ export interface ExternalRunOptions {
 
 export interface ExternalRunOutcome {
   response: string;
-  toolCalls: number;
+  /**
+   * `null` when the harness has no such concept, which is not the same as
+   * zero. `aider` does not call tools at all — it emits SEARCH/REPLACE blocks
+   * in its reply and applies them itself — so a 0 here would read as "did the
+   * work in no calls" and put it top of a chart measuring exactly the thing it
+   * does not do.
+   */
+  toolCalls: number | null;
   inputTokens?: number;
   outputTokens?: number;
   costUsd?: number;
@@ -223,6 +230,76 @@ async function runPi(config: ExternalHarnessConfig, task: BenchTask, workspaceDi
  * unavailable — both are documented limitations, not silent gaps; see
  * bench/README.md.
  */
+/**
+ * `aider`, which works differently enough from the others to need explaining.
+ *
+ * It does not call tools. It emits SEARCH/REPLACE blocks inside its reply and
+ * applies them itself, so `toolCalls` is null rather than 0 — the metric does
+ * not exist here, and reporting zero would put it top of a chart measuring the
+ * thing it does not do. Everything else compares cleanly: same model through
+ * the same OpenRouter key, same fixture, same `check()`.
+ *
+ * The `git init` is not a favour. Without a repo aider has no repo-map, cannot
+ * see which files exist, and answers by asking for the file to be pasted in —
+ * verified on the bug-fix fixture before this was written. A repo is its
+ * ordinary operating mode, and the map is aider discovering the tree for
+ * itself, which is what the other harnesses do by other means. `--no-auto-commits`
+ * keeps it from rewriting the history we just made under the verifier.
+ */
+async function runAider(config: ExternalHarnessConfig, task: BenchTask, workspaceDir: string, apiKey: string, timeoutMs: number): Promise<ExternalRunOutcome> {
+  try {
+    await execViaPty(['git', 'init', '-q', '.'], { cwd: workspaceDir, timeout: 30_000 });
+    await execViaPty(['git', 'add', '-A'], { cwd: workspaceDir, timeout: 30_000 });
+    await execViaPty(
+      ['git', '-c', 'user.email=bench@local', '-c', 'user.name=bench', 'commit', '-qm', 'fixture'],
+      { cwd: workspaceDir, timeout: 30_000 },
+    );
+  } catch (err) {
+    return { response: '', toolCalls: null, error: `git setup failed: ${(err as Error).message}`.slice(0, 300) };
+  }
+
+  let stdout: string;
+  try {
+    const result = await execViaPty(
+      [
+        'aider',
+        '--model', `openrouter/${config.model}`,
+        '--yes-always', '--no-stream', '--no-auto-commits',
+        '--no-analytics', '--no-check-update',
+        '-m', task.prompt,
+      ],
+      { cwd: workspaceDir, timeout: timeoutMs, env: { OPENROUTER_API_KEY: apiKey } },
+    );
+    stdout = result.stdout;
+  } catch (err) {
+    const partial = (err as { stdout?: string }).stdout ?? '';
+    return { response: '', toolCalls: null, error: ((err as Error).message || partial).slice(0, 300) };
+  }
+
+  // eslint-disable-next-line no-control-regex
+  const clean = stdout.replace(/\x1b\[[0-9;]*m/g, '');
+
+  // aider's own accounting line, e.g. "Tokens: 802 sent, 123 received. Cost:
+  // $0.00031 message, $0.00031 session." The session figure is the run total.
+  const tok = /Tokens:\s*([\d.]+)([km]?)\s*sent,\s*([\d.]+)([km]?)\s*received/i.exec(clean);
+  const scale = (n: string, unit: string) => Math.round(parseFloat(n) * (unit === 'k' ? 1e3 : unit === 'm' ? 1e6 : 1));
+  const cost = /Cost:.*?\$([\d.]+)\s*session/i.exec(clean);
+
+  const lines = clean.split('\n');
+  let end = lines.length;
+  while (end > 0 && (!lines[end - 1].trim() || /^(Tokens:|Cost:|Applied edit|Warning:)/.test(lines[end - 1].trim()))) end--;
+  let start = end;
+  while (start > 0 && lines[start - 1].trim()) start--;
+
+  return {
+    response: lines.slice(start, end).join('\n').trim(),
+    toolCalls: null,
+    inputTokens: tok ? scale(tok[1], tok[2].toLowerCase()) : undefined,
+    outputTokens: tok ? scale(tok[3], tok[4].toLowerCase()) : undefined,
+    costUsd: cost ? parseFloat(cost[1]) : undefined,
+  };
+}
+
 async function runOpencode(config: ExternalHarnessConfig, task: BenchTask, workspaceDir: string, timeoutMs: number): Promise<ExternalRunOutcome> {
   let stdout: string;
   try {
@@ -268,7 +345,7 @@ export async function runExternal(
   timeoutMs: number,
   options: ExternalRunOptions = {},
 ): Promise<ExternalRunOutcome> {
-  return config.harness === 'pi'
-    ? runPi(config, task, workspaceDir, apiKey, timeoutMs, options)
-    : runOpencode(config, task, workspaceDir, timeoutMs);
+  if (config.harness === 'pi') return runPi(config, task, workspaceDir, apiKey, timeoutMs, options);
+  if (config.harness === 'aider') return runAider(config, task, workspaceDir, apiKey, timeoutMs);
+  return runOpencode(config, task, workspaceDir, timeoutMs);
 }
