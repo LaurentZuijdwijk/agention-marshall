@@ -37,3 +37,4 @@ bench/runs/
 __pycache__/
 bench/.hc-*.png
 bench/harness-comparison.html
+bench/harness-comparison.md

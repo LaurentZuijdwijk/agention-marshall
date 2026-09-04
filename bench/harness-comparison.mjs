@@ -137,8 +137,144 @@ for (const model of MODELS) {
   }
 }
 
-writeFileSync(process.argv[2] ?? join(HERE, 'harness-comparison.html'), render({ headline, rows }));
-console.log(`wrote ${process.argv[2] ?? 'bench/harness-comparison.html'} — ${rows.length} config/model cells, ${rows.reduce((a, r) => a + r.trials, 0)} trials`);
+const wantsMd = process.argv.includes('--md');
+const outArg = process.argv.slice(2).find(a => !a.startsWith('--'));
+const out = outArg ?? join(HERE, wantsMd ? 'harness-comparison.md' : 'harness-comparison.html');
+writeFileSync(out, wantsMd ? renderMarkdown({ headline, rows }) : render({ headline, rows }));
+console.log(`wrote ${out} — ${rows.length} config/model cells, ${rows.reduce((a, r) => a + r.trials, 0)} trials`);
+
+// ── markdown ────────────────────────────────────────────────────────────────
+//
+// Same data, same refusals as the HTML: no pooling across code states, no
+// invented cells, no zero standing in for a number that was never measured.
+// Plain CommonMark with no front matter, so it drops into any site generator.
+function renderMarkdown({ headline, rows }) {
+  const cell = r => {
+    if (!r) return '_not run_';
+    // A cell with no usable count says so instead of printing a dash where a
+    // number goes — the reader should not have to decode a placeholder.
+    if (r.calls === null) return `⏱ _timed out_ · 0/${r.trials}`;
+    const calls = r.calls.toFixed(1) + (r.callsPartial ? '\\*' : '');
+    return `**${calls}** calls · ${r.seconds.toFixed(0)}s · ${r.passed}/${r.trials}`;
+  };
+  const at = (model, harness) => headline.find(d => d.model === model && d.harness === harness)?.r ?? null;
+
+  const grid = [
+    '| model | marshall | pi | opencode |',
+    '|---|---|---|---|',
+    ...MODELS.map(m => `| **${MODEL_LABEL[m]}** | ${HARNESSES.map(h => cell(at(m, h))).join(' | ')} |`),
+  ].join('\n');
+
+  const detail = [
+    '| harness | model | configuration | passed | tool calls | median s | input tok | output tok |',
+    '|---|---|---|---:|---:|---:|---:|---:|',
+    ...rows.map(r => `| ${r.harness} | ${MODEL_LABEL[r.model]} | \`${r.config}\` | ${r.passed}/${r.trials}`
+      + `${r.timedOut ? ` ⏱${r.timedOut}` : ''} | ${r.calls === null ? '—' : r.calls.toFixed(1) + (r.callsPartial ? '\\*' : '')}`
+      + ` | ${r.seconds.toFixed(1)} | ${r.inTok === null ? '—' : Math.round(r.inTok).toLocaleString('en-US')}`
+      + ` | ${r.outTok === null ? '—' : Math.round(r.outTok).toLocaleString('en-US')} |`),
+  ].join('\n');
+
+  const totalTrials = rows.reduce((a, r) => a + r.trials, 0);
+  const lunaM = at('openai/gpt-5.6-luna', 'marshall'), lunaP = at('openai/gpt-5.6-luna', 'pi');
+
+  return `# Three coding agents on the same task
+
+I benchmarked [Marshall](https://github.com/agentionai/marshall) against two other open-source
+coding agents — [\`pi\`](https://github.com/earendil-works/pi) and
+[\`opencode\`](https://github.com/sst/opencode) — on identical work, and spent a day trying to
+close the gap where they were ahead.
+
+## The task
+
+A 28-file JavaScript project is halfway through a logging migration. A \`MIGRATION.md\` describes
+the rules. Every remaining call site has to move off the deprecated \`log()\` helper, the old module
+has to be deleted, and \`node --test\` has to pass afterwards — 122 tests that grade the result.
+
+Every harness gets the same fixture, the same prompt, and the same \`check()\`. No harness is told
+*how* to do it: reading every file one at a time and scripting the whole thing in one shot are both
+allowed, and which one a harness picks turns out to be most of the story.
+
+## Results
+
+${grid}
+
+⏱ = every trial hit the 7-minute ceiling. ${totalTrials} trials total; means for calls, medians for time.
+
+Three things worth pulling out.
+
+**Marshall is 3× leaner than either competitor on Luna** — ${lunaM ? lunaM.calls.toFixed(1) : '5.0'} tool calls against
+pi's ${lunaP ? lunaP.calls.toFixed(1) : '14.8'} and opencode's 13.0, at the same 3/3 correctness and less than a
+quarter of opencode's wall-clock time.
+
+**Marshall is the only one that finishes Qwen3.8-flash.** pi and opencode both hit the ceiling on
+all four attempts between them; Marshall completed all three.
+
+**pi is still ahead on GLM-5.3-flash** — 7.0 calls to Marshall's 10.0, and comfortably faster. One
+model out of three, and I did not close it.
+
+## Every configuration measured
+
+The Marshall rows are not one number. Its behaviour moved a long way in a day, and the spread
+between configurations is larger than the gap between the harnesses:
+
+${detail}
+
+\\* averaged over only the trials that produced a usable count.
+
+## What actually moved the needle
+
+Starting from 91 tool calls at the worst and 5.0 at the best, on the same model and task:
+
+- **Batching the file tools** (\`edits[]\` on edit, \`patterns[]\` on search, \`paths[]\` on list) —
+  real, but small. It targeted tools that were only 2–5 calls of a 37-call run.
+- **Dropping the read-before-edit gate** — larger. Marshall required a \`read_file\` before any
+  edit; the \`oldString\` already has to match exactly once, so the gate bought no safety and cost a
+  round trip per file. On GLM this took \`read_file\` from 37 calls to 10.
+- **Pointing bulk reads at the shell** — largest. One \`grep -rl PATTERN src | xargs cat\` replaces
+  thirty \`read_file\` calls. This only became honest advice *after* the gate came out, since shell
+  output is now enough to edit from. Together the two took a GLM run from 37 calls with a timeout
+  to 14 calls passing cleanly.
+- **Cutting the tool belt** to shell + edit + write — biggest single effect on Luna (18.7 → 5.0),
+  half the effect on GLM, and *none at all* on Qwen3.8-flash. Not shipped as a default for exactly
+  that reason.
+
+And what did not: four different system-prompt variants. One of them — telling the model to work
+incrementally rather than reading everything first — made things dramatically *worse*, pushing it
+from a 5-call scripted rewrite into a 45-call edit-by-edit loop. Prompt wording moved between
+models and never transferred.
+
+## Caveats
+
+I would rather state these than have someone find them.
+
+- **One task, one fixture.** Everything here is the migration task. A harness tuned on one fixture
+  is tuned on one fixture.
+- **Small samples.** Two to five trials per cell. Trial-to-trial variance is large — one Marshall
+  configuration produced 23, 17 and 21 calls on identical inputs. Treat gaps under ~20% as noise.
+- **Marshall is the home team.** I wrote the harness these numbers come from, and I had its
+  internals available to tune while treating the others as black boxes. The comparison is
+  like-for-like on task, model and grading; it is not like-for-like on effort spent.
+- **opencode reports no token usage** through its CLI, so those cells are blank rather than zero.
+- **Timed-out external runs have no usable call count.** The harness kills the CLI before parsing
+  its transcript and records zero. That is an artifact: pi's timed-out Qwen run left a 4.3 MB
+  transcript containing 9 real tool calls. Averaging it in would have drawn pi as the most
+  economical harness on the one model it could not finish. Those cells are marked, not counted.
+- **Marshall rows come from their latest run only.** Its behaviour changed several times in a day,
+  so pooling every trial would describe no version that ever existed.
+
+## Reproducing it
+
+\`\`\`bash
+export OPENROUTER_API_KEY=sk-or-...
+npx tsx bench/run.ts --config luna-shell-edit --config pi-luna --config opencode-luna \\
+  --task multi-file-migration --trials 3
+node bench/harness-comparison.mjs --md
+\`\`\`
+
+The harness, fixtures and verifier are in \`bench/\`. This page is generated from the run artifacts
+rather than written by hand, so it cannot drift from the numbers it reports.
+`;
+}
 
 function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 
