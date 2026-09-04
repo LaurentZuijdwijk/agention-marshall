@@ -32,11 +32,27 @@ function toPaths(input: Record<string, unknown>): string[] {
   return ['.'];
 }
 
-async function listOneDir(workspaceRoot: string, path: string): Promise<string> {
+/**
+ * Entries rendered for one directory, and for one whole call.
+ *
+ * `list_dir` had no cap of any kind: a `node_modules` or a dataset directory
+ * returned a line per entry, however many that was. Batching turned that from a
+ * sharp edge into a multiplied one, so the bound arrives with the batch. The
+ * per-call ceiling is the one that matters — it is the model's context being
+ * spent — and the per-directory one keeps a single huge directory from
+ * consuming all of it before the others are reached.
+ */
+const MAX_ENTRIES_PER_DIR = 500;
+const MAX_ENTRIES_PER_CALL = 1000;
+
+async function listOneDir(workspaceRoot: string, path: string, budget = MAX_ENTRIES_PER_DIR): Promise<string> {
   try {
     const resolved = resolveInWorkspace(workspaceRoot, path);
-    const entries = await readdir(resolved, { withFileTypes: true });
-    if (entries.length === 0) return '(empty directory)';
+    const all = await readdir(resolved, { withFileTypes: true });
+    if (all.length === 0) return '(empty directory)';
+    const cap = Math.min(budget, MAX_ENTRIES_PER_DIR);
+    const entries = all.slice(0, cap);
+    const omitted = all.length - entries.length;
 
     // Stat every entry in parallel rather than one directory-wide call:
     // a directory listing is exactly the surface a symlink race is easy
@@ -53,12 +69,22 @@ async function listOneDir(workspaceRoot: string, path: string): Promise<string> 
     // argument per entry, and a directory with enough of them overflows the
     // argument list and throws instead of listing.
     const width = rows.reduce((w, r) => Math.max(w, r.size === null ? 0 : String(r.size).length), 0);
-    return rows
+    const listing = rows
       .map(r => `${r.kind}  ${r.size === null ? ' '.repeat(width) : String(r.size).padStart(width)}  ${r.rel}`)
       .join('\n');
+    // Said, not silent: a truncated listing that looks complete is how a caller
+    // concludes a file is absent when it simply came after the cap.
+    return omitted > 0
+      ? `${listing}\n[${omitted} more entr${omitted === 1 ? 'y' : 'ies'} not shown — narrow with a subdirectory, or use search]`
+      : listing;
   } catch (err) {
     return `Error: ${safe(err)}`;
   }
+}
+
+/** Rows a rendered listing actually spent, so a batch can bound its total. */
+function countEntries(block: string): number {
+  return block.split('\n').filter(l => /^[fd] /.test(l)).length;
 }
 
 export function buildListDir(workspaceRoot: string): Tool<string> {
@@ -87,10 +113,21 @@ export function buildListDir(workspaceRoot: string): Tool<string> {
       // Sequential for the same reason `search` is: a listing already stats
       // every entry in parallel within one directory, and fanning the
       // directories out on top of that multiplies open handles by the batch
-      // size for no gain the caller can see.
+      // size for no gain the caller can see. The shared budget is why the
+      // ordering matters — spending it first-come keeps one enormous directory
+      // from consuming the whole call silently.
+      let spent = 0;
       const blocks: string[] = [];
-      for (const p of paths) {
-        blocks.push(`${p}:\n${await listOneDir(workspaceRoot, p)}`);
+      for (const [i, p] of paths.entries()) {
+        if (spent >= MAX_ENTRIES_PER_CALL) {
+          const skipped = paths.length - i;
+          blocks.push(`[entry budget of ${MAX_ENTRIES_PER_CALL} reached — ${skipped} further `
+            + `director${skipped === 1 ? 'y' : 'ies'} not listed]`);
+          break;
+        }
+        const block = await listOneDir(workspaceRoot, p, MAX_ENTRIES_PER_CALL - spent);
+        spent += countEntries(block);
+        blocks.push(`${p}:\n${block}`);
       }
       return blocks.join('\n\n');
     },

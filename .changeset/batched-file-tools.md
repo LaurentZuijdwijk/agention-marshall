@@ -18,15 +18,18 @@ into 28. The cost of a call is not its payload — runs whose payloads were *lar
 60-108% fewer output tokens than runs with many small ones — but the per-call envelope, the
 repeated path, and the model's own preamble around each one.
 
-`read_file` no longer prefixes a `12 | ` gutter by default (set `Limits.readLineNumbers` to get
-it back). A gutter makes content easy to refer to and impossible to copy: `edit_file` matches an
+`read_file` no longer prefixes a `12 | ` gutter by default. `Limits.readLineNumbers` restores it
+for programmatic callers of the engine; the CLI does not yet surface `limits`, so there is no
+setting for it there. A gutter makes content easy to refer to and impossible to copy: `edit_file` matches an
 exact string, so every `oldString` had to be reconstructed rather than lifted from what was just
 read. Model reasoning traces showed each pair being drafted in full inside `<think>` before being
 emitted again as arguments, then repaired when that went wrong.
 
-When an `oldString` misses exactly, a whitespace- and quote-tolerant fallback is tried once
-against a normalized copy, with an offset map so the bytes replaced are the real ones. A curled
-quote or a dropped trailing space no longer costs a full re-emission of the edit body. Because a
+When an `oldString` misses exactly, a fallback is tried once against a normalized copy, with an
+offset map so the bytes replaced are the real ones. It is narrower than "whitespace-tolerant":
+it folds smart quotes and unicode dashes to ASCII and ignores *trailing* whitespace per line.
+Interior runs of spaces are still significant, so `a  b` does not match `a b`. A curled quote or
+a dropped trailing space no longer costs a full re-emission of the edit body. Because a
 loose match means the caller's idea of that text has drifted from the file's, the result now says
 so; an exact match reports nothing extra.
 

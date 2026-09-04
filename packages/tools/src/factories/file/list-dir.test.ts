@@ -109,3 +109,54 @@ test('list_dir with no arguments still lists the workspace root', async () => {
   const result = await list_dir.execute('a', 'b', {}, 'id');
   assert.match(result, /f\.txt/);
 });
+
+// list_dir had no cap of any kind before batching; a directory with thousands
+// of entries returned a line for each. Batching would have multiplied that.
+test('a huge directory is capped, and says how much it withheld', async () => {
+  const root = tempRoot();
+  mkdirSync(join(root, 'many'));
+  for (let i = 0; i < 620; i++) writeFileSync(join(root, 'many', `f${String(i).padStart(4, '0')}.txt`), '');
+  const [, list_dir] = createReadOnlyFileTools(root);
+
+  const result = await list_dir.execute('a', 'b', { paths: ['many'] }, 'id');
+  const listed = result.split('\n').filter(l => /^[fd] /.test(l)).length;
+
+  assert.equal(listed, 500, 'the per-directory cap holds');
+  assert.match(result, /120 more entries not shown/, 'and a truncated listing never looks complete');
+});
+
+// The budget is spent down rather than used to skip: a later directory gets
+// whatever is left and truncates within it, so every requested path still
+// appears. Only a path reached with nothing left at all is skipped outright.
+test('a batch cannot spend more than the whole-call entry budget', async () => {
+  const root = tempRoot();
+  for (const d of ['a', 'b', 'c']) {
+    mkdirSync(join(root, d));
+    for (let i = 0; i < 480; i++) writeFileSync(join(root, d, `f${String(i).padStart(4, '0')}.txt`), '');
+  }
+  const [, list_dir] = createReadOnlyFileTools(root);
+
+  const result = await list_dir.execute('a', 'b', { paths: ['a', 'b', 'c'] }, 'id');
+  const listed = result.split('\n').filter(l => /^[fd] /.test(l)).length;
+
+  assert.equal(listed, 1000, 'the batch spends its budget and not a row more');
+  for (const d of ['a', 'b', 'c']) {
+    assert.match(result, new RegExp(`^${d}:`, 'm'), `${d} still appears rather than being dropped`);
+  }
+  assert.match(result, /more entries not shown/, 'and the directory that ran out of budget says so');
+});
+
+test('a path reached with no budget left is skipped, and named as skipped', async () => {
+  const root = tempRoot();
+  for (const d of ['big1', 'big2', 'tail']) mkdirSync(join(root, d));
+  for (const d of ['big1', 'big2']) {
+    for (let i = 0; i < 500; i++) writeFileSync(join(root, d, `f${String(i).padStart(4, '0')}.txt`), '');
+  }
+  writeFileSync(join(root, 'tail', 'never-reached.txt'), '');
+  const [, list_dir] = createReadOnlyFileTools(root);
+
+  const result = await list_dir.execute('a', 'b', { paths: ['big1', 'big2', 'tail'] }, 'id');
+
+  assert.match(result, /entry budget of 1000 reached/);
+  assert.doesNotMatch(result, /never-reached\.txt/, 'the skipped directory is genuinely not listed');
+});

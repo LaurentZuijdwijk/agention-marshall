@@ -38,6 +38,14 @@
 import { spawn } from 'node:child_process';
 
 const RELOAD_MARKER = 'MARSHALL_OLD_SPACE_RELOADED';
+/**
+ * Set alongside NODE_ENV when *we* chose the value, never when the user did.
+ *
+ * Read by `scrubbedEnv` in @agentionai/marshall-tools, which drops NODE_ENV
+ * from sandboxed commands when it sees this. Exported so the two ends of that
+ * contract are one string rather than two spellings that can drift apart.
+ */
+export const INJECTED_MARKER = 'MARSHALL_INJECTED_NODE_ENV';
 const DEFAULT_OLD_SPACE_MB = 8192;
 
 function heapAlreadyRaised(env: NodeJS.ProcessEnv, execArgv: readonly string[]): boolean {
@@ -76,7 +84,21 @@ export function planRespawn(env: NodeJS.ProcessEnv, execArgv: readonly string[])
   return {
     needed: true,
     heapFlag: needsHeap ? `--max-old-space-size=${size}` : undefined,
-    env: { ...env, [RELOAD_MARKER]: '1', NODE_ENV: env.NODE_ENV ?? 'production' },
+    env: {
+      ...env,
+      [RELOAD_MARKER]: '1',
+      NODE_ENV: env.NODE_ENV ?? 'production',
+      // Records that the value above is ours rather than the user's, so the
+      // tool sandbox can decline to forward it into the commands the agent
+      // runs. It must not: this NODE_ENV exists to pick a React build for our
+      // own renderer, and `npm install` under NODE_ENV=production omits
+      // devDependencies — the agent would install a workspace with no test
+      // runner and no compiler, and be told nothing. See `scrubbedEnv` in
+      // @agentionai/marshall-tools. Only set when we filled the gap; a
+      // deliberate NODE_ENV from the user carries no marker and is forwarded
+      // as it always was.
+      ...(needsProdEnv ? { [INJECTED_MARKER]: '1' } : {}),
+    },
   };
 }
 

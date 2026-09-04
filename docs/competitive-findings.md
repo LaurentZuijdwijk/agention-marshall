@@ -1,5 +1,9 @@
 # Why the tool layer matters — findings from today's testing
 
+*Tested 2026-08-27 against `pi` 0.79.1 and `opencode` 1.17.16. Not maintained: no one updates this
+when those versions change, so treat every competitor claim below as a statement about those
+builds on that date and nothing else.*
+
 > **Draft, not copy.** This is a working document capturing what we verified today, written to
 > be adapted into marketing material — not to be published as-is. Before anything here goes
 > public: (1) re-verify the competitor bugs, since they may get patched — everything below is

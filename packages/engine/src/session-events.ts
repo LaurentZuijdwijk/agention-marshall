@@ -29,8 +29,24 @@ const SUBAGENT_RESULT_PREVIEW_CHARS = 300;
 /**
  * Whether a tool result is the tool refusing rather than answering.
  *
- * Every tool in the belt reports failure by returning a string beginning
- * `Error:` instead of throwing, so this prefix is the whole contract.
+ * Tools report failure by *returning* rather than throwing, and they do not
+ * agree on how. Three shapes exist, and the first version of this checked only
+ * the first — which silently excluded `run_shell`, the tool that fails most and
+ * whose failures cost the most:
+ *
+ *  - `Error: …` — every file, search and job tool (23 call sites).
+ *  - a trailing `exit code:` line — `run_shell`, which reports the outcome of
+ *    the command rather than of the call. Matched anchored to the end of the
+ *    result, because that line is always last: an unanchored match would call a
+ *    run a failure for printing the words "exit code: 1" on stdout.
+ *  - `{"error": …}` — `agent-tool`, which answers in JSON.
+ *
+ * This is prose-matching, and it is the weaker half of a fix. The real answer
+ * is a structured failure flag on the tool result, but `Tool` comes from
+ * @agentionai/agents and giving it one is a change to that contract rather than
+ * to this log line. Until then, a new tool inventing a fourth spelling of
+ * failure will go unlogged, so the shapes above are worth keeping in step with
+ * reality.
  *
  * Deliberately does not count an approval denial or an interruption. Both
  * produce a result the model has to react to, but neither is the model having
@@ -38,8 +54,13 @@ const SUBAGENT_RESULT_PREVIEW_CHARS = 300;
  * "the edit failed" mean "someone declined it", and the two want different
  * responses from whoever is reading.
  */
-function isFailure(result: string): boolean {
-  return result.startsWith('Error:');
+export function isFailure(result: string): boolean {
+  if (result.startsWith('Error:')) return true;
+  // `$` without the `m` flag: end of the whole result, not end of a line.
+  if (/(?:^|\n)exit code: (?!0$)[^\n]+$/.test(result)) return true;
+  if (result.includes('(command timed out and was killed)')) return true;
+  if (result.startsWith('{') && /"error"\s*:/.test(result)) return true;
+  return false;
 }
 
 /**

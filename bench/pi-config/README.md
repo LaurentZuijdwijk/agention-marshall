@@ -21,3 +21,11 @@ Two fields are load-bearing:
   a difference between the products and is left alone.
 - `maxTokens` matches `BENCH_ENGINE_DEFAULTS.maxTokens`, so neither side gets a
   larger output budget than the other.
+
+## `auth.json`
+
+Not tracked. `pi` writes credentials into this file on first authenticated use,
+and it sits inside the `PI_CODING_AGENT_DIR` the harness points at — so tracking
+it puts a real API key one `git commit -a` away from the repo. `auth.example.json`
+is the empty template; the harness passes `OPENROUTER_API_KEY` through the child
+environment and needs nothing in this file.

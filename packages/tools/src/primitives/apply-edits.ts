@@ -179,12 +179,22 @@ export function applyEdits(original: string, edits: readonly EditRequest[]): App
 
   // Overlap is reported against the later edit of the pair, so the message
   // points at the one the caller should merge into its neighbour.
+  //
+  // Compared against the furthest end seen so far, not merely the previous
+  // span: one long edit can enclose several short ones, and sorting by start
+  // puts those after it. Comparing only with the immediate predecessor found
+  // the first and cleared the rest — with A=[0,10), B=[2,3), C=[5,6), B was
+  // reported and C, equally enclosed by A, was not. No corruption resulted
+  // (the batch is rejected either way), but the caller was told to fix one of
+  // two identical problems and would come back with the other.
   const ordered = [...spans].sort((a, b) => a.start - b.start);
+  let covered = ordered.length ? ordered[0] : undefined;
   for (let i = 1; i < ordered.length; i++) {
-    if (ordered[i].start < ordered[i - 1].end) {
-      const later = ordered[i].index > ordered[i - 1].index ? ordered[i] : ordered[i - 1];
+    if (covered && ordered[i].start < covered.end) {
+      const later = ordered[i].index > covered.index ? ordered[i] : covered;
       if (!failures.some(f => f.index === later.index)) failures.push({ index: later.index, reason: 'overlap' });
     }
+    if (!covered || ordered[i].end > covered.end) covered = ordered[i];
   }
 
   if (failures.length) return { ok: false, failures: failures.sort((a, b) => a.index - b.index) };

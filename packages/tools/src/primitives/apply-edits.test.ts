@@ -160,3 +160,18 @@ test('overlapping line ranges are refused like overlapping text', () => {
   assert.ok(!result.ok);
   assert.equal(result.failures[0].reason, 'overlap');
 });
+
+// One long edit can enclose several short ones, and sorting by start puts those
+// after it. Comparing each span only with its immediate predecessor found the
+// first enclosed edit and cleared the rest, so the caller fixed one of two
+// identical problems and came back with the other.
+test('every edit enclosed by a longer one is reported, not just the first', () => {
+  const result = applyEdits('0123456789abc', [
+    { oldString: '0123456789', newString: 'X' },  // [0,10)
+    { oldString: '23', newString: 'Y' },          // [2,4)  enclosed
+    { oldString: '56', newString: 'Z' },          // [5,7)  enclosed, and previously missed
+  ]);
+  assert.ok(!result.ok);
+  const flagged = result.failures.filter(f => f.reason === 'overlap').map(f => f.index).sort();
+  assert.deepEqual(flagged, [1, 2], 'both enclosed edits are named');
+});

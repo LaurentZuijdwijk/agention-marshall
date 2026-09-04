@@ -150,14 +150,19 @@ async function runPi(config: ExternalHarnessConfig, task: BenchTask, workspaceDi
     'pi',
     '--provider', config.provider ?? 'openrouter',
     '--model', config.model,
-    // A local router authenticates nothing; passing a placeholder key would be
-    // noise, and passing the real OpenRouter key would leak it into the argv of
-    // a process that has no use for it.
-    ...(local ? [] : ['--api-key', apiKey]),
     '--no-session', '--mode', 'json',
     '-p', task.prompt,
   ];
-  const env = config.configDir ? { PI_CODING_AGENT_DIR: config.configDir } : undefined;
+  // The key goes in the environment, never in argv. This whole command is
+  // joined into one string for `script -qec`, so `--api-key sk-or-…` would sit
+  // in /proc and be readable by every user on the host for the length of the
+  // run. pi resolves `OPENROUTER_API_KEY` itself (pi-ai's env map:
+  // openrouter -> OPENROUTER_API_KEY), so there is nothing to pass explicitly.
+  // A local router authenticates nothing and gets no key at all.
+  const env: NodeJS.ProcessEnv = {
+    ...(config.configDir ? { PI_CODING_AGENT_DIR: config.configDir } : {}),
+    ...(local ? {} : { OPENROUTER_API_KEY: apiKey }),
+  };
 
   let response = '';
   let toolCalls = 0;

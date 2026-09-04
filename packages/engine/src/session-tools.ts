@@ -283,12 +283,22 @@ export class ToolBelt {
     const allowlist = config.toolAllowlist;
     const offered = allowlist ? tools.filter(t => allowlist.includes(t.name)) : tools;
 
+    // Keyed off what survived the allowlist, not off what was configured.
+    // Every other guidance block here keys off whether its tool resolved, which
+    // is what makes "a rule can never describe a tool this turn does not have"
+    // true (see the same claim in session.ts's turn prompt). The allowlist ran
+    // after this list was built, so a belt trimmed to run_shell still carried
+    // paragraphs about the context and planner tools it had just lost.
+    const has = (name: string) => offered.some(t => t.name === name);
+    // Prefix, because the spawn tool is named after the agent it spawns and
+    // only the `agent_*` controls are fixed.
+    const hasSwarm = offered.some(t => t.name.startsWith('agent'));
     const extraInstructions = [
-      context ? CONTEXT_TOOL_GUIDANCE : '',
-      config.swarm && !light ? SWARM_TOOL_GUIDANCE : '',
-      planner ? PLANNER_TOOL_GUIDANCE : '',
-      reviewer ? REVIEWER_TOOL_GUIDANCE : '',
-      this.deps.client.askUser ? '\n\nUse ask_user for genuine ambiguity that blocks progress, not for confirmation.\n' : '',
+      context && has('context') ? CONTEXT_TOOL_GUIDANCE : '',
+      config.swarm && !light && hasSwarm ? SWARM_TOOL_GUIDANCE : '',
+      planner && has('planner') ? PLANNER_TOOL_GUIDANCE : '',
+      reviewer && has('reviewer') ? REVIEWER_TOOL_GUIDANCE : '',
+      this.deps.client.askUser && has('ask_user') ? '\n\nUse ask_user for genuine ambiguity that blocks progress, not for confirmation.\n' : '',
     ].join('');
 
     return { tools: offered, extraInstructions };

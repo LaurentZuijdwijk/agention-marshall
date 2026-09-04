@@ -16,6 +16,23 @@ const ALLOWED_ENV_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Set by the CLI when it picked `NODE_ENV` itself rather than inheriting one.
+ *
+ * The CLI re-execs with `NODE_ENV=production` so Ink loads React's production
+ * reconciler — a decision about our own renderer that has no business reaching
+ * the user's project. `npm install` under `NODE_ENV=production` sets
+ * `omit=dev`, so a workspace would be installed without its test runner,
+ * compiler or linter, and the agent would be told nothing about it. Anything
+ * else branching on NODE_ENV (jest configs, build tooling, project scripts)
+ * would shift under it just as silently.
+ *
+ * Kept as a marker rather than dropping NODE_ENV outright, because a NODE_ENV
+ * the *user* exported is a real instruction about their project and is still
+ * forwarded.
+ */
+const INJECTED_NODE_ENV_MARKER = 'MARSHALL_INJECTED_NODE_ENV';
+
+/**
  * The environment a sandboxed child gets: the allowlist above, nothing else.
  *
  * Shared with the background-job runner so both spawn paths scrub identically —
@@ -25,6 +42,7 @@ const ALLOWED_ENV_KEYS: ReadonlySet<string> = new Set([
 export function scrubbedEnv(extra: Record<string, string> = {}): Record<string, string> {
   const env: Record<string, string> = {};
   for (const key of ALLOWED_ENV_KEYS) {
+    if (key === 'NODE_ENV' && process.env[INJECTED_NODE_ENV_MARKER] === '1') continue;
     const val = process.env[key];
     if (val !== undefined) env[key] = val;
   }

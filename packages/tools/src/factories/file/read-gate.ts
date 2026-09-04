@@ -389,14 +389,26 @@ export function createReadGateTools(
         edits: {
           type: 'array',
           minItems: 1,
-          description: 'Every replacement to make in this file, in one call.',
+          description:
+            'Every replacement to make in this file, in one call. Each entry addresses its target '
+            + 'either by content (oldString, the usual way) or by line range (startLine + endLine). '
+            + 'Give one or the other, never both.',
           items: {
             type: 'object',
+            // No `required` list, because an item is valid in either of two
+            // shapes and expressing that needs `oneOf` — which tool-schema
+            // support across providers is uneven about. Requiring
+            // oldString+newString outright, as this did, made the line-addressed
+            // form unrepresentable: the branch existed, was gated and tested,
+            // and no model could ever emit a call that reached it. `toEdits`
+            // enforces the real rule at runtime and rejects an entry that
+            // carries neither address.
             properties: {
-              oldString: { type: 'string', description: 'Exact text to find, copied from read_file output (must be unique in the file)' },
-              newString: { type: 'string', description: 'Replacement text' },
+              oldString: { type: 'string', description: 'Exact text to find; must appear exactly once in the file. Preferred — it validates itself.' },
+              newString: { type: 'string', description: 'Replacement text. Required for both forms.' },
+              startLine: { type: 'number', description: 'With endLine, replace this 1-indexed inclusive line range instead of matching text. Requires the file to have been read this session, and to be unchanged since.' },
+              endLine: { type: 'number', description: 'Last line of the range, 1-indexed and inclusive.' },
             },
-            required: ['oldString', 'newString'],
           },
         },
       },

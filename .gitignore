@@ -38,3 +38,5 @@ __pycache__/
 bench/.hc-*.png
 bench/harness-comparison.html
 bench/harness-comparison.md
+# pi persists API keys into its config dir; ship the empty template instead
+bench/pi-config/auth.json

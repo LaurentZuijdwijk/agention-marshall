@@ -241,6 +241,24 @@ async function runOneSearch(workspaceRoot: string, maxSearchResults: number, spe
   }
 }
 
+/**
+ * How much larger a whole batch may be than a single search.
+ *
+ * Batching is only worth doing if a batch returns meaningfully more than one
+ * call would, so this is not 1 — but it is small, because the cost of a result
+ * is the model's context and that is the thing the per-call cap was protecting.
+ */
+const BATCH_BUDGET_MULTIPLE = 3;
+
+/** Matches in a rendered block: the `path:line: text` rows, not the `[…]` notes or the header. */
+function countMatches(block: string): number {
+  let n = 0;
+  for (const line of block.split('\n')) {
+    if (line && !line.startsWith('[') && !line.startsWith('No ') && /^.+:\d+: /.test(line)) n++;
+  }
+  return n;
+}
+
 function describeSpec(spec: SearchSpec): string {
   const where = spec.path && spec.path !== '.' ? ` in ${spec.path}` : '';
   const glob = spec.fileGlob ? ` (fileGlob ${JSON.stringify(spec.fileGlob)})` : '';
@@ -298,9 +316,27 @@ export function buildSearch(workspaceRoot: string, maxSearchResults: number): To
       // call, the bound the per-file cap exists to hold. Batching is here to
       // save round trips to the model, which it still does; the searches
       // themselves were never the slow part.
+      //
+      // The per-spec cap alone does not bound a batch: N patterns could return
+      // N×200 matches, so adding batching removed the ceiling this tool had.
+      // A whole-call budget puts one back. It is deliberately larger than a
+      // single search's — batching exists to be worth doing — but finite, and
+      // spent first-come so one noisy pattern cannot silently starve the rest
+      // without saying so.
+      const batchBudget = maxSearchResults * BATCH_BUDGET_MULTIPLE;
+      let spent = 0;
       const blocks: string[] = [];
-      for (const spec of specs) {
-        blocks.push(`=== ${describeSpec(spec)} ===\n${await runOneSearch(workspaceRoot, maxSearchResults, spec)}`);
+      for (const [i, spec] of specs.entries()) {
+        if (spent >= batchBudget) {
+          const skipped = specs.length - i;
+          blocks.push(`[batch budget of ${batchBudget} matches reached — ${skipped} further `
+            + `pattern${skipped === 1 ? '' : 's'} not searched. Reissue ${skipped === 1 ? 'it' : 'them'} `
+            + `as a separate call, or narrow with path/fileGlob.]`);
+          break;
+        }
+        const block = await runOneSearch(workspaceRoot, Math.min(maxSearchResults, batchBudget - spent), spec);
+        spent += countMatches(block);
+        blocks.push(`=== ${describeSpec(spec)} ===\n${block}`);
       }
       return blocks.join('\n\n');
     },

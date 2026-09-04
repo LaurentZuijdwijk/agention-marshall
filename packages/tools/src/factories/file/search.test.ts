@@ -271,3 +271,21 @@ test('search reports an error rather than crashing when given neither pattern no
   const result = await search.execute('a', 'b', {}, 'id');
   assert.match(result, /^Error: no patterns given/);
 });
+
+// The per-spec cap alone does not bound a batch: N patterns could each return
+// the full 200, so adding patterns[] removed the ceiling this tool used to
+// have. The whole-call budget puts one back.
+test('a batch of patterns is bounded as a whole, not just per pattern', async () => {
+  const root = tempRoot();
+  // 900 lines, every one matching both patterns.
+  writeFileSync(join(root, 'big.txt'), Array.from({ length: 900 }, () => 'needle haystack').join('\n') + '\n');
+  const [, , search] = createReadOnlyFileTools(root);
+
+  const result = await search.execute('a', 'b', {
+    patterns: [{ pattern: 'needle' }, { pattern: 'haystack' }, { pattern: 'needle haystack' }],
+  }, 'id');
+  const matches = result.split('\n').filter(l => /^.+:\d+: /.test(l)).length;
+
+  assert.ok(matches <= 200 * 3, `batch stayed within its budget, got ${matches}`);
+  assert.match(result, /truncated at|batch budget/, 'and it never truncates silently');
+});

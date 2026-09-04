@@ -30,3 +30,11 @@ Adds `maskToolResults` (default unchanged) to keep every tool result verbatim an
 `retrieve_tool_result` from the belt. Masking keeps a long conversation small at the cost of the
 model no longer seeing what a tool returned more than `maskingKeepRecent` results ago — which, on
 a task that reads many files and then edits them, is exactly the content it is about to need.
+
+Two consequences worth stating plainly. Dropping the read requirement on `edit_file` trades a
+guardrail for a round trip per file: the `oldString` argument makes a *misplaced* edit fail loudly,
+but it says nothing about whether an edit is sensible in content the model never read, and the
+compensating control — the diff at the approval gate — is not there under auto-approve. And the
+CLI now runs with `NODE_ENV=production` when nothing else set it, so anyone working on the TUI
+loses react-reconciler's development warnings unless they export `NODE_ENV=development`
+themselves; that value is deliberately not forwarded to the commands the agent runs.
