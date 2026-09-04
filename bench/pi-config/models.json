@@ -1,0 +1,21 @@
+{
+  "providers": {
+    "llama-cpp": {
+      "baseUrl": "http://127.0.0.1:8080",
+      "api": "openai-completions",
+      "apiKey": "local",
+      "models": [
+        {
+          "id": "ornith-ai/Ornith-1.5-35B-A3B-GGUF:Q4_K_M",
+          "contextWindow": 262144,
+          "maxTokens": 16384
+        },
+        {
+          "id": "peculiar-ragdoll/Tiel-Coder-35B-A3B-GGUF-MTP:Q4_K_XL",
+          "contextWindow": 262144,
+          "maxTokens": 16384
+        }
+      ]
+    }
+  }
+}

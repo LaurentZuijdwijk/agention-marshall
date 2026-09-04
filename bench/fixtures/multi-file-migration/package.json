@@ -1,0 +1,5 @@
+{
+  "name": "migration-fixture",
+  "private": true,
+  "type": "module"
+}
