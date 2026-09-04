@@ -35,3 +35,5 @@ bench/results.json
 # by `npx tsx bench/run.ts` and meaningful only next to the run that produced them.
 bench/runs/
 __pycache__/
+bench/.hc-*.png
+bench/harness-comparison.html

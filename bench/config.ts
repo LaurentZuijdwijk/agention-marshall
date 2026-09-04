@@ -441,6 +441,13 @@ export const EXTERNAL_HARNESSES: import('./external-harness.js').ExternalHarness
   },
   { name: 'pi', harness: 'pi', model: 'anthropic/claude-sonnet-5' },
   { name: 'opencode', harness: 'opencode', model: 'anthropic/claude-sonnet-5' },
+  // On the models the marshall and pi rows were actually measured on, so a
+  // three-harness comparison is like-for-like rather than three harnesses on
+  // three different models.
+  { name: 'opencode-luna', harness: 'opencode', model: 'openai/gpt-5.6-luna' },
+  { name: 'opencode-glm', harness: 'opencode', model: 'z-ai/glm-5.3-flash' },
+  { name: 'pi-qwen38flash', harness: 'pi', model: 'qwen/qwen3.8-flash' },
+  { name: 'opencode-qwen38flash', harness: 'opencode', model: 'qwen/qwen3.8-flash' },
   { name: 'pi-luna', harness: 'pi', model: 'openai/gpt-5.6-luna' },
   { name: 'pi-glm', harness: 'pi', model: 'z-ai/glm-5.3-flash' },
 ];
