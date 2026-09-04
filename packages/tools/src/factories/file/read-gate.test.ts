@@ -760,3 +760,88 @@ test('a batch is shown to the approver as one diff of the finished file', async 
   assert.match(request.detail, /THREE/);
   assert.match(request.detail, /two/, 'unchanged context is shown around the changes');
 });
+
+// The hole this closes appeared only once edit_file stopped requiring a read.
+// A successful oldString edit records the file's new hash (for write_file's
+// benefit), which used to be indistinguishable from "the caller has read this".
+// A line-addressed edit could then run against a version whose numbers nobody
+// had ever seen — the exact thing its gate exists to prevent.
+test('an oldString edit does not unlock line addressing on an unread file', async () => {
+  const root = tempRoot();
+  writeFileSync(join(root, 'a.js'), 'alpha\nbeta\ngamma\n');
+  const tools = createFileTools(makeConfig({ workspaceRoot: root }));
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+
+  const first = await byName.edit_file.execute('a', 'b', {
+    path: 'a.js', edits: [{ oldString: 'beta', newString: 'BETA' }],
+  }, 'id');
+  assert.match(first, /Successfully edited/, 'precondition: an oldString edit needs no read');
+
+  const byLine = await byName.edit_file.execute('a', 'b', {
+    path: 'a.js', edits: [{ startLine: 1, endLine: 1, newString: 'ALPHA' }],
+  }, 'id');
+
+  assert.match(byLine, /has not been read this session/);
+  assert.equal(readFileSync(join(root, 'a.js'), 'utf8'), 'alpha\nBETA\ngamma\n',
+    'and the line-addressed edit changed nothing');
+});
+
+test('a real read does unlock line addressing, including after an edit', async () => {
+  const root = tempRoot();
+  writeFileSync(join(root, 'a.js'), 'alpha\nbeta\n');
+  const tools = createFileTools(makeConfig({ workspaceRoot: root }));
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+
+  await byName.read_file.execute('a', 'b', { path: 'a.js' }, 'id');
+  await byName.edit_file.execute('a', 'b', { path: 'a.js', edits: [{ oldString: 'beta', newString: 'BETA' }] }, 'id');
+  const byLine = await byName.edit_file.execute('a', 'b', {
+    path: 'a.js', edits: [{ startLine: 1, endLine: 1, newString: 'ALPHA\n' }],
+  }, 'id');
+
+  assert.match(byLine, /Successfully edited/);
+  assert.equal(readFileSync(join(root, 'a.js'), 'utf8'), 'ALPHA\nBETA\n');
+});
+
+// A tool call's arguments are output tokens. Observed live: Luna emitted a
+// 19,384-character edit_file payload against a 16,384 maxTokens ceiling, ran
+// out mid-string, and the call arrived as unparseable JSON — the whole turn
+// lost, with nothing reading as "that edit was too big". The ceiling below
+// cannot catch that case (it never reaches the tool); it catches the payload
+// that arrives intact and is still the wrong shape, and names the alternatives.
+test('an oversized batch is refused, and says what to do instead', async () => {
+  const root = tempRoot();
+  const body = 'x'.repeat(9_000);
+  writeFileSync(join(root, 'big.js'), `${body}\nTAIL\n`);
+  const tools = createFileTools(makeConfig({ workspaceRoot: root }));
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+
+  const result = await byName.edit_file.execute('a', 'b', {
+    path: 'big.js',
+    edits: [{ oldString: body, newString: 'y'.repeat(9_000) }],
+  }, 'id');
+
+  assert.match(result, /^Error:/);
+  assert.match(result, /over the 16000/);
+  assert.match(result, /write_file/, 'the way out for a whole-file rewrite');
+  assert.match(result, /run_shell/, 'and for the same change across many files');
+  assert.equal(readFileSync(join(root, 'big.js'), 'utf8'), `${body}\nTAIL\n`, 'nothing was written');
+});
+
+test('an ordinary batch of small edits is unaffected by the ceiling', async () => {
+  const root = tempRoot();
+  writeFileSync(join(root, 'm.js'), 'alpha\nbeta\ngamma\n');
+  const tools = createFileTools(makeConfig({ workspaceRoot: root }));
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+
+  const result = await byName.edit_file.execute('a', 'b', {
+    path: 'm.js',
+    edits: [
+      { oldString: 'alpha', newString: 'ALPHA' },
+      { oldString: 'beta', newString: 'BETA' },
+      { oldString: 'gamma', newString: 'GAMMA' },
+    ],
+  }, 'id');
+
+  assert.match(result, /Successfully edited m\.js \(3 changes\)/);
+  assert.equal(readFileSync(join(root, 'm.js'), 'utf8'), 'ALPHA\nBETA\nGAMMA\n');
+});

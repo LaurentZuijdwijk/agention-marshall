@@ -69,6 +69,34 @@ function simpleDiff(filePath: string, edits: readonly EditRequest[]): string {
  * so that is parsed rather than rejected — the alternative is a retry that
  * re-emits the entire edit body.
  */
+/**
+ * How much replacement text one `edit_file` call may carry, in characters.
+ *
+ * A tool call's arguments are output tokens: the model pays to generate every
+ * one, and they come out of the same budget as its reasoning. Observed on a
+ * real run — Luna emitted a 19,384-character `edit_file` payload against a
+ * 16,384 `maxTokens` ceiling, ran out mid-string, and the call arrived as
+ * unparseable JSON. The turn was lost, and nothing about it read as "the edit
+ * was too big".
+ *
+ * This ceiling does *not* prevent that case, and it is worth being exact about
+ * why: a payload that overruns the token budget is truncated during generation
+ * and never reaches this function at all. What stops that is the guidance in
+ * the tool description and `FILE_RULES` — batch small changes, and reach for
+ * `write_file` or a `run_shell` script when the change is large. This is the
+ * backstop for the payload that arrives intact but is still the wrong shape:
+ * it fails immediately, with a message naming the alternatives, instead of
+ * being written and paid for.
+ *
+ * ~16k characters is roughly 4k tokens, comfortably inside a default 16,384
+ * budget while leaving room for the reasoning that precedes the call.
+ */
+export const MAX_EDIT_PAYLOAD_CHARS = 16_000;
+
+function editPayloadChars(edits: readonly EditRequest[]): number {
+  return edits.reduce((n, e) => n + (e.oldString?.length ?? 0) + e.newString.length, 0);
+}
+
 function toEdits(input: Record<string, unknown>): EditRequest[] | undefined {
   const raw = input.edits;
   let list: unknown;
@@ -380,8 +408,13 @@ export function createReadGateTools(
       'must appear exactly once in it, and must not overlap another edit in the same call. Every ' +
       'edit applies to the file as it stands, not to the result of earlier edits in the batch. ' +
       'Keep oldString just long enough to be unique — do not pad it with unchanged lines to bridge ' +
-      'distant changes; use separate entries. No prior read_file is needed: however you came by the ' +
-      'text, a wrong oldString fails rather than landing in the wrong place.',
+      'distant changes; use separate entries. Batch small changes: several one-line or few-line ' +
+      'replacements belong in one call. Do not batch large ones — you pay output tokens for every ' +
+      'character of every edit, and a call big enough to exhaust that budget is cut off mid-argument ' +
+      'and lost entirely. If most of a file is changing use write_file; if the same mechanical change ' +
+      'applies across many files, one run_shell script beats any number of edits. No prior read_file ' +
+      'is needed: however you came by the text, a wrong oldString fails rather than landing in the ' +
+      'wrong place.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -431,6 +464,16 @@ export function createReadGateTools(
             `Use write_file to create it.`
           );
         }
+        const payload = editPayloadChars(edits);
+        if (payload > MAX_EDIT_PAYLOAD_CHARS) {
+          return (
+            `Error: these ${edits.length} edit${edits.length === 1 ? '' : 's'} carry ${payload} characters, ` +
+            `over the ${MAX_EDIT_PAYLOAD_CHARS} a single edit_file call accepts. Batching is for several ` +
+            `*small* changes; this is large enough to be a different job. Rewrite the file with ` +
+            `write_file if most of it is changing, split the edits across calls if not, or — if the ` +
+            `same mechanical change applies across many files — do it in one run_shell script instead.`
+          );
+        }
         return await withFileLock(resolved, async () => {
           const original = await readFile(resolved, 'utf8');
 
@@ -451,8 +494,17 @@ export function createReadGateTools(
           // version whose numbers the caller actually saw, and a file never
           // read has no such version.
           if (edits.some(e => e.oldString === undefined)) {
+            // `readCoverage`, not `readFiles`. The two used to mean the same
+            // thing here, because edit_file could not run at all without a
+            // prior read. Now that an oldString edit needs none, edit_file
+            // itself populates `readFiles` on success (with `markSeen: false`,
+            // to record the new hash for write_file) — and that would hand a
+            // following line-addressed edit a version whose numbers the caller
+            // has still never seen. `readCoverage` is only ever written by an
+            // actual read, which is the thing line addressing depends on.
+            const seen = readCoverage.has(resolved);
             const expected = readFiles.get(resolved);
-            if (expected === undefined) {
+            if (!seen || expected === undefined) {
               return (
                 `Error: ${relative(workspaceRoot, resolved)} has not been read this session, so its ` +
                 `line numbers are not yours to rely on. Call read_file first, or address the change ` +

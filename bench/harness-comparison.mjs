@@ -67,12 +67,63 @@ function collect() {
       const key = `${harness}|${model}|${r.config}`;
       const prev = byKey.get(key);
       // marshall: latest run only. external CLIs: pool every trial.
-      if (harness === 'marshall' && prev && prev.runId !== runId) byKey.set(key, { runId, rows: [r] });
-      else if (prev) prev.rows.push(r);
-      else byKey.set(key, { runId, rows: [r] });
+      if (harness === 'marshall' && prev && prev.runId !== runId) byKey.set(key, { runId, runIds: new Set([runId]), rows: [r] });
+      else if (prev) { prev.rows.push(r); prev.runIds.add(runId); prev.runId = runId; }
+      else byKey.set(key, { runId, runIds: new Set([runId]), rows: [r] });
     }
   }
   return byKey;
+}
+
+/**
+ * Which tools a run actually called, read back from the artifacts.
+ *
+ * This is the part of the comparison that explains the rest: the difference
+ * between 37 tool calls and 5 is not that one harness is tighter, it is that
+ * one read thirty files individually and the other ran a shell loop. Counts
+ * come from each harness's own log — marshall's `session.log`, the external
+ * CLIs' `transcript.ndjson` — so no harness is being described in another's
+ * vocabulary.
+ */
+function toolMix(runDirs, cellDirPrefix) {
+  const mix = {};
+  // Every run that contributed a row, so the mix and the call counts describe
+  // the same trials — `pi` and `opencode` pool across runs, and reading only
+  // one of them would caption one set of numbers with another's behaviour.
+  const bases = [];
+  for (const runDir of runDirs) {
+    try {
+      for (const d of readdirSync(join(RUNS, runDir))) {
+        // Task included, not just the config: `pi-luna__` is also a prefix of
+        // `pi-luna__multi-file-migration-manual__`, and pooling that in
+        // captioned this task's counts with another task's behaviour.
+        if (d.startsWith(`${cellDirPrefix}__${TASK}__`)) bases.push(join(RUNS, runDir, d));
+      }
+    } catch { /* run dir vanished */ }
+  }
+
+  for (const base of bases) {
+    // marshall logs every call as `TOOL_CALL <caller> <tool> <n>ch {json}`.
+    try {
+      for (const line of readFileSync(join(base, 'session.log'), 'utf8').split('\n')) {
+        const m = /^\S+ \S+ TOOL_CALL \S+ (\w+) /.exec(line) || /TOOL_CALL \S+ (\w+) /.exec(line);
+        if (m) mix[m[1]] = (mix[m[1]] ?? 0) + 1;
+      }
+      continue;
+    } catch { /* not a marshall cell */ }
+    // pi/opencode emit one `tool_execution_start` per call.
+    try {
+      for (const line of readFileSync(join(base, 'transcript.ndjson'), 'utf8').split('\n')) {
+        const t = line.trim();
+        if (!t.startsWith('{')) continue;
+        let e; try { e = JSON.parse(t); } catch { continue; }
+        if (e.type !== 'tool_execution_start') continue;
+        const name = e.tool ?? e.name ?? e.toolName ?? 'unreported';
+        mix[name] = (mix[name] ?? 0) + 1;
+      }
+    } catch { /* nothing to read */ }
+  }
+  return mix;
 }
 
 const mean = xs => xs.reduce((a, b) => a + b, 0) / xs.length;
@@ -81,7 +132,7 @@ const median = xs => { const s = [...xs].sort((a, b) => a - b); const m = s.leng
 
 function summarise(byKey) {
   const out = [];
-  for (const [key, { runId, rows }] of byKey) {
+  for (const [key, { runId, runIds, rows }] of byKey) {
     const [harness, model, config] = key.split('|');
     const tokened = rows.filter(r => Number.isFinite(r.inputTokens) && r.inputTokens > 0);
     // A timed-out external run reports 0 tool calls because the harness kills
@@ -93,6 +144,7 @@ function summarise(byKey) {
     // marshall counts calls live from its own client, so its timeouts keep
     // real numbers and stay in.
     const counted = rows.filter(r => !(r.timedOut && (r.toolCalls ?? 0) === 0));
+    const costed = rows.filter(r => Number.isFinite(r.costUsd) && r.costUsd > 0);
     out.push({
       harness, model, config, runId,
       trials: rows.length,
@@ -100,9 +152,17 @@ function summarise(byKey) {
       timedOut: rows.filter(r => r.timedOut).length,
       calls: counted.length ? mean(counted.map(r => r.toolCalls ?? 0)) : null,
       callsPartial: counted.length !== rows.length,
+      callsRange: counted.length ? [Math.min(...counted.map(r => r.toolCalls ?? 0)), Math.max(...counted.map(r => r.toolCalls ?? 0))] : null,
       seconds: median(rows.map(r => r.durationMs / 1000)),
+      secondsRange: [Math.min(...rows.map(r => r.durationMs / 1000)), Math.max(...rows.map(r => r.durationMs / 1000))],
       inTok: tokened.length ? mean(tokened.map(r => r.inputTokens)) : null,
       outTok: tokened.length ? mean(tokened.map(r => r.outputTokens)) : null,
+      costUsd: costed.length ? mean(costed.map(r => r.costUsd)) : null,
+      mix: toolMix(runIds, config),
+      perTrial: rows.map(r => ({
+        pass: r.pass, timedOut: !!r.timedOut, calls: r.toolCalls ?? null,
+        seconds: r.durationMs / 1000, inTok: r.inputTokens ?? null, outTok: r.outputTokens ?? null,
+      })),
     });
   }
   return out.sort((a, b) => a.model.localeCompare(b.model) || a.harness.localeCompare(b.harness) || a.config.localeCompare(b.config));
@@ -165,14 +225,37 @@ function renderMarkdown({ headline, rows }) {
     ...MODELS.map(m => `| **${MODEL_LABEL[m]}** | ${HARNESSES.map(h => cell(at(m, h))).join(' | ')} |`),
   ].join('\n');
 
+  const n = (v, d = 0) => v === null || v === undefined ? '—' : Math.round(v).toLocaleString('en-US');
+  const money = v => v === null || v === undefined ? '—' : `$${v.toFixed(4)}`;
+  const range = r => r ? (r[0] === r[1] ? `${r[0]}` : `${r[0]}–${r[1]}`) : '—';
+
   const detail = [
-    '| harness | model | configuration | passed | tool calls | median s | input tok | output tok |',
-    '|---|---|---|---:|---:|---:|---:|---:|',
+    '| harness | model | configuration | passed | tool calls | range | median s | in tok | out tok | $/run |',
+    '|---|---|---|---:|---:|---:|---:|---:|---:|---:|',
     ...rows.map(r => `| ${r.harness} | ${MODEL_LABEL[r.model]} | \`${r.config}\` | ${r.passed}/${r.trials}`
       + `${r.timedOut ? ` ⏱${r.timedOut}` : ''} | ${r.calls === null ? '—' : r.calls.toFixed(1) + (r.callsPartial ? '\\*' : '')}`
-      + ` | ${r.seconds.toFixed(1)} | ${r.inTok === null ? '—' : Math.round(r.inTok).toLocaleString('en-US')}`
-      + ` | ${r.outTok === null ? '—' : Math.round(r.outTok).toLocaleString('en-US')} |`),
+      + ` | ${range(r.callsRange)} | ${r.seconds.toFixed(1)} | ${n(r.inTok)} | ${n(r.outTok)} | ${money(r.costUsd)} |`),
   ].join('\n');
+
+  // What each harness actually *did*, which is the part that explains the
+  // counts. Sorted by frequency, capped so one long tail cannot dominate.
+  const mixRows = rows
+    .filter(r => Object.keys(r.mix).length > 0)
+    .map(r => {
+      const total = Object.values(r.mix).reduce((a, b) => a + b, 0);
+      const parts = Object.entries(r.mix).sort((a, b) => b[1] - a[1])
+        .map(([k, v]) => `\`${k}\` ${v} (${Math.round((v / total) * 100)}%)`);
+      const note = r.timedOut === r.trials ? ' ⏱' : '';
+      return `| ${r.harness} | \`${r.config}\`${note} | ${r.trials} | ${total} | ${parts.join(', ')} |`;
+    }).join('\n');
+
+  const noMix = rows.filter(r => Object.keys(r.mix).length === 0)
+    .map(r => `\`${r.config}\``);
+
+  // Every individual trial, because the aggregates hide how noisy this is.
+  const trialRows = rows.flatMap(r => r.perTrial.map((t, i) =>
+    `| \`${r.config}\` | ${i + 1} | ${t.timedOut ? '⏱ timeout' : t.pass ? 'pass' : 'fail'} `
+    + `| ${t.calls ?? '—'} | ${t.seconds.toFixed(1)} | ${n(t.inTok)} | ${n(t.outTok)} |`)).join('\n');
 
   const totalTrials = rows.reduce((a, r) => a + r.trials, 0);
   const lunaM = at('openai/gpt-5.6-luna', 'marshall'), lunaP = at('openai/gpt-5.6-luna', 'pi');
@@ -220,6 +303,46 @@ between configurations is larger than the gap between the harnesses:
 ${detail}
 
 \\* averaged over only the trials that produced a usable count.
+
+## What each harness actually did
+
+Call counts say how many round trips; this says what they were spent on. It is the part that
+explains the rest — the distance between 37 calls and 5 is not tidiness, it is one harness reading
+thirty files one at a time and another running a shell loop.
+
+| harness | configuration | trials | calls | composition |
+|---|---|---:|---:|---|
+${mixRows}
+
+${noMix.length ? `No composition recoverable for ${noMix.join(', ')} — \`opencode\` writes no
+transcript this harness can read, so its calls are counted but not categorised.` : ''}
+
+Three patterns are visible in that table.
+
+- **\`pi\` runs almost everything through \`bash\`.** Its own \`read\` tool is a minority of its
+  calls; the bulk is shell, including a \`for f in $(grep -rl …); do cat "$f"; done\` that ingests
+  every relevant file in one call.
+- **Marshall's default belt spreads the same work across four tools** — \`read_file\`, \`search\`,
+  \`list_dir\` and \`run_shell\` — and the \`read_file\` share is where its extra calls live.
+- **The reduced belt collapses to \`run_shell\`** — 100% of calls on Luna, 95% on GLM. On those two
+  the model then does what \`pi\` does and the call count follows. On Qwen3.8 Flash it does not: the
+  belt still pushes it to 83% shell, but it issues 23 calls doing so rather than 5. Same belt, same
+  instruction, different model.
+
+Rows marked ⏱ timed out on every trial. Their composition is still real — it is what the harness
+did before the ceiling — but it is a partial run, which is why the tables above report no call
+count for them.
+
+## Every trial, individually
+
+The aggregates above hide how noisy this is. Identical inputs, three trials:
+
+| configuration | trial | result | calls | seconds | in tok | out tok |
+|---|---:|---|---:|---:|---:|---:|
+${trialRows}
+
+Some of these spreads are larger than the differences between harnesses. That is the single most
+important thing to hold in mind when reading any of the numbers above.
 
 ## What actually moved the needle
 
