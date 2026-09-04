@@ -26,7 +26,10 @@ function makeConfig(overrides: Partial<ToolConfig> = {}): ToolConfig {
   };
 }
 
-test('read_file returns content with a header and numbered lines', async () => {
+// The default render is raw, because `edit_file` matches the file's actual
+// bytes: a `1 | ` gutter would mean nothing the model was shown can be copied
+// into an oldString, only reconstructed. The header still says what was covered.
+test('read_file returns a header and the file content verbatim', async () => {
   const root = tempRoot();
   const file = join(root, 'a.txt');
   writeFileSync(file, 'line one\nline two\nline three\n');
@@ -34,8 +37,19 @@ test('read_file returns content with a header and numbered lines', async () => {
   const result = await read_file.execute('a', 'b', { path: 'a.txt' }, 'id');
   assert.match(result, /a\.txt/);
   assert.match(result, /\(lines 1–3 of 3\)/);
+  assert.match(result, /^line one$/m);
+  assert.match(result, /^line three$/m);
+  assert.doesNotMatch(result, /1 \| /, 'no gutter by default');
+});
+
+test('read_file renders a gutter when asked for one', async () => {
+  const root = tempRoot();
+  writeFileSync(join(root, 'a.txt'), 'line one\nline two\n');
+  const tools = createFileTools(makeConfig({ workspaceRoot: root, limits: { readLineNumbers: true } }));
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+  const result = await byName.read_file.execute('a', 'b', { path: 'a.txt' }, 'id');
   assert.match(result, /1 \| line one/);
-  assert.match(result, /3 \| line three/);
+  assert.match(result, /2 \| line two/);
 });
 
 test('read_file honours startLine/endLine and reports sample range and total lines', async () => {
@@ -44,8 +58,8 @@ test('read_file honours startLine/endLine and reports sample range and total lin
   writeFileSync(file, 'one\ntwo\nthree\n');
   const [read_file] = createReadOnlyFileTools(root);
   const result = await read_file.execute('a', 'b', { path: 'a.txt', startLine: 2, endLine: 2 }, 'id');
-  assert.match(result, /\(lines 2–2 of 3\)/);
-  assert.match(result, /2 \| two/);
+  assert.match(result, /\(lines 2–2 of 3\)/, 'the header carries the range the gutter used to');
+  assert.match(result, /^two$/m);
   assert.doesNotMatch(result, /one/);
   assert.doesNotMatch(result, /three/);
 });
@@ -73,8 +87,8 @@ test('read_file partial read past byte limit returns correct lines and line numb
   const [read_file] = createReadOnlyFileTools(root, { maxFileBytes: 200 });
   const result = await read_file.execute('a', 'b', { path: 'long.txt', startLine: 500, endLine: 505 }, 'id');
   assert.match(result, /\(lines 500–505 of 1000\)/);
-  assert.match(result, /500 \| line 0500/);
-  assert.match(result, /505 \| line 0505/);
+  assert.match(result, /^line 0500$/m);
+  assert.match(result, /^line 0505$/m);
 });
 
 test('read_file counts lines the way grep does, not one more', async () => {
@@ -105,13 +119,13 @@ test('read_file preserves CRLF line endings, so an edit built from its output st
 
   const rendered = await byName.read_file.execute('a', 'b', { path: 'crlf.txt' }, 'id');
   assert.match(rendered, /\(lines 1–3 of 3\)/);
-  assert.match(rendered, /1 \| alpha\r/, 'the CR is still there');
+  assert.match(rendered, /alpha\r/, 'the CR is still there');
 
-  // Exactly what the render shows for lines 1–2, stripped of the gutter.
+  // Exactly what the render shows for lines 1–2.
   const result = await byName.edit_file.execute(
     'a', 'b', { path: 'crlf.txt', oldString: 'alpha\r\nbeta', newString: 'ALPHA\r\nBETA' }, 'id',
   );
-  assert.match(result, /Edited/);
+  assert.match(result, /Successfully edited/);
   assert.equal(readFileSync(join(root, 'crlf.txt'), 'utf8'), 'ALPHA\r\nBETA\r\ngamma\r\n');
 });
 
@@ -258,7 +272,7 @@ test('an edit_file does not promote a ranged read into a licence to overwrite', 
   await byName.read_file.execute('a', 'b', { path: 'big.txt', startLine: 1, endLine: 3 }, 'id');
   assert.match(
     await byName.edit_file.execute('a', 'b', { path: 'big.txt', oldString: 'line 01', newString: 'LINE 01' }, 'id'),
-    /Edited/,
+    /Successfully edited/,
     'the edit itself is fine — it is targeted, and only needs the file to have been read',
   );
 
@@ -344,14 +358,42 @@ test('creating a new file still shows its content, having nothing to diff', asyn
   assert.match(seen[0].detail, /hello/);
 });
 
-test('edit_file requires a prior read', async () => {
+// The oldString is the evidence: it must occur exactly once in the file as it
+// stands, so an edit built on content the caller came by some other way — a
+// shell `cat`, a search hit, a file it just wrote — either lands where it was
+// meant to or fails loudly. Requiring a read on top of that bought no safety
+// and cost a round trip per file.
+test('an oldString edit needs no prior read', async () => {
   const root = tempRoot();
   writeFileSync(join(root, 'target.txt'), 'hello world');
   const tools = createFileTools(makeConfig({ workspaceRoot: root }));
   const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
   const result = await byName.edit_file.execute('a', 'b', { path: 'target.txt', oldString: 'world', newString: 'there' }, 'id');
+  assert.match(result, /Successfully edited/);
+  assert.equal(readFileSync(join(root, 'target.txt'), 'utf8'), 'hello there');
+});
+
+// The counterpart the gate still holds: line numbers describe one specific
+// version of a file, and a caller that never read it has no such version.
+test('a line-addressed edit still requires a prior read', async () => {
+  const root = tempRoot();
+  writeFileSync(join(root, 'target.txt'), 'alpha\nbeta\n');
+  const tools = createFileTools(makeConfig({ workspaceRoot: root }));
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+  const result = await byName.edit_file.execute('a', 'b', {
+    path: 'target.txt', edits: [{ startLine: 1, endLine: 1, newString: 'ALPHA' }],
+  }, 'id');
   assert.match(result, /has not been read this session/);
-  assert.match(result, /current contents before editing/);
+  assert.equal(readFileSync(join(root, 'target.txt'), 'utf8'), 'alpha\nbeta\n', 'and nothing was written');
+});
+
+test('editing a file that does not exist says so, rather than a raw ENOENT', async () => {
+  const root = tempRoot();
+  const tools = createFileTools(makeConfig({ workspaceRoot: root }));
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+  const result = await byName.edit_file.execute('a', 'b', { path: 'nope.txt', oldString: 'a', newString: 'b' }, 'id');
+  assert.match(result, /does not exist/);
+  assert.match(result, /write_file to create it/);
 });
 
 test('edit_file explains missing and ambiguous matches', async () => {
@@ -370,9 +412,14 @@ test('edit_file explains missing and ambiguous matches', async () => {
 
 // The belt is rebuilt every turn, so a factory-owned read set makes "read it
 // first" silently mean "read it first *this turn*": read a file, let the turn
-// end, and editing it in the next one fails with "has not been read this
+// end, and overwriting it in the next one fails with "has not been read this
 // session" even though it was. `ToolConfig.readFiles` is what the session
 // passes to make the tracking outlive one belt.
+//
+// Asserted through `write_file`, which is the operation that still gates on a
+// prior read — `edit_file` stopped doing so once an `oldString` was recognised
+// as evidence in its own right, and would pass here whether tracking worked or
+// not.
 test('read tracking passed in survives a rebuilt belt, so a read carries into the next turn', async () => {
   const root = tempRoot();
   writeFileSync(join(root, 'target.txt'), 'hello world');
@@ -386,10 +433,10 @@ test('read tracking passed in survives a rebuilt belt, so a read carries into th
   const turnTwo = Object.fromEntries(
     createFileTools(makeConfig({ workspaceRoot: root, readFiles })).map((t) => [t.name, t]),
   );
-  const result = await turnTwo.edit_file.execute('a', 'b', { path: 'target.txt', oldString: 'world', newString: 'there' }, 'id');
+  const result = await turnTwo.write_file.execute('a', 'b', { path: 'target.txt', content: 'replaced\n' }, 'id');
 
-  assert.match(result, /Edited/);
-  assert.equal(readFileSync(join(root, 'target.txt'), 'utf8'), 'hello there');
+  assert.match(result, /Wrote/);
+  assert.equal(readFileSync(join(root, 'target.txt'), 'utf8'), 'replaced\n');
 });
 
 test('without a shared set each belt tracks its own reads', async () => {
@@ -404,14 +451,15 @@ test('without a shared set each belt tracks its own reads', async () => {
   const turnTwo = Object.fromEntries(
     createFileTools(makeConfig({ workspaceRoot: root })).map((t) => [t.name, t]),
   );
-  const result = await turnTwo.edit_file.execute('a', 'b', { path: 'target.txt', oldString: 'world', newString: 'there' }, 'id');
+  const result = await turnTwo.write_file.execute('a', 'b', { path: 'target.txt', content: 'replaced\n' }, 'id');
   assert.match(result, /has not been read this session/);
+  assert.equal(readFileSync(join(root, 'target.txt'), 'utf8'), 'hello world', 'and nothing was overwritten');
 });
 
 // Models routinely emit several edit_file calls in one assistant message, and
 // the SDK runs them concurrently. edit_file is a read-modify-write, so without
 // serialisation both calls read the same original and the second write drops
-// the first edit — while both still report "Edited".
+// the first edit — while both still report "Successfully edited".
 test('parallel edits to one file all land', async () => {
   const root = tempRoot();
   writeFileSync(join(root, 'target.txt'), 'AAA\nBBB\nCCC\n');
@@ -425,7 +473,7 @@ test('parallel edits to one file all land', async () => {
     byName.edit_file.execute('a', 'b', { path: 'target.txt', oldString: 'CCC', newString: 'ZZZ' }, 'i3'),
   ]);
 
-  for (const r of results) assert.match(r, /Edited/, `every edit reported success: ${results.join(' | ')}`);
+  for (const r of results) assert.match(r, /Successfully edited/, `every edit reported success: ${results.join(' | ')}`);
   assert.equal(readFileSync(join(root, 'target.txt'), 'utf8'), 'XXX\nYYY\nZZZ\n');
 });
 
@@ -531,7 +579,7 @@ test('an injected lock serialises two belts writing one file', async () => {
     beltB.edit_file.execute('a', 'b', { path: 'shared.txt', oldString: 'beta', newString: 'BETA' }, 'i2'),
   ]);
 
-  for (const result of results) assert.match(result, /Edited/);
+  for (const result of results) assert.match(result, /Successfully edited/);
   assert.equal(readFileSync(join(root, 'shared.txt'), 'utf8'), 'ALPHA\nBETA\n',
     'both edits must survive — a per-belt lock loses whichever wrote first');
 });
@@ -543,7 +591,7 @@ test('edit_file replaces a unique occurrence', async () => {
   const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
   await byName.read_file.execute('a', 'b', { path: 'target.txt' }, 'id');
   const result = await byName.edit_file.execute('a', 'b', { path: 'target.txt', oldString: 'world', newString: 'there' }, 'id');
-  assert.match(result, /Edited/);
+  assert.match(result, /Successfully edited/);
   assert.equal(readFileSync(join(root, 'target.txt'), 'utf8'), 'hello there\n');
 });
 
@@ -582,4 +630,133 @@ test('file tools are denied by approval', async () => {
   const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
   const result = await byName.edit_file.execute('a', 'b', { path: 'x.txt', oldString: 'a', newString: 'b' }, 'id');
   assert.match(result, /denied/i);
+});
+
+// The reason edits[] exists. A benchmarked migration had the model spending 143
+// separate edit_file calls across 28 files — four to six disjoint regions each —
+// and the per-call envelope, not the payload, was what it cost.
+test('edit_file applies a batch of edits to one file in a single call', async () => {
+  const root = tempRoot();
+  writeFileSync(join(root, 'mod.js'), "import { log } from './legacy.js';\n\nlog('a');\nlog('b');\n");
+  const tools = createFileTools(makeConfig({ workspaceRoot: root }));
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+  await byName.read_file.execute('a', 'b', { path: 'mod.js' }, 'id');
+
+  const result = await byName.edit_file.execute('a', 'b', {
+    path: 'mod.js',
+    edits: [
+      { oldString: "import { log } from './legacy.js';", newString: "import { logger } from './logger.js';" },
+      { oldString: "log('a');", newString: "logger.info('a');" },
+      { oldString: "log('b');", newString: "logger.info('b');" },
+    ],
+  }, 'id');
+
+  assert.match(result, /Successfully edited mod\.js \(3 changes\)/);
+  assert.equal(
+    readFileSync(join(root, 'mod.js'), 'utf8'),
+    "import { logger } from './logger.js';\n\nlogger.info('a');\nlogger.info('b');\n",
+  );
+});
+
+// A loose match lands correctly, but the oldString the caller believed it was
+// matching is not what the file holds. Saying so is what stops the next edit
+// being built on the same stale text and failing for a reason that looks
+// unrelated.
+test('edit_file says when the whitespace-tolerant fallback had to be used', async () => {
+  const root = tempRoot();
+  writeFileSync(join(root, 'q.js'), "const label = 'ready';\n");
+  const tools = createFileTools(makeConfig({ workspaceRoot: root }));
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+  await byName.read_file.execute('a', 'b', { path: 'q.js' }, 'id');
+
+  // Curly quotes, as a model routinely re-emits them; the file has straight ones.
+  const loose = await byName.edit_file.execute('a', 'b', {
+    path: 'q.js',
+    edits: [{ oldString: 'const label = ‘ready’;', newString: "const label = 'set';" }],
+  }, 'id');
+
+  assert.match(loose, /Successfully edited/);
+  assert.match(loose, /matched loosely/);
+  assert.equal(readFileSync(join(root, 'q.js'), 'utf8'), "const label = 'set';\n");
+});
+
+test('an exact-matching edit says nothing about loose matching', async () => {
+  const root = tempRoot();
+  writeFileSync(join(root, 'e.js'), 'alpha\n');
+  const tools = createFileTools(makeConfig({ workspaceRoot: root }));
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+  await byName.read_file.execute('a', 'b', { path: 'e.js' }, 'id');
+
+  const result = await byName.edit_file.execute('a', 'b', {
+    path: 'e.js', oldString: 'alpha', newString: 'beta',
+  }, 'id');
+
+  assert.equal(result, 'Successfully edited e.js', 'the common path stays exactly as terse as it was');
+});
+
+test('a batch names the edit that failed, and leaves the file untouched', async () => {
+  const root = tempRoot();
+  const before = 'alpha\nbeta\n';
+  writeFileSync(join(root, 'target.txt'), before);
+  const tools = createFileTools(makeConfig({ workspaceRoot: root }));
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+  await byName.read_file.execute('a', 'b', { path: 'target.txt' }, 'id');
+
+  const result = await byName.edit_file.execute('a', 'b', {
+    path: 'target.txt',
+    edits: [
+      { oldString: 'alpha', newString: 'AAA' },
+      { oldString: 'nowhere', newString: 'x' },
+    ],
+  }, 'id');
+
+  assert.match(result, /edits\[1\]/, `the failing index is named: ${result}`);
+  assert.match(result, /must match the file exactly/);
+  assert.equal(readFileSync(join(root, 'target.txt'), 'utf8'), before, 'nothing was written');
+});
+
+// Some models emit `edits` as a JSON string rather than an array. Rejecting it
+// costs a retry that re-sends the whole batch, which is the expensive thing.
+test('edit_file accepts edits sent as a JSON string', async () => {
+  const root = tempRoot();
+  writeFileSync(join(root, 'target.txt'), 'alpha\nbeta\n');
+  const tools = createFileTools(makeConfig({ workspaceRoot: root }));
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+  await byName.read_file.execute('a', 'b', { path: 'target.txt' }, 'id');
+
+  const result = await byName.edit_file.execute('a', 'b', {
+    path: 'target.txt',
+    edits: JSON.stringify([{ oldString: 'alpha', newString: 'AAA' }]),
+  }, 'id');
+
+  assert.match(result, /Successfully edited/);
+  assert.equal(readFileSync(join(root, 'target.txt'), 'utf8'), 'AAA\nbeta\n');
+});
+
+// Per-replacement before/after blocks are read in isolation, and whether they
+// combine into something sensible is the thing a reviewer actually needs.
+test('a batch is shown to the approver as one diff of the finished file', async () => {
+  const root = tempRoot();
+  writeFileSync(join(root, 'mod.js'), 'one\ntwo\nthree\n');
+  const seen: ApprovalRequest[] = [];
+  const tools = createFileTools(makeConfig({
+    workspaceRoot: root,
+    approval: async (req) => { seen.push(req); return 'approve'; },
+  }));
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+  await byName.read_file.execute('a', 'b', { path: 'mod.js' }, 'id');
+
+  await byName.edit_file.execute('a', 'b', {
+    path: 'mod.js',
+    edits: [
+      { oldString: 'one', newString: 'ONE' },
+      { oldString: 'three', newString: 'THREE' },
+    ],
+  }, 'id');
+
+  const request = seen.at(-1)!;
+  assert.match(request.description, /2 edits/, `the count is stated: ${request.description}`);
+  assert.match(request.detail, /ONE/);
+  assert.match(request.detail, /THREE/);
+  assert.match(request.detail, /two/, 'unchanged context is shown around the changes');
 });

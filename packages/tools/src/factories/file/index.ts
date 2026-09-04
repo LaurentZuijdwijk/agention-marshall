@@ -16,7 +16,7 @@ export function createReadOnlyFileTools(
   return [
     // A throwaway read set: with no write tools on this belt there is nothing
     // to gate, so nothing needs it to outlive the call.
-    buildReadFile(workspaceRoot, maxFileBytes, new Map(), dedupeCache),
+    buildReadFile(workspaceRoot, maxFileBytes, new Map(), dedupeCache, undefined, limits.readLineNumbers ?? false),
     buildListDir(workspaceRoot),
     buildSearch(workspaceRoot, maxSearchResults),
   ];

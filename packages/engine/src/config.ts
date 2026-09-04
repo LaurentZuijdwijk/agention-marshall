@@ -214,6 +214,50 @@ export interface EngineConfig {
   /** Number of recent tool results to keep verbatim; older ones are masked. Default: 3 */
   maskingKeepRecent?: number;
   /**
+   * When set, only tools whose names appear here are offered to the model.
+   *
+   * Applied last, after every other toggle, so it can strip the belt further
+   * than `light` does — down to a single tool if that is what is listed. Names
+   * that match nothing are ignored rather than raising: the belt varies with
+   * provider and config, and a list that has to be kept exactly in step with it
+   * would be its own source of breakage.
+   *
+   * A model given only `run_shell` can still do most of what the file tools do,
+   * by running the commands itself; what it loses is the read gate and the
+   * per-edit approval diff, which is a real reduction in safety and the reason
+   * this is not a default.
+   *
+   * @internal Isolates one variable for benchmarking (see `bench/config.ts`).
+   * Not part of the supported surface: it may change or disappear with the
+   * measurement that motivated it.
+   */
+  toolAllowlist?: string[];
+  /**
+   * Replaces the coder's system prompt outright, bypassing `buildSystemPrompt`.
+   *
+   * A measurement escape hatch, not a feature: it exists to answer "is this
+   * prompt-shaped" by substituting a different one wholesale, without touching
+   * the tool belt or any other variable. `FILE_RULES` and friends are the
+   * product's actual prompt; this is for the one question that needs the
+   * product's own prompt out of the way entirely.
+   *
+   * @internal Same footing as `toolAllowlist`: a benchmarking lever, not a
+   * supported way to configure the product's prompt.
+   */
+  systemPromptOverride?: string;
+  /**
+   * Whether older tool results are replaced with a reference marker the model
+   * can fetch back via `retrieve_tool_result`. Default: true.
+   *
+   * Masking trades context for recall: it keeps a long conversation small, at
+   * the cost of the model no longer being able to see what a tool returned
+   * more than `maskingKeepRecent` results ago. On a task that reads many files
+   * and then edits them, that is exactly the content it needs — and the way
+   * back is a tool call it has to decide to make. Set false to keep every
+   * result verbatim and drop `retrieve_tool_result` from the belt.
+   */
+  maskToolResults?: boolean;
+  /**
    * Token threshold that triggers rolling compression of conversation history.
    * Default: 40 000. Set to 0 to disable compression entirely.
    */

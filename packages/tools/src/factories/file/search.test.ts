@@ -49,6 +49,24 @@ test('search supports fileGlob filtering', async () => {
   assert.doesNotMatch(result, /skip\.md/);
 });
 
+// "*" is how a model routinely spells "every file" (seen on a real batched
+// migration run). As a substring it matches no ordinary filename, so it used
+// to search nothing and blame the glob — a wasted round trip for an input that
+// means exactly what no glob at all means.
+test('a bare * fileGlob means every file, not a literal asterisk in the name', async () => {
+  const root = tempRoot();
+  writeFileSync(join(root, 'a.ts'), 'needle\n');
+  writeFileSync(join(root, 'b.md'), 'needle\n');
+  const [, , search] = createReadOnlyFileTools(root);
+
+  for (const fileGlob of ['*', '**']) {
+    const result = await search.execute('a', 'b', { pattern: 'needle', fileGlob }, 'id');
+    assert.match(result, /a\.ts:1: needle/, `${fileGlob} should search .ts`);
+    assert.match(result, /b\.md:1: needle/, `${fileGlob} should search .md too`);
+    assert.doesNotMatch(result, /No files matched/);
+  }
+});
+
 test('search accepts shell-style fileGlob patterns', async () => {
   const root = tempRoot();
   writeFileSync(join(root, 'keep.ts'), 'needle\n');
@@ -204,4 +222,52 @@ test('search skips generated output directories', async () => {
   for (const dir of ['target', 'out', 'vendor', '.gradle']) {
     assert.doesNotMatch(result, new RegExp(dir.replace('.', '\\.')), `${dir} should not be walked`);
   }
+});
+
+test('search runs a batch of patterns in one call, each under its own header', async () => {
+  const root = tempRoot();
+  writeFileSync(join(root, 'a.txt'), 'alpha\n');
+  writeFileSync(join(root, 'b.txt'), 'beta\n');
+  const [, , search] = createReadOnlyFileTools(root);
+
+  const result = await search.execute('a', 'b', {
+    patterns: [{ pattern: 'alpha' }, { pattern: 'beta' }],
+  }, 'id');
+
+  assert.match(result, /pattern: "alpha"/);
+  assert.match(result, /a\.txt:1: alpha/);
+  assert.match(result, /pattern: "beta"/);
+  assert.match(result, /b\.txt:1: beta/);
+});
+
+test('a single-element patterns[] batch reads exactly like the legacy single-pattern call', async () => {
+  const root = tempRoot();
+  writeFileSync(join(root, 'x.txt'), 'alpha\n');
+  const [, , search] = createReadOnlyFileTools(root);
+
+  const legacy = await search.execute('a', 'b', { pattern: 'alpha' }, 'id');
+  const batch = await search.execute('a', 'b', { patterns: [{ pattern: 'alpha' }] }, 'id');
+
+  assert.equal(batch, legacy, 'one-item batches must not gain a header the legacy call never had');
+});
+
+test('search accepts patterns sent as a JSON string', async () => {
+  const root = tempRoot();
+  writeFileSync(join(root, 'a.txt'), 'alpha\n');
+  writeFileSync(join(root, 'b.txt'), 'beta\n');
+  const [, , search] = createReadOnlyFileTools(root);
+
+  const result = await search.execute('a', 'b', {
+    patterns: JSON.stringify([{ pattern: 'alpha' }, { pattern: 'beta' }]),
+  }, 'id');
+
+  assert.match(result, /a\.txt:1: alpha/);
+  assert.match(result, /b\.txt:1: beta/);
+});
+
+test('search reports an error rather than crashing when given neither pattern nor patterns', async () => {
+  const root = tempRoot();
+  const [, , search] = createReadOnlyFileTools(root);
+  const result = await search.execute('a', 'b', {}, 'id');
+  assert.match(result, /^Error: no patterns given/);
 });

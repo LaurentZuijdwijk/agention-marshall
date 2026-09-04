@@ -1,4 +1,6 @@
-// Raise V8's old-space heap cap so very long sessions don't run out of memory.
+// Raise V8's old-space heap cap so very long sessions don't run out of memory,
+// and make sure the process that actually renders is running with
+// NODE_ENV=production — both need a re-exec, so one respawn does both.
 //
 // A long-running session - an hour of agent generation leaves a large reasoning
 // trace in memory - can exceed Node's default old-space limit and die with
@@ -7,32 +9,85 @@
 // such flag is already in effect we re-exec ourselves with
 // `--max-old-space-size` and hand the terminal to the child.
 //
-// Override the size with MARSHALL_MAX_OLD_SPACE (MB). The wrapper never
-// respawns when the flag is already present, so `NODE_OPTIONS` users and the
-// one-time reload marker both short-circuit cleanly.
+// The same re-exec is what fixes an unrelated but equally real problem: with
+// NODE_ENV unset (the default for every plain `marshall` invocation), Ink's
+// react-reconciler loads its development build, which marks/measures every
+// single render via `perf_hooks` and never clears the buffer. A session that
+// streams heavily for an hour comfortably crosses Node's 1,000,000-entry
+// warning threshold — confirmed live: a 1h41m tetris-generation session hit
+// `MaxPerformanceEntryBufferExceededWarning` at exactly 1,000,001 entries.
+// Setting NODE_ENV can't be done in index.tsx itself: it's an ES module, and
+// ESM import declarations always evaluate before any other top-level code in
+// that file, so an assignment placed above `import { render } from 'ink'`
+// would still run after Ink (and react-reconciler's dev/prod check) has
+// already loaded. A fresh child process's env, by contrast, is fixed before
+// Node even starts parsing its entry file, so it isn't racing anything.
+//
+// Piggybacking costs nothing extra: this respawn already happens on
+// essentially every normal launch (nothing sets the heap flag or the reload
+// marker on a first run), and the parent never renders — it only imports Ink,
+// waits for the child, and exits — so its own dev-build import never commits
+// a render and never marks anything. Only the child, which owns the session
+// for as long as it runs, needs the production build, and now gets it.
+//
+// Override the heap size with MARSHALL_MAX_OLD_SPACE (MB). The wrapper skips
+// the respawn only when both the heap flag and NODE_ENV are already in
+// effect, so `NODE_OPTIONS`/`NODE_ENV` users and the one-time reload marker
+// all short-circuit cleanly.
 
 import { spawn } from 'node:child_process';
 
 const RELOAD_MARKER = 'MARSHALL_OLD_SPACE_RELOADED';
 const DEFAULT_OLD_SPACE_MB = 8192;
 
-function heapAlreadyRaised(): boolean {
-  if (process.env[RELOAD_MARKER] === '1') return true;
+function heapAlreadyRaised(env: NodeJS.ProcessEnv, execArgv: readonly string[]): boolean {
+  if (env[RELOAD_MARKER] === '1') return true;
   const re = /^--max-old-space-size/;
-  if (process.execArgv.some(a => re.test(a))) return true;
-  return re.test(process.env.NODE_OPTIONS ?? '');
+  if (execArgv.some(a => re.test(a))) return true;
+  return re.test(env.NODE_OPTIONS ?? '');
+}
+
+export interface RespawnPlan {
+  /** `false` means: continue in this process, nothing to do. */
+  needed: boolean;
+  /** Extra V8 flag to inject, when the heap cap wasn't already raised. */
+  heapFlag?: string;
+  /** The full env the child should get, heap marker and NODE_ENV included. */
+  env: NodeJS.ProcessEnv;
 }
 
 /**
- * Returns a detached child process owning the rest of the boot when an old-space
- * cap had to be injected, or `undefined` when the current process is fine to
- * continue (the cap was already set, or the reload marker is present).
+ * Pure decision logic, kept separate from `spawn()` itself so the interesting
+ * part — whether to respawn, and with what — is testable without actually
+ * launching a process.
+ */
+export function planRespawn(env: NodeJS.ProcessEnv, execArgv: readonly string[]): RespawnPlan {
+  const needsHeap = !heapAlreadyRaised(env, execArgv);
+  // Only fills a gap, never overrides: a marshall developer who has
+  // deliberately set NODE_ENV=development to get react-reconciler's dev
+  // warnings while working on the TUI keeps that choice.
+  const needsProdEnv = env.NODE_ENV === undefined;
+
+  if (!needsHeap && !needsProdEnv) return { needed: false, env };
+
+  const mb = Number(env.MARSHALL_MAX_OLD_SPACE ?? DEFAULT_OLD_SPACE_MB);
+  const size = Number.isFinite(mb) && mb > 0 ? mb : DEFAULT_OLD_SPACE_MB;
+
+  return {
+    needed: true,
+    heapFlag: needsHeap ? `--max-old-space-size=${size}` : undefined,
+    env: { ...env, [RELOAD_MARKER]: '1', NODE_ENV: env.NODE_ENV ?? 'production' },
+  };
+}
+
+/**
+ * Returns a detached child process owning the rest of the boot when a re-exec
+ * was needed (old-space cap, NODE_ENV, or both), or `undefined` when the
+ * current process is fine to continue as-is.
  */
 export function maybeRespawnForHeap(): ReturnType<typeof spawn> | undefined {
-  if (heapAlreadyRaised()) return undefined;
-
-  const mb = Number(process.env.MARSHALL_MAX_OLD_SPACE ?? DEFAULT_OLD_SPACE_MB);
-  const size = Number.isFinite(mb) && mb > 0 ? mb : DEFAULT_OLD_SPACE_MB;
+  const plan = planRespawn(process.env, process.execArgv);
+  if (!plan.needed) return undefined;
 
   // Re-run ourselves, carrying Node's exec flags (e.g. tsx's --import loader
   // in a checkout) and the user's arguments. The marker stops the child from
@@ -40,13 +95,12 @@ export function maybeRespawnForHeap(): ReturnType<typeof spawn> | undefined {
   // `process.argv[1]` is the entry script actually being run (`src/index.tsx` in
   // a checkout, `dist/index.js` published); `import.meta.url` here is this file's
   // own path, which is why it must not be used as the thing to re-run.
-  const child = spawn(process.execPath,
+  return spawn(process.execPath,
     [
       ...process.execArgv,
-      `--max-old-space-size=${size}`,
+      ...(plan.heapFlag ? [plan.heapFlag] : []),
       process.argv[1],
       ...process.argv.slice(2),
     ],
-    { stdio: 'inherit', env: { ...process.env, [RELOAD_MARKER]: '1' } });
-  return child;
+    { stdio: 'inherit', env: plan.env });
 }

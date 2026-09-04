@@ -27,6 +27,22 @@ const RESULT_PREVIEW_CHARS = 500;
 const SUBAGENT_RESULT_PREVIEW_CHARS = 300;
 
 /**
+ * Whether a tool result is the tool refusing rather than answering.
+ *
+ * Every tool in the belt reports failure by returning a string beginning
+ * `Error:` instead of throwing, so this prefix is the whole contract.
+ *
+ * Deliberately does not count an approval denial or an interruption. Both
+ * produce a result the model has to react to, but neither is the model having
+ * got something wrong — folding them in here would make a log line that reads
+ * "the edit failed" mean "someone declined it", and the two want different
+ * responses from whoever is reading.
+ */
+function isFailure(result: string): boolean {
+  return result.startsWith('Error:');
+}
+
+/**
  * The text an assistant message carried alongside its tool calls.
  *
  * Anthropic sends text and tool_use blocks in one content array, so the prose
@@ -131,10 +147,21 @@ export function createSessionEvents(deps: {
       const tag = caller ? { caller } : {};
       const onToolResult = (event: InstanceType<typeof ToolResultEvent>) => {
         if (signal.aborted) return;
+        const result = String(event.result);
+        // Failures are logged, not just surfaced to the client. The tools in
+        // this belt report failure by *returning* a string rather than
+        // throwing, so a refused edit — an oldString that matched nothing, a
+        // write blocked because the file changed — left no trace at all once
+        // the turn ended. That made the expensive kind of failure invisible:
+        // the model pays to re-emit the whole edit body on a retry, and
+        // nothing in the log said it had happened.
+        if (isFailure(result)) {
+          log(`TOOL_FAIL ${caller ?? 'coder'} ${event.target.name} ${result.slice(0, 300)}`);
+        }
         client.onOutput({
           type: 'tool-result',
           toolName: event.target.name,
-          result: String(event.result).slice(0, RESULT_PREVIEW_CHARS),
+          result: result.slice(0, RESULT_PREVIEW_CHARS),
         });
       };
       for (const tool of tools) tool.on(ToolResultEvent.RESULT, onToolResult);
@@ -146,6 +173,12 @@ export function createSessionEvents(deps: {
         // order the model wrote them in.
         const said = assistantText(content);
         if (said) client.onOutput({ type: 'assistant', text: said });
+        // Narration between tool calls is the single largest component of a
+        // run's output tokens — far larger than the tool arguments — and it
+        // was the one thing the log never recorded. Length only: the text
+        // itself is the transcript's business, but its size is what a run's
+        // cost is made of.
+        log(`ASSISTANT_TEXT ${caller ?? 'coder'} ${said?.length ?? 0} chars`);
         for (const call of toolCallsIn(content)) {
           client.onOutput({
             type: 'tool-call',
@@ -154,7 +187,12 @@ export function createSessionEvents(deps: {
             subagent: subagentInfo(call.name),
             ...tag,
           });
-          log(`TOOL_CALL ${caller ?? 'coder'} ${call.name} ${call.raw.slice(0, 200)}`);
+          // The full argument length alongside a truncated preview: arguments
+          // are a component of a run's output-token cost, and a preview capped
+          // at 200 characters cannot measure a batched edit payload that runs
+          // to thousands. Logging the whole thing instead would put entire file
+          // contents in the log for every write.
+          log(`TOOL_CALL ${caller ?? 'coder'} ${call.name} ${call.raw.length}ch ${call.raw.slice(0, 200)}`);
         }
       });
 
@@ -164,10 +202,14 @@ export function createSessionEvents(deps: {
     attachSubAgentListeners(agent, tools, parent) {
       for (const tool of tools) {
         tool.on(ToolResultEvent.RESULT, (event: InstanceType<typeof ToolResultEvent>) => {
+          const result = String(event.result);
+          if (isFailure(result)) {
+            log(`TOOL_FAIL ${parent} ${event.target.name} ${result.slice(0, 300)}`);
+          }
           client.onOutput({
             type: 'tool-result',
             toolName: event.target.name,
-            result: String(event.result).slice(0, SUBAGENT_RESULT_PREVIEW_CHARS),
+            result: result.slice(0, SUBAGENT_RESULT_PREVIEW_CHARS),
             parent,
           });
         });

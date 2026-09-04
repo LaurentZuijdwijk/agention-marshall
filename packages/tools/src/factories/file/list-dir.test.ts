@@ -61,3 +61,51 @@ test('an entry whose stat() fails still appears, with no size rather than a cras
   assert.match(result, /stays\.txt/);
   assert.match(result, /broken-link/, 'the entry is still listed, by name, even though its size is unknown');
 });
+
+test('list_dir lists a batch of directories in one call, each under its own header', async () => {
+  const root = tempRoot();
+  mkdirSync(join(root, 'a'));
+  mkdirSync(join(root, 'b'));
+  writeFileSync(join(root, 'a', 'one.txt'), '');
+  writeFileSync(join(root, 'b', 'two.txt'), '');
+  const [, list_dir] = createReadOnlyFileTools(root);
+
+  const result = await list_dir.execute('a', 'b', { paths: ['a', 'b'] }, 'id');
+
+  assert.match(result, /^a:/m);
+  assert.match(result, /one\.txt/);
+  assert.match(result, /^b:/m);
+  assert.match(result, /two\.txt/);
+});
+
+test('a single-element paths[] batch reads exactly like the legacy single-path call', async () => {
+  const root = tempRoot();
+  writeFileSync(join(root, 'f.txt'), '');
+  const [, list_dir] = createReadOnlyFileTools(root);
+
+  const legacy = await list_dir.execute('a', 'b', { path: '.' }, 'id');
+  const batch = await list_dir.execute('a', 'b', { paths: ['.'] }, 'id');
+
+  assert.equal(batch, legacy, 'one-item batches must not gain a header the legacy call never had');
+});
+
+test('list_dir accepts paths sent as a JSON string', async () => {
+  const root = tempRoot();
+  mkdirSync(join(root, 'a'));
+  mkdirSync(join(root, 'b'));
+  const [, list_dir] = createReadOnlyFileTools(root);
+
+  const result = await list_dir.execute('a', 'b', { paths: JSON.stringify(['a', 'b']) }, 'id');
+
+  assert.match(result, /^a:/m);
+  assert.match(result, /^b:/m);
+});
+
+test('list_dir with no arguments still lists the workspace root', async () => {
+  const root = tempRoot();
+  writeFileSync(join(root, 'f.txt'), '');
+  const [, list_dir] = createReadOnlyFileTools(root);
+
+  const result = await list_dir.execute('a', 'b', {}, 'id');
+  assert.match(result, /f\.txt/);
+});

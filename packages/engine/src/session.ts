@@ -327,7 +327,10 @@ export class Session {
     });
 
     this.history = new SessionHistory();
-    this.history.use(this.maskingPlugin);
+    // Registering the plugin is what makes masking happen at read time, so not
+    // registering it is the off switch; the plugin object still exists because
+    // the tool belt reads `retrieveTool` off it either way.
+    if (config.maskToolResults !== false) this.history.use(this.maskingPlugin);
     this.dedupeCache = createDedupeCache();
 
     // Every collaborator below takes `() => this.config` rather than `config`:
@@ -1257,8 +1260,12 @@ export class Session {
       // Built from the belt above, so a rule can never describe a tool this
       // turn does not have. The guidance blocks already work this way — they
       // key off whether their tool resolved — and this closes the same gap for
-      // the fixed rules.
-      const turnSystemPrompt = buildSystemPrompt({ scratch: !light && !privateMode, background: !light });
+      // the fixed rules. `systemPromptOverride` bypasses this construction
+      // entirely — a measurement escape hatch (see its doc comment on
+      // `EngineConfig`), not a normal caller, so it wins outright rather than
+      // being merged with the belt-derived rules.
+      const turnSystemPrompt = this.config.systemPromptOverride
+        ?? buildSystemPrompt({ scratch: !light && !privateMode, background: !light });
       // Ahead of createAgent, not after: this is what keeps a prompt that
       // legitimately differs from last turn's (`/runtime light`, tool
       // availability) from leaving a stale, no-longer-first system entry in

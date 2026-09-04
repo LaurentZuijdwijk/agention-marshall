@@ -129,7 +129,7 @@ test('the prompt never describes a tool the turn does not have', async (t) => {
   assert.doesNotMatch(systemPrompt(fake, 1), /[Bb]ackground/);
 
   // And the rules that always apply are still there.
-  assert.match(systemPrompt(fake, 1), /Always read_file before writing/);
+  assert.match(systemPrompt(fake, 1), /read_file to understand code/);
   assert.match(systemPrompt(fake, 1), /single short sentence/);
 });
 

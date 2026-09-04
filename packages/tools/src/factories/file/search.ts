@@ -43,6 +43,56 @@ function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+interface SearchSpec {
+  pattern: string;
+  path: string;
+  fileGlob?: string;
+}
+
+/**
+ * The requested searches, however the caller expressed them.
+ *
+ * `patterns[]` is the shape worth using — one call for every pattern the
+ * caller wants checked, the same reason `edit_file` has `edits[]` — but the
+ * single `pattern`/`path`/`fileGlob` trio is still accepted and folded into a
+ * one-element batch, so no existing caller breaks.
+ *
+ * `patterns` arrives as a JSON *string* from some models rather than as an
+ * array, so that is parsed rather than rejected, the same defence `edit_file`
+ * applies to `edits`.
+ */
+function toSearches(input: Record<string, unknown>): SearchSpec[] | undefined {
+  const raw = input.patterns;
+  let list: unknown;
+  if (typeof raw === 'string') {
+    try { list = JSON.parse(raw); } catch { return undefined; }
+  } else {
+    list = raw;
+  }
+
+  if (!Array.isArray(list)) {
+    if (input.pattern === undefined) return undefined;
+    return [{
+      pattern: String(input.pattern),
+      path: input.path !== undefined ? String(input.path) : '.',
+      fileGlob: input.fileGlob !== undefined ? String(input.fileGlob) : undefined,
+    }];
+  }
+
+  const specs: SearchSpec[] = [];
+  for (const item of list) {
+    if (!item || typeof item !== 'object') return undefined;
+    const { pattern, path, fileGlob } = item as Record<string, unknown>;
+    if (pattern === undefined) return undefined;
+    specs.push({
+      pattern: String(pattern),
+      path: path !== undefined ? String(path) : '.',
+      fileGlob: fileGlob !== undefined ? String(fileGlob) : undefined,
+    });
+  }
+  return specs.length ? specs : undefined;
+}
+
 async function* walkFiles(dir: string): AsyncGenerator<string> {
   const info = await stat(dir);
   if (info.isFile()) {
@@ -65,6 +115,138 @@ async function* walkFiles(dir: string): AsyncGenerator<string> {
   }
 }
 
+/** One spec's worth of the old single-search body — unchanged behaviour, just callable per batch item. */
+async function runOneSearch(workspaceRoot: string, maxSearchResults: number, spec: SearchSpec): Promise<string> {
+  const { pattern, path, fileGlob } = spec;
+  try {
+    const resolved = resolveInWorkspace(workspaceRoot, String(path));
+    let regex: RegExp;
+    const requestedPattern = String(pattern);
+    try {
+      // Keep explicit regexes exact; make ordinary identifier/name searches
+      // forgiving because agents and humans routinely vary case and separators.
+      // `\w` already excludes every regex metacharacter this needs to rule
+      // out, so the class alone is the whole check.
+      const isPlainName = /^[\w\s-]+$/.test(requestedPattern);
+      if (isPlainName) {
+        // The joiner is `*`, not `+`: a bare case change ("fileTools") has no
+        // separator character at all, so demanding one would miss it. The same
+        // `*` also lets "file-tools" match a run-together "filetools" — looser
+        // than the four conventions named above, but still a plausible way to
+        // type the identifier, and not worth the regex complexity of telling
+        // "no separator" apart from "case-changed" under a case-insensitive match.
+        // A pattern made entirely of separators (e.g. "-") splits to no
+        // words at all; joining an empty list gives the empty regex,
+        // which matches every position on every line. Fall back to a
+        // literal search for the pattern itself rather than let that
+        // through.
+        const words = requestedPattern.split(/[\s_-]+/).filter(Boolean).map(escapeRegex);
+        regex = new RegExp(words.length > 0 ? words.join('[\\s_-]*') : escapeRegex(requestedPattern), 'gi');
+      } else {
+        regex = new RegExp(requestedPattern, 'g');
+      }
+    } catch (err) {
+      return `Error: Invalid regex: ${safe(err)}`;
+    }
+    // A bare `*`/`**` is "every file", which is what no glob at all already
+    // means — but as a substring it matches no ordinary filename, so it used
+    // to search nothing and report the glob as the reason. Models reach for it
+    // routinely (observed on a batched migration run), and a wasted round trip
+    // spent being told to write the filter differently is the whole cost of
+    // not normalising it here.
+    const requestedGlob = fileGlob ? String(fileGlob) : null;
+    const glob = requestedGlob && /^\*+$/.test(requestedGlob) ? null : requestedGlob;
+    const matchesFileGlob = (filePath: string): boolean => {
+      if (!glob) return true;
+      const name = basename(filePath);
+      // Accept the shell-style suffix form agents commonly send ("*.ts"),
+      // as well as the documented substring form (".ts").
+      if (glob.startsWith('*.')) return name.endsWith(glob.slice(1));
+      return name.includes(glob);
+    };
+    const results: string[] = [];
+    let globMatchedFiles = 0;
+    let searchedFiles = 0;
+    let skippedBinary = 0;
+    const partiallySearched: string[] = [];
+    let truncated = false;
+
+    for await (const filePath of walkFiles(resolved)) {
+      if (!matchesFileGlob(filePath)) continue;
+      globMatchedFiles++;
+      let part: CappedReadResult;
+      // Capped: search walks the whole workspace, so an uncapped read here
+      // makes one oversized log or dataset the peak memory of every search.
+      // `cappedReadPart` rather than `cappedRead` because the latter states
+      // the truncation *inside* the content, where it is indistinguishable
+      // from a line of the file — searching for a word in the marker used to
+      // report a match at a line number the file does not have.
+      try { part = await cappedReadPart(filePath, MAX_SEARCH_FILE_BYTES); } catch { continue; }
+      // What grep does, for the same reason: the bytes decode to
+      // replacement characters, and a match in them is a line of mojibake
+      // in the model's context that it can neither read nor act on.
+      if (part.binary) { skippedBinary++; continue; }
+      searchedFiles++;
+      if (part.truncated) partiallySearched.push(relative(workspaceRoot, filePath));
+
+      const lines = splitLines(part.content);
+      for (let i = 0; i < lines.length; i++) {
+        regex.lastIndex = 0;
+        // `exec` rather than `test`: the match offset is what lets a hit in
+        // a very long line be shown centred on the match.
+        const found = regex.exec(lines[i]);
+        if (found) {
+          results.push(`${relative(workspaceRoot, filePath)}:${i + 1}: ${clipMatch(lines[i], found.index)}`);
+          if (results.length > maxSearchResults) {
+            truncated = true;
+            break;
+          }
+        }
+      }
+      if (truncated) break;
+    }
+
+    // Said whether or not anything matched: "no matches" in a file that was
+    // only read up to the cap is not the same claim as "no matches", and a
+    // caller that cannot tell them apart stops looking.
+    const notes: string[] = [];
+    if (truncated) notes.push(`[...truncated at ${maxSearchResults} matches...]`);
+    if (partiallySearched.length > 0) {
+      const named = partiallySearched.slice(0, 5).join(', ');
+      const rest = partiallySearched.length > 5 ? ` and ${partiallySearched.length - 5} more` : '';
+      notes.push(`[searched only the first ${Math.floor(MAX_SEARCH_FILE_BYTES / 1024)} KiB of ${named}${rest} — matches past that are not reported]`);
+    }
+    if (skippedBinary > 0) notes.push(`[skipped ${skippedBinary} binary file${skippedBinary === 1 ? '' : 's'}]`);
+
+    // A fileGlob that matches nothing returns the same "no matches" as a
+    // pattern that is genuinely absent, and the two call for opposite next
+    // steps. `src/*.ts` is the common way to land here — the glob is tested
+    // against the file name, so any path fragment excludes every file.
+    if (glob && globMatchedFiles === 0) {
+      return (
+        `No files matched fileGlob ${JSON.stringify(glob)}, so nothing was searched. ` +
+        `It is matched against the file name only — use a substring (".ts") or a suffix ` +
+        `("*.ts"), and scope to a directory with \`path\` instead.`
+      );
+    }
+
+    if (results.length === 0) {
+      const scope = glob ? ` (fileGlob ${JSON.stringify(glob)}, ${searchedFiles} files searched)` : ` (${searchedFiles} files searched)`;
+      return [`No matches found${scope}.`, ...notes].join('\n');
+    }
+    if (truncated) results.length = maxSearchResults;
+    return [...results, ...notes].join('\n');
+  } catch (err) {
+    return `Error: ${safe(err)}`;
+  }
+}
+
+function describeSpec(spec: SearchSpec): string {
+  const where = spec.path && spec.path !== '.' ? ` in ${spec.path}` : '';
+  const glob = spec.fileGlob ? ` (fileGlob ${JSON.stringify(spec.fileGlob)})` : '';
+  return `pattern: ${JSON.stringify(spec.pattern)}${where}${glob}`;
+}
+
 export function buildSearch(workspaceRoot: string, maxSearchResults: number): Tool<string> {
   return new Tool<string>({
     name: 'search',
@@ -72,140 +254,55 @@ export function buildSearch(workspaceRoot: string, maxSearchResults: number): To
     // can say at the moment it matters — what it skipped, why a glob excluded
     // everything, that results were cut — is said in the result instead.
     description:
-      'Search file contents (not names) with a regex, line by line. Up to 200 matches as ' +
+      'Search file contents (not names) with a regex, line by line. Up to 200 matches per pattern as ' +
       '"path:line: text". A plain name matches case-insensitively across separators ' +
       '("file-tools" finds "fileTools"); regex syntax is exact and case-sensitive. ' +
-      'Skips binaries and generated dirs (node_modules, dist, …).',
+      'Skips binaries and generated dirs (node_modules, dist, …). Put every pattern you need checked ' +
+      'in patterns[] rather than calling this repeatedly — one call for several unrelated greps.',
     inputSchema: {
       type: 'object',
       properties: {
-        pattern: { type: 'string', description: 'JavaScript regex, or a plain name' },
-        path: {
-          type: 'string',
-          description: 'Directory or file to search within. Defaults to workspace root.',
-        },
-        fileGlob: {
-          type: 'string',
-          description: 'Filter by file name: substring (".ts") or suffix ("*.ts"). Not a path — use `path` for directories.',
+        patterns: {
+          type: 'array',
+          minItems: 1,
+          description: 'Every pattern to search for, in one call.',
+          items: {
+            type: 'object',
+            properties: {
+              pattern: { type: 'string', description: 'JavaScript regex, or a plain name' },
+              path: {
+                type: 'string',
+                description: 'Directory or file to search within. Defaults to workspace root.',
+              },
+              fileGlob: {
+                type: 'string',
+                description: 'Filter by file name: substring (".ts") or suffix ("*.ts"). Not a path — use `path` for directories.',
+              },
+            },
+            required: ['pattern'],
+          },
         },
       },
-      required: ['pattern'],
+      required: ['patterns'],
     } satisfies ToolInputSchema,
-    execute: async ({ pattern, path = '.', fileGlob }) => {
-      try {
-        const resolved = resolveInWorkspace(workspaceRoot, String(path));
-        let regex: RegExp;
-        const requestedPattern = String(pattern);
-        try {
-          // Keep explicit regexes exact; make ordinary identifier/name searches
-          // forgiving because agents and humans routinely vary case and separators.
-          // `\w` already excludes every regex metacharacter this needs to rule
-          // out, so the class alone is the whole check.
-          const isPlainName = /^[\w\s-]+$/.test(requestedPattern);
-          if (isPlainName) {
-            // The joiner is `*`, not `+`: a bare case change ("fileTools") has no
-            // separator character at all, so demanding one would miss it. The same
-            // `*` also lets "file-tools" match a run-together "filetools" — looser
-            // than the four conventions named above, but still a plausible way to
-            // type the identifier, and not worth the regex complexity of telling
-            // "no separator" apart from "case-changed" under a case-insensitive match.
-            // A pattern made entirely of separators (e.g. "-") splits to no
-            // words at all; joining an empty list gives the empty regex,
-            // which matches every position on every line. Fall back to a
-            // literal search for the pattern itself rather than let that
-            // through.
-            const words = requestedPattern.split(/[\s_-]+/).filter(Boolean).map(escapeRegex);
-            regex = new RegExp(words.length > 0 ? words.join('[\\s_-]*') : escapeRegex(requestedPattern), 'gi');
-          } else {
-            regex = new RegExp(requestedPattern, 'g');
-          }
-        } catch (err) {
-          return `Error: Invalid regex: ${safe(err)}`;
-        }
-        const glob = fileGlob ? String(fileGlob) : null;
-        const matchesFileGlob = (filePath: string): boolean => {
-          if (!glob) return true;
-          const name = basename(filePath);
-          // Accept the shell-style suffix form agents commonly send ("*.ts"),
-          // as well as the documented substring form (".ts").
-          if (glob.startsWith('*.')) return name.endsWith(glob.slice(1));
-          return name.includes(glob);
-        };
-        const results: string[] = [];
-        let globMatchedFiles = 0;
-        let searchedFiles = 0;
-        let skippedBinary = 0;
-        const partiallySearched: string[] = [];
-        let truncated = false;
-
-        for await (const filePath of walkFiles(resolved)) {
-          if (!matchesFileGlob(filePath)) continue;
-          globMatchedFiles++;
-          let part: CappedReadResult;
-          // Capped: search walks the whole workspace, so an uncapped read here
-          // makes one oversized log or dataset the peak memory of every search.
-          // `cappedReadPart` rather than `cappedRead` because the latter states
-          // the truncation *inside* the content, where it is indistinguishable
-          // from a line of the file — searching for a word in the marker used to
-          // report a match at a line number the file does not have.
-          try { part = await cappedReadPart(filePath, MAX_SEARCH_FILE_BYTES); } catch { continue; }
-          // What grep does, for the same reason: the bytes decode to
-          // replacement characters, and a match in them is a line of mojibake
-          // in the model's context that it can neither read nor act on.
-          if (part.binary) { skippedBinary++; continue; }
-          searchedFiles++;
-          if (part.truncated) partiallySearched.push(relative(workspaceRoot, filePath));
-
-          const lines = splitLines(part.content);
-          for (let i = 0; i < lines.length; i++) {
-            regex.lastIndex = 0;
-            // `exec` rather than `test`: the match offset is what lets a hit in
-            // a very long line be shown centred on the match.
-            const found = regex.exec(lines[i]);
-            if (found) {
-              results.push(`${relative(workspaceRoot, filePath)}:${i + 1}: ${clipMatch(lines[i], found.index)}`);
-              if (results.length > maxSearchResults) {
-                truncated = true;
-                break;
-              }
-            }
-          }
-          if (truncated) break;
-        }
-
-        // Said whether or not anything matched: "no matches" in a file that was
-        // only read up to the cap is not the same claim as "no matches", and a
-        // caller that cannot tell them apart stops looking.
-        const notes: string[] = [];
-        if (truncated) notes.push(`[...truncated at ${maxSearchResults} matches...]`);
-        if (partiallySearched.length > 0) {
-          const named = partiallySearched.slice(0, 5).join(', ');
-          const rest = partiallySearched.length > 5 ? ` and ${partiallySearched.length - 5} more` : '';
-          notes.push(`[searched only the first ${Math.floor(MAX_SEARCH_FILE_BYTES / 1024)} KiB of ${named}${rest} — matches past that are not reported]`);
-        }
-        if (skippedBinary > 0) notes.push(`[skipped ${skippedBinary} binary file${skippedBinary === 1 ? '' : 's'}]`);
-
-        // A fileGlob that matches nothing returns the same "no matches" as a
-        // pattern that is genuinely absent, and the two call for opposite next
-        // steps. `src/*.ts` is the common way to land here — the glob is tested
-        // against the file name, so any path fragment excludes every file.
-        if (glob && globMatchedFiles === 0) {
-          return (
-            `No files matched fileGlob ${JSON.stringify(glob)}, so nothing was searched. ` +
-            `It is matched against the file name only — use a substring (".ts") or a suffix ` +
-            `("*.ts"), and scope to a directory with \`path\` instead.`
-          );
-        }
-
-        if (results.length === 0) {
-          const scope = glob ? ` (fileGlob ${JSON.stringify(glob)}, ${searchedFiles} files searched)` : ` (${searchedFiles} files searched)`;
-          return [`No matches found${scope}.`, ...notes].join('\n');
-        }
-        if (truncated) results.length = maxSearchResults;
-        return [...results, ...notes].join('\n');
-      } catch (err) {
-        return `Error: ${safe(err)}`;
+    execute: async (input) => {
+      const specs = toSearches(input);
+      if (!specs) {
+        return 'Error: no patterns given. Pass patterns: [{ pattern, path?, fileGlob? }, ...] with one entry per search.';
       }
+      if (specs.length === 1) return runOneSearch(workspaceRoot, maxSearchResults, specs[0]);
+
+      // Sequential, not `Promise.all`: each spec walks the workspace and reads
+      // up to MAX_SEARCH_FILE_BYTES per file, so running them together would
+      // multiply peak I/O and memory by the batch size — undoing, inside one
+      // call, the bound the per-file cap exists to hold. Batching is here to
+      // save round trips to the model, which it still does; the searches
+      // themselves were never the slow part.
+      const blocks: string[] = [];
+      for (const spec of specs) {
+        blocks.push(`=== ${describeSpec(spec)} ===\n${await runOneSearch(workspaceRoot, maxSearchResults, spec)}`);
+      }
+      return blocks.join('\n\n');
     },
   });
 }

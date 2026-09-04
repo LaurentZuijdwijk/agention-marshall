@@ -170,7 +170,7 @@ test('a file read in one turn can be edited in the next', async (t) => {
 // A model batching several edit_file calls into one assistant message is
 // ordinary behaviour, and the SDK runs that batch concurrently. Each edit is a
 // read-modify-write, so unserialised they all read the same original and only
-// the last write survives — with every call still reporting "Edited".
+// the last write survives — with every call still reporting "Successfully edited".
 test('several edits to one file in a single batch all land', async (t) => {
   const root = tempRoot();
   writeFileSync(join(root, 'notes.md'), 'AAA\nBBB\nCCC\n');
@@ -205,7 +205,7 @@ test('several edits to one file in a single batch all land', async (t) => {
     .flatMap(r => r.messages)
     .filter(m => m.role === 'tool')
     .map(m => String(m.content));
-  assert.equal(toolResults.filter(r => /Edited/.test(r)).length, 3,
+  assert.equal(toolResults.filter(r => /Successfully edited/.test(r)).length, 3,
     `all three edits should report success, got: ${toolResults.join(' | ')}`);
 });
 

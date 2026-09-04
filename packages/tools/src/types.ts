@@ -130,6 +130,13 @@ export interface Limits {
   timeoutMs?: number;
   /** Max grep results returned. Default: 200 */
   maxSearchResults?: number;
+  /**
+   * Whether `read_file` prefixes each line with its number. Default: false.
+   *
+   * A gutter makes content easy to refer to and impossible to copy — see
+   * `renderLines` in factories/file/read-gate.ts for what that cost, measured.
+   */
+  readLineNumbers?: boolean;
   /** Ceiling for a backgrounded shell command. Default: 30 min. Separate from
    *  `timeoutMs` because the two answer different questions: how long to block a
    *  turn, versus how long to let a detached process live. */

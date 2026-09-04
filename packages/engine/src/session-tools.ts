@@ -275,8 +275,13 @@ export class ToolBelt {
       // Rebuilt per turn: the wrapping binds this turn's approval fn, abort
       // signal and caller identity, none of which outlive the turn.
       ...this.deps.mcp.tools(toolConfig),
-      this.deps.maskingPlugin.retrieveTool,
+      // Pointless when nothing is masked, and a tool the model has to read past
+      // on every request is not free.
+      ...(config.maskToolResults === false ? [] : [this.deps.maskingPlugin.retrieveTool]),
     ];
+
+    const allowlist = config.toolAllowlist;
+    const offered = allowlist ? tools.filter(t => allowlist.includes(t.name)) : tools;
 
     const extraInstructions = [
       context ? CONTEXT_TOOL_GUIDANCE : '',
@@ -286,7 +291,7 @@ export class ToolBelt {
       this.deps.client.askUser ? '\n\nUse ask_user for genuine ambiguity that blocks progress, not for confirmation.\n' : '',
     ].join('');
 
-    return { tools, extraInstructions };
+    return { tools: offered, extraInstructions };
   }
 
   // ── swarm ───────────────────────────────────────────────────────────────────
