@@ -84,11 +84,22 @@ function summarise(byKey) {
   for (const [key, { runId, rows }] of byKey) {
     const [harness, model, config] = key.split('|');
     const tokened = rows.filter(r => Number.isFinite(r.inputTokens) && r.inputTokens > 0);
+    // A timed-out external run reports 0 tool calls because the harness kills
+    // the CLI and never parses its transcript — the number is an artifact of
+    // giving up, not a measurement. Verified: pi's 420s timeout on
+    // qwen/qwen3.8-flash recorded 0 calls against a 4.3 MB transcript holding 9
+    // real tool_execution_start events. Averaging that 0 in would have drawn pi
+    // as the most economical harness on the model it could not finish at all.
+    // marshall counts calls live from its own client, so its timeouts keep
+    // real numbers and stay in.
+    const counted = rows.filter(r => !(r.timedOut && (r.toolCalls ?? 0) === 0));
     out.push({
       harness, model, config, runId,
       trials: rows.length,
       passed: rows.filter(r => r.pass).length,
-      calls: mean(rows.map(r => r.toolCalls ?? 0)),
+      timedOut: rows.filter(r => r.timedOut).length,
+      calls: counted.length ? mean(counted.map(r => r.toolCalls ?? 0)) : null,
+      callsPartial: counted.length !== rows.length,
       seconds: median(rows.map(r => r.durationMs / 1000)),
       inTok: tokened.length ? mean(tokened.map(r => r.inputTokens)) : null,
       outTok: tokened.length ? mean(tokened.map(r => r.outputTokens)) : null,
@@ -111,7 +122,7 @@ const best = new Map();
 for (const r of rows.filter(r => r.harness === 'marshall')) {
   const cur = best.get(r.model);
   if (!cur || r.passed / r.trials > cur.passed / cur.trials
-    || (r.passed / r.trials === cur.passed / cur.trials && r.calls < cur.calls)) best.set(r.model, r);
+    || (r.passed / r.trials === cur.passed / cur.trials && (r.calls ?? Infinity) < (cur.calls ?? Infinity))) best.set(r.model, r);
 }
 
 const PALETTE = { marshall: ['#2a78d6', '#3987e5'], pi: ['#eb6834', '#d95926'], opencode: ['#1baf7a', '#199e70'] };
@@ -132,8 +143,11 @@ console.log(`wrote ${process.argv[2] ?? 'bench/harness-comparison.html'} — ${r
 function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 
 function render({ headline, rows }) {
-  const maxCalls = Math.max(...headline.filter(d => d.r).map(d => d.r.calls));
-  const maxSecs = Math.max(...headline.filter(d => d.r).map(d => d.r.seconds));
+  const scaleOf = metric => Math.max(...headline
+    .filter(d => d.r && d.r[metric] !== null && d.r[metric] !== undefined)
+    .map(d => d.r[metric]));
+  const maxCalls = scaleOf('calls');
+  const maxSecs = scaleOf('seconds');
 
   const bars = (metric, max, fmt, unit) => MODELS.map(model => {
     const group = headline.filter(d => d.model === model);
@@ -141,13 +155,22 @@ function render({ headline, rows }) {
       <div class="group-label">${esc(MODEL_LABEL[model])}</div>
       <div class="bars">
         ${group.map(({ harness, r }) => {
-          if (!r) return `<div class="row"><span class="hname">${harness}</span><div class="track"><div class="notrun">not run</div></div></div>`;
+          const label = `<span class="hname">${harness}</span>`;
+          if (!r) return `<div class="row">${label}<div class="track"><div class="notrun">not run</div></div></div>`;
           const v = r[metric];
+          // Never draw a bar for a number we do not have. A cell whose only
+          // trials timed out has no usable call count (see summarise), and a
+          // zero-length bar would read as "did it in no calls".
+          if (v === null || v === undefined) {
+            return `<div class="row" tabindex="0" data-tip="${esc(harness)} · ${esc(MODEL_LABEL[model])}\nno usable ${metric}: every trial timed out\n${r.timedOut}/${r.trials} timed out\nconfig: ${esc(r.config)}">
+              ${label}<div class="track"><div class="notrun">timed out — not measured</div></div></div>`;
+          }
           const pct = Math.max(1.5, (v / max) * 100);
+          const failed = r.passed < r.trials;
           return `<div class="row" tabindex="0"
-              data-tip="${esc(harness)} · ${esc(MODEL_LABEL[model])}\n${fmt(v)}${unit}\n${r.passed}/${r.trials} passed · ${r.trials} trial${r.trials === 1 ? '' : 's'}\nconfig: ${esc(r.config)}">
-            <span class="hname">${harness}</span>
-            <div class="track"><div class="bar h-${harness}" style="width:${pct}%"></div><span class="val">${fmt(v)}${unit}</span></div>
+              data-tip="${esc(harness)} · ${esc(MODEL_LABEL[model])}\n${fmt(v)}${unit}\n${r.passed}/${r.trials} passed${r.timedOut ? ` · ${r.timedOut} timed out` : ''}\nconfig: ${esc(r.config)}">
+            ${label}
+            <div class="track"><div class="bar h-${harness}" style="width:${pct}%"></div><span class="val">${fmt(v)}${unit}${failed ? ` <span class="warn">${r.passed}/${r.trials}</span>` : ''}</span></div>
           </div>`;
         }).join('')}
       </div></div>`;
@@ -157,8 +180,8 @@ function render({ headline, rows }) {
     <td><span class="dot h-${r.harness}"></span>${esc(r.harness)}</td>
     <td>${esc(MODEL_LABEL[r.model])}</td>
     <td class="mono">${esc(r.config)}</td>
-    <td class="num">${r.passed}/${r.trials}</td>
-    <td class="num">${r.calls.toFixed(1)}</td>
+    <td class="num">${r.passed}/${r.trials}${r.timedOut ? `<span class="warn" title="${r.timedOut} timed out"> ⏱${r.timedOut}</span>` : ''}</td>
+    <td class="num">${r.calls === null ? '<span class="na">n/a</span>' : r.calls.toFixed(1) + (r.callsPartial ? '<span class="warn">*</span>' : '')}</td>
     <td class="num">${r.seconds.toFixed(1)}</td>
     <td class="num">${r.inTok === null ? '<span class="na">n/a</span>' : Math.round(r.inTok).toLocaleString()}</td>
     <td class="num">${r.outTok === null ? '<span class="na">n/a</span>' : Math.round(r.outTok).toLocaleString()}</td>
@@ -209,6 +232,7 @@ td{padding:7px 9px;border-bottom:1px solid var(--grid);color:var(--ink2)}
 .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px}
 .tiny{color:var(--muted);font-size:10.5px}
 .na{color:var(--muted)}
+.warn{color:var(--pi);font-size:11px;font-variant-numeric:tabular-nums}
 .dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:7px}
 #tip{position:fixed;pointer-events:none;opacity:0;transition:opacity .1s;background:var(--ink);
   color:var(--surface);padding:8px 11px;border-radius:7px;font-size:12px;white-space:pre-line;z-index:9;max-width:280px}
@@ -252,8 +276,13 @@ charts. Each bar is the mean (calls) or median (time) of that cell's trials.</p>
   only — its behaviour changed several times in one day, so pooling every trial would describe no
   version that ever existed. <code>pi</code> and <code>opencode</code> are external CLIs unaffected
   by those changes, so their trials pool. <code>opencode</code> reports no token usage through its
-  CLI, hence <span class="na">n/a</span>. Blank cells were never run rather than zero. Trial counts
-  are small (1–5); treat gaps under ~20% as noise.</p>
+  CLI, hence <span class="na">n/a</span>. Blank cells were never run rather than zero. A cell whose every
+  trial timed out has no usable call count at all: the external CLIs are killed before their
+  transcript is parsed, so the harness records 0 — verified as an artifact, since pi's timed-out
+  Qwen run left a 4.3 MB transcript containing 9 real tool calls. Those cells read
+  <em>timed out — not measured</em> rather than zero, and <span class="warn">*</span> marks an
+  average taken over only the trials that did produce a count. Trial counts are small (1–5); treat
+  gaps under ~20% as noise.</p>
 </div>
 
 </div><div id="tip"></div><script>
