@@ -643,6 +643,11 @@
         <h4>Built entirely on a local 27B</h4>
         <p>A LEGO-style floating city with a zombie-siege mode, every line written by Qwen 3.8 27B through Marshall — no cloud model involved. <a href="/bricks/" class="bricks-link">Play it</a>.</p>
       </div>
+      <div class="card" style="grid-column:1/-1">
+        <a href="/pagoda/" class="pagoda-link"><img class="thumb" src="/pagoda-preview.webp" alt="Pagoda in the Garden of Falling Blossoms — a voxel scene running in the browser" width="1000" height="450" loading="lazy"></a>
+        <h4>Same model, a different mood</h4>
+        <p>A five-tier pagoda on a floating island, 81,000 voxel cubes, day-to-night lighting and a working camera rig — also Qwen 3.8 27B through Marshall, no cloud model involved. <a href="/pagoda/" class="pagoda-link">Explore it</a>.</p>
+      </div>
     </div>
   </div>
 </section>
@@ -850,6 +855,12 @@ document.querySelectorAll('a[href^="http"]').forEach(a => {
 document.querySelectorAll('a.bricks-link').forEach(a => {
   a.addEventListener('click', () => {
     gtag('event', 'bricks_card_click', { link_text: a.textContent.trim() || 'thumbnail' });
+  });
+});
+// ── pagoda showcase clicks ───────────────────────────────────────────────
+document.querySelectorAll('a.pagoda-link').forEach(a => {
+  a.addEventListener('click', () => {
+    gtag('event', 'pagoda_card_click', { link_text: a.textContent.trim() || 'thumbnail' });
   });
 });
 </script>
