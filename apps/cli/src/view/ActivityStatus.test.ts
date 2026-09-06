@@ -127,8 +127,9 @@ describe('ActivityStatus', () => {
     // metricRow stringifies the whole "  · metric" children array (commas and
     // all) — fine for the regex checks above, but this suite needs the bare
     // metric string's own length, so it reaches one array element deeper.
+    // Children are [BULLET, metric] — see the BULLET constant in ActivityStatus.
     const metricOnly = (props: Parameters<typeof ActivityStatus>[0]) =>
-      String((((ActivityStatus(props) as any).props.children as any[])[1].props.children as any[])[3]);
+      String((((ActivityStatus(props) as any).props.children as any[])[1].props.children as any[])[1]);
 
     const full = {
       state: 'generating' as const,
@@ -159,12 +160,14 @@ describe('ActivityStatus', () => {
       // leadingWidth for an unblocked 'generating' spinner: frame+space (2) +
       // "generating".length (10) + spaces (2) + a generous elapsed allowance
       // (7) — the same arithmetic ActivityStatus itself uses for `budget`.
-      // Below ~44 columns even the bare, never-dropped counts (14 chars)
-      // outrun the floor budget (12) — a hard floor, not a bug: there is no
-      // field left to shed.
+      // BULLET ("  ·  ") is 5 chars, once for the reserved leading bullet and
+      // once more subtracted for the metric's own. Below ~44 columns even the
+      // bare, never-dropped counts (14 chars) outrun the floor budget (12) —
+      // a hard floor, not a bug: there is no field left to shed.
       const leadingWidth = 2 + 'generating'.length + 2 + 7;
+      const BULLET_LEN = 5;
       for (const columns of [50, 60, 80, 120]) {
-        const budget = Math.max(columns - 4 - leadingWidth - 4, 12);
+        const budget = Math.max(columns - 4 - leadingWidth - BULLET_LEN, 12);
         const text = metricOnly({ ...full, columns });
         assert.ok(text.length <= budget, `at ${columns} columns got a ${text.length}-char metric: ${text}`);
       }
@@ -173,6 +176,51 @@ describe('ActivityStatus', () => {
     it('keeps just the bare counts once nothing else fits', () => {
       const text = metricOnly({ ...full, columns: 20 });
       assert.equal(text, '↑1.3M  ↓106.5k', `expected only the bare counts, got: ${text}`);
+    });
+
+    // The exact bug report: a 'thinking' row with every metric present and
+    // canSkipReasoning's "ctrl-e to skip thinking" hint, which lives in a
+    // separate <Text> sibling the earlier tests here never looked at — so the
+    // whole row could still outrun the terminal even once the metric segment
+    // alone fit its own (too-generous) budget. Elapsed time on both the
+    // spinner and the duration field is well past an hour, which used to
+    // render as an unabbreviated "8351.4s" wide enough to overflow on its own.
+    it('accounts for the ctrl-e hint and the pending count, not just the metric segment', () => {
+      const rowWidth = (props: Parameters<typeof ActivityStatus>[0]) => {
+        const el = ActivityStatus(props) as any;
+        let total = 4; // Box paddingX
+        for (const child of el.props.children as any[]) {
+          if (!child) continue;
+          if (child.type?.name === 'Spinner') { total += 19; continue; } // see leadingWidth's own allowance
+          const kids = Array.isArray(child.props.children) ? child.props.children : [child.props.children];
+          total += kids.join('').length;
+        }
+        return total;
+      };
+      const props = {
+        state: 'thinking' as const,
+        metrics: {
+          inputTokens: 39_200, outputTokens: 1_980,
+          rates: { input: 159, output: 26.5 },
+          durationMs: 506_400, ttftMs: 246_000, cost: '$0',
+        },
+        canSkipReasoning: true,
+      };
+      for (const columns of [50, 60, 80, 100, 140, 200]) {
+        assert.ok(rowWidth({ ...props, columns }) <= columns,
+          `at ${columns} columns the row outran its own terminal`);
+      }
+      // Room for everything, hint included, only once the terminal is wide enough.
+      assert.ok(rowWidth({ ...props, columns: 200 }) > rowWidth({ ...props, columns: 60 }),
+        'a wider terminal should show more, not the same amount, of the row');
+    });
+
+    it('reserves room for a queued-prompt count unconditionally, since it is not decoration', () => {
+      const text = metricOnly({ ...full, pending: 3, columns: 45 });
+      // At the same width, more must have been shed to make room for the
+      // (never-dropped) pending count than when there is nothing queued.
+      const withoutPending = metricOnly({ ...full, columns: 45 });
+      assert.ok(text.length <= withoutPending.length, 'pending eats into the metric budget, not its own');
     });
   });
 });

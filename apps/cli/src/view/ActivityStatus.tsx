@@ -101,7 +101,20 @@ export function ActivityStatus({
   const thinking = metrics?.reasoningTokens
     ? ` (${formatTokens(metrics.reasoningTokens)} thinking)`
     : '';
+
+  // Everything on the row besides the metric segment: what it costs feeds
+  // straight into the metric's own budget below, since the terminal doesn't
+  // care which Text this row's characters came from when it decides whether
+  // to hard-wrap. The queued-prompt count is kept unconditionally — it is not
+  // decoration, it is telling the user work is waiting — so it comes off the
+  // top rather than competing for space.
+  const BULLET = `  ${G.bullet}  `; // 5 chars: matches every `  {G.bullet}  ` in the JSX below
+  const pendingText = pending > 0 ? `${BULLET}${pending} prompt${pending === 1 ? '' : 's'} queued` : '';
+  const hintText = state === 'thinking' && canSkipReasoning ? `${BULLET}ctrl-e to skip thinking` : '';
+  const reserved = 4 /* Box paddingX */ + leadingWidth + pendingText.length;
+
   let metric: string;
+  let showHint = hintText !== '';
   if (metrics && (metrics.inputTokens !== undefined || metrics.outputTokens !== undefined)) {
     const counts = (showRates: boolean) =>
       withRate('↑', metrics.inputTokens, metrics.rates?.input, showRates)
@@ -114,16 +127,18 @@ export function ActivityStatus({
     // The full row can outrun a narrow terminal's width; the terminal then
     // hard-wraps it mid-character rather than reflowing cleanly (this is what
     // turns "generating" into "generatin" on redraw). So fields are dropped,
-    // least essential first — ttft, then cost, then duration, then the ~/s
-    // rates — until what's left actually fits. Token counts are the one
-    // thing kept no matter how narrow the terminal gets.
-    const budget = Math.max(columns - 4 /* Box paddingX */ - leadingWidth - 4 /* leading bullet */, 12);
+    // least essential first — the ctrl-e hint, then ttft, then cost, then
+    // duration, then the ~/s rates — until what's left actually fits. Token
+    // counts are the one thing kept no matter how narrow the terminal gets.
     const build = (showTtft: boolean, showCost: boolean, showDuration: boolean, showRates: boolean) =>
       [counts(showRates), showDuration ? duration : undefined, showTtft ? ttft : undefined, showCost ? cost : undefined]
         .filter(Boolean).join(`  ${G.bullet}  `);
 
     let [showTtft, showCost, showDuration, showRates] = [true, true, true, true];
     let result = build(showTtft, showCost, showDuration, showRates);
+    const fitsWithHint = () => reserved + BULLET.length + result.length + (showHint ? hintText.length : 0) <= columns;
+    if (!fitsWithHint()) { showHint = false; }
+    const budget = Math.max(columns - reserved - BULLET.length, 12);
     if (result.length > budget) { showTtft = false; result = build(showTtft, showCost, showDuration, showRates); }
     if (result.length > budget) { showCost = false; result = build(showTtft, showCost, showDuration, showRates); }
     if (result.length > budget) { showDuration = false; result = build(showTtft, showCost, showDuration, showRates); }
@@ -134,6 +149,7 @@ export function ActivityStatus({
     // and the engine says so by not sending anything rather than by sending
     // zeroes. Naming what is missing beats a row of placeholder dashes.
     metric = 'no tokens yet';
+    if (reserved + BULLET.length + metric.length + (showHint ? hintText.length : 0) > columns) showHint = false;
   }
   return (
     <Box paddingX={2} marginTop={1}>
@@ -148,11 +164,9 @@ export function ActivityStatus({
           {label}
         </Text>
       )}
-      {state !== 'idle' && <Text color={C.faint}>  {G.bullet}  {metric}</Text>}
-      {state === 'thinking' && canSkipReasoning && (
-        <Text color={C.faint}>  {G.bullet}  ctrl-e to skip thinking</Text>
-      )}
-      {pending > 0 && <Text color={C.warn}>  {G.bullet}  {pending} prompt{pending === 1 ? '' : 's'} queued</Text>}
+      {state !== 'idle' && <Text color={C.faint}>{BULLET}{metric}</Text>}
+      {showHint && <Text color={C.faint}>{hintText}</Text>}
+      {pendingText !== '' && <Text color={C.warn}>{pendingText}</Text>}
     </Box>
   );
 }
