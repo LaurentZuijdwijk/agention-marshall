@@ -1,12 +1,22 @@
 // ── the read gate ─────────────────────────────────────────────────────────────
 //
-// `read_file`, `write_file` and `edit_file` are one mechanism with three entry
-// points, which is why they share a file. The invariant they hold between them:
-// you may not replace a file you have not seen all of, and not if it has
-// changed since you saw it. That is carried by two maps — what each path hashed
-// to when it was read, and how much of it was rendered — and splitting the
-// three tools apart would mean exporting those maps, which hides the coupling
-// rather than removing it.
+// `read_file`, `write_file`, `edit_file` and `edit_lines` are one mechanism
+// with four entry points, which is why they share a file. The invariant they
+// hold between them: you may not replace a file you have not seen all of, and
+// not if it has changed since you saw it. That is carried by two maps — what
+// each path hashed to when it was read, and how much of it was rendered — and
+// splitting the tools apart would mean exporting those maps, which hides the
+// coupling rather than removing it.
+//
+// edit_file and edit_lines used to be one tool with two addressing modes
+// (oldString, or startLine+endLine) on the same `edits[]` entry. Split apart
+// because the shared schema could not express "one or the other, never both"
+// without `oneOf` (uneven provider support), so entries carried no `required`
+// list at all — and a model that reached for line-addressing by passing bare
+// `startLine`/`endLine` at the top level, the way `oldString` alone is
+// tolerated, got a bare "no edits given" with no hint why. Two schemas, each
+// fully specified, replace the split every caller already had to make in its
+// own head.
 
 import { Tool } from '@agentionai/agents/core';
 import type { ToolInputSchema } from '@agentionai/agents/core';
@@ -114,16 +124,43 @@ function toEdits(input: Record<string, unknown>): EditRequest[] | undefined {
   const edits: EditRequest[] = [];
   for (const item of list) {
     if (!item || typeof item !== 'object') return undefined;
-    const { oldString, newString, startLine, endLine } = item as Record<string, unknown>;
-    if (oldString !== undefined) {
-      edits.push({ oldString: String(oldString), newString: String(newString ?? '') });
-      continue;
-    }
-    if (startLine !== undefined && endLine !== undefined) {
-      edits.push({ startLine: Number(startLine), endLine: Number(endLine), newString: String(newString ?? '') });
-      continue;
-    }
-    return undefined;
+    const { oldString, newString } = item as Record<string, unknown>;
+    if (oldString === undefined) return undefined;
+    edits.push({ oldString: String(oldString), newString: String(newString ?? '') });
+  }
+  return edits.length ? edits : undefined;
+}
+
+/**
+ * Same tolerance as `toEdits` (a JSON-string `edits`, a bare single edit at
+ * the top level) but for line-addressed edits — symmetric with the
+ * `oldString` fallback above on purpose, so a model that reaches for one
+ * shape gets the same forgiveness the other already had.
+ */
+function toLineEdits(input: Record<string, unknown>): EditRequest[] | undefined {
+  const raw = input.edits;
+  let list: unknown;
+  if (typeof raw === 'string') {
+    try { list = JSON.parse(raw); } catch { return undefined; }
+  } else {
+    list = raw;
+  }
+
+  if (!Array.isArray(list)) {
+    if (input.startLine === undefined || input.endLine === undefined) return undefined;
+    return [{
+      startLine: Number(input.startLine),
+      endLine: Number(input.endLine),
+      newString: String(input.newString ?? ''),
+    }];
+  }
+
+  const edits: EditRequest[] = [];
+  for (const item of list) {
+    if (!item || typeof item !== 'object') return undefined;
+    const { startLine, endLine, newString } = item as Record<string, unknown>;
+    if (startLine === undefined || endLine === undefined) return undefined;
+    edits.push({ startLine: Number(startLine), endLine: Number(endLine), newString: String(newString ?? '') });
   }
   return edits.length ? edits : undefined;
 }
@@ -289,7 +326,7 @@ export function buildReadFile(
 export function createReadGateTools(
   config: ToolConfig,
   dedupeCache?: DedupeCache,
-): { read_file: Tool<string>; write_file: Tool<string>; edit_file: Tool<string> } {
+): { read_file: Tool<string>; write_file: Tool<string>; edit_file: Tool<string>; edit_lines: Tool<string> } {
   const { workspaceRoot, approval, limits = {} } = config;
   const maxFileBytes = limits.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
 
@@ -414,7 +451,8 @@ export function createReadGateTools(
       'and lost entirely. If most of a file is changing use write_file; if the same mechanical change ' +
       'applies across many files, one run_shell script beats any number of edits. No prior read_file ' +
       'is needed: however you came by the text, a wrong oldString fails rather than landing in the ' +
-      'wrong place.',
+      'wrong place. If matching by content is awkward but you know the exact lines to replace ' +
+      '(e.g. from read_file), use edit_lines instead.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -422,26 +460,14 @@ export function createReadGateTools(
         edits: {
           type: 'array',
           minItems: 1,
-          description:
-            'Every replacement to make in this file, in one call. Each entry addresses its target '
-            + 'either by content (oldString, the usual way) or by line range (startLine + endLine). '
-            + 'Give one or the other, never both.',
+          description: 'Every replacement to make in this file, in one call.',
           items: {
             type: 'object',
-            // No `required` list, because an item is valid in either of two
-            // shapes and expressing that needs `oneOf` — which tool-schema
-            // support across providers is uneven about. Requiring
-            // oldString+newString outright, as this did, made the line-addressed
-            // form unrepresentable: the branch existed, was gated and tested,
-            // and no model could ever emit a call that reached it. `toEdits`
-            // enforces the real rule at runtime and rejects an entry that
-            // carries neither address.
             properties: {
-              oldString: { type: 'string', description: 'Exact text to find; must appear exactly once in the file. Preferred — it validates itself.' },
-              newString: { type: 'string', description: 'Replacement text. Required for both forms.' },
-              startLine: { type: 'number', description: 'With endLine, replace this 1-indexed inclusive line range instead of matching text. Requires the file to have been read this session, and to be unchanged since.' },
-              endLine: { type: 'number', description: 'Last line of the range, 1-indexed and inclusive.' },
+              oldString: { type: 'string', description: 'Exact text to find; must appear exactly once in the file.' },
+              newString: { type: 'string', description: 'Replacement text.' },
             },
+            required: ['oldString', 'newString'],
           },
         },
       },
@@ -477,49 +503,17 @@ export function createReadGateTools(
         return await withFileLock(resolved, async () => {
           const original = await readFile(resolved, 'utf8');
 
-          // No read requirement for an `oldString` edit, deliberately. The
-          // oldString *is* the evidence: it has to occur exactly once in the
-          // file as it stands, so an edit built on a guess about content the
-          // caller never saw does not land quietly — it fails `not-found` or
-          // `ambiguous` and says so. Requiring a prior read on top of that
-          // bought no safety and cost a round trip per file, which is the
-          // whole of the difference on a task that touches many files: the
-          // gate made `read_file` mandatory even when the caller had already
-          // seen the content another way (a shell `cat`, a search hit with
-          // context, a file it had just written).
-          //
-          // A line-addressed edit is the opposite case and keeps the gate.
-          // Line 12 is whatever line 12 currently is, so the request carries
-          // no evidence at all; it is only meaningful against the exact
-          // version whose numbers the caller actually saw, and a file never
-          // read has no such version.
-          if (edits.some(e => e.oldString === undefined)) {
-            // `readCoverage`, not `readFiles`. The two used to mean the same
-            // thing here, because edit_file could not run at all without a
-            // prior read. Now that an oldString edit needs none, edit_file
-            // itself populates `readFiles` on success (with `markSeen: false`,
-            // to record the new hash for write_file) — and that would hand a
-            // following line-addressed edit a version whose numbers the caller
-            // has still never seen. `readCoverage` is only ever written by an
-            // actual read, which is the thing line addressing depends on.
-            const seen = readCoverage.has(resolved);
-            const expected = readFiles.get(resolved);
-            if (!seen || expected === undefined) {
-              return (
-                `Error: ${relative(workspaceRoot, resolved)} has not been read this session, so its ` +
-                `line numbers are not yours to rely on. Call read_file first, or address the change ` +
-                `with oldString instead — that needs no prior read.`
-              );
-            }
-            const actual = await fileHash(resolved, { markSeen: false });
-            if (expected !== actual) {
-              return (
-                `Error: ${relative(workspaceRoot, resolved)} changed since you read it, so its line ` +
-                `numbers no longer point where you think. Call read_file again and reissue the edit ` +
-                `against the current line numbers, or address it with oldString instead.`
-              );
-            }
-          }
+          // No read requirement, deliberately: the oldString *is* the
+          // evidence. It has to occur exactly once in the file as it stands,
+          // so an edit built on a guess about content the caller never saw
+          // does not land quietly — it fails `not-found` or `ambiguous` and
+          // says so. Requiring a prior read on top of that bought no safety
+          // and cost a round trip per file, which is the whole of the
+          // difference on a task that touches many files: the gate made
+          // `read_file` mandatory even when the caller had already seen the
+          // content another way (a shell `cat`, a search hit with context, a
+          // file it had just written). `edit_lines` is the opposite case and
+          // keeps the gate — see its own comment for why.
 
           const result = applyEdits(original, edits);
           if (!result.ok) {
@@ -550,6 +544,108 @@ export function createReadGateTools(
             ? ` — ${result.fuzzy} matched loosely (whitespace or quote characters differed); re-read the file if you plan further edits here`
             : '';
           return `Successfully edited ${where}${changes}${loose}`;
+        });
+      } catch (err) {
+        return `Error: ${safe(err)}`;
+      }
+    },
+  };
+
+  const edit_lines_spec: ToolSpec = {
+    name: 'edit_lines',
+    description:
+      'Replace one or more line ranges in a file by line number, for when you already know the ' +
+      'exact lines to change (from read_file\'s header, or its gutter when line numbers are on) and ' +
+      'matching by content is awkward — e.g. many near-identical lines, or a change spanning lines ' +
+      'you would rather not quote in full. Prefer edit_file when you can: an oldString validates ' +
+      'itself and needs no prior read. This tool needs read_file to have been called on the file ' +
+      'this session, with the file unchanged since — a line number is only meaningful against the ' +
+      'exact version you saw. Put every range for this file in edits[] in one call, same batching ' +
+      'rule as edit_file.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'File path relative to workspace root' },
+        edits: {
+          type: 'array',
+          minItems: 1,
+          description: 'Every line-range replacement to make in this file, in one call.',
+          items: {
+            type: 'object',
+            properties: {
+              startLine: { type: 'number', description: 'First line to replace, 1-indexed and inclusive.' },
+              endLine: { type: 'number', description: 'Last line to replace, 1-indexed and inclusive.' },
+              newString: { type: 'string', description: 'Replacement text for this range.' },
+            },
+            required: ['startLine', 'endLine', 'newString'],
+          },
+        },
+      },
+      required: ['path', 'edits'],
+    },
+    execute: async (input) => {
+      const { path } = input;
+      try {
+        const resolved = resolveInWorkspace(workspaceRoot, String(path));
+        const edits = toLineEdits(input);
+        if (!edits) {
+          return (
+            `Error: no edits given for ${path}. Pass edits: [{ startLine, endLine, newString }, ...] ` +
+            `with one entry per replacement.`
+          );
+        }
+        if (!existsSync(resolved)) {
+          return (
+            `Error: ${relative(workspaceRoot, resolved)} does not exist. ` +
+            `Use write_file to create it.`
+          );
+        }
+        const payload = editPayloadChars(edits);
+        if (payload > MAX_EDIT_PAYLOAD_CHARS) {
+          return (
+            `Error: these ${edits.length} edit${edits.length === 1 ? '' : 's'} carry ${payload} characters, ` +
+            `over the ${MAX_EDIT_PAYLOAD_CHARS} a single edit_lines call accepts. Batching is for several ` +
+            `*small* changes; this is large enough to be a different job. Rewrite the file with ` +
+            `write_file if most of it is changing, split the edits across calls if not, or — if the ` +
+            `same mechanical change applies across many files — do it in one run_shell script instead.`
+          );
+        }
+        return await withFileLock(resolved, async () => {
+          const original = await readFile(resolved, 'utf8');
+
+          // A line number is only meaningful against the exact version the
+          // caller saw it in, so — unlike edit_file — this keeps the read
+          // gate. `readCoverage`, not `readFiles`: an edit_file success on
+          // this same path records a new hash (for write_file's benefit)
+          // without that being a read, and this must not treat it as one.
+          const seen = readCoverage.has(resolved);
+          const expected = readFiles.get(resolved);
+          if (!seen || expected === undefined) {
+            return (
+              `Error: ${relative(workspaceRoot, resolved)} has not been read this session, so its ` +
+              `line numbers are not yours to rely on. Call read_file first, or use edit_file with ` +
+              `oldString instead — that needs no prior read.`
+            );
+          }
+          const actual = await fileHash(resolved, { markSeen: false });
+          if (expected !== actual) {
+            return (
+              `Error: ${relative(workspaceRoot, resolved)} changed since you read it, so its line ` +
+              `numbers no longer point where you think. Call read_file again and reissue the edit ` +
+              `against the current line numbers, or use edit_file with oldString instead.`
+            );
+          }
+
+          const result = applyEdits(original, edits);
+          if (!result.ok) {
+            return `Error: ${result.failures.map(f => describeFailure(f, String(path), edits.length)).join(' ')}`;
+          }
+
+          await atomicWrite(resolved, result.content);
+          readFiles.set(resolved, await fileHash(resolved, { markSeen: false }));
+          const where = relative(workspaceRoot, resolved);
+          const changes = result.applied > 1 ? ` (${result.applied} changes)` : '';
+          return `Successfully edited ${where}${changes}`;
         });
       } catch (err) {
         return `Error: ${safe(err)}`;
@@ -661,5 +757,45 @@ export function createReadGateTools(
     config.taskContext,
   );
 
-  return { read_file, write_file, edit_file };
+  /** Same shape as `describeEdit`, for `edit_lines`'s line-addressed edits. */
+  const describeLineEdit = (input: Record<string, unknown>) => {
+    const path = String(input.path);
+    const edits = toLineEdits(input);
+    const fallback = {
+      toolName: 'edit_lines',
+      description: `Edit file: ${path}`,
+      detail: edits ? simpleDiff(path, edits) : `Edit file: ${path}`,
+    };
+    if (!edits) return fallback;
+
+    let resolved: string;
+    try {
+      resolved = resolveInWorkspace(workspaceRoot, path);
+    } catch {
+      return fallback;
+    }
+    let current: string;
+    try { current = readFileSync(resolved, 'utf8'); } catch { return fallback; }
+
+    const result = applyEdits(current, edits);
+    if (!result.ok) return fallback;
+    const { text, stats } = formatFileDiff(path, current, result.content);
+    const count = result.applied > 1 ? `${result.applied} edits, ` : '';
+    return {
+      toolName: 'edit_lines',
+      description: `Edit file: ${path}  (${count}${describeDiff(stats)})`,
+      detail: text,
+    };
+  };
+
+  const edit_lines = withApproval(
+    edit_lines_spec,
+    approval,
+    describeLineEdit,
+    config.signal,
+    config.caller,
+    config.taskContext,
+  );
+
+  return { read_file, write_file, edit_file, edit_lines };
 }

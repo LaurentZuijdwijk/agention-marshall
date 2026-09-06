@@ -375,12 +375,12 @@ test('an oldString edit needs no prior read', async () => {
 
 // The counterpart the gate still holds: line numbers describe one specific
 // version of a file, and a caller that never read it has no such version.
-test('a line-addressed edit still requires a prior read', async () => {
+test('edit_lines still requires a prior read', async () => {
   const root = tempRoot();
   writeFileSync(join(root, 'target.txt'), 'alpha\nbeta\n');
   const tools = createFileTools(makeConfig({ workspaceRoot: root }));
   const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
-  const result = await byName.edit_file.execute('a', 'b', {
+  const result = await byName.edit_lines.execute('a', 'b', {
     path: 'target.txt', edits: [{ startLine: 1, endLine: 1, newString: 'ALPHA' }],
   }, 'id');
   assert.match(result, /has not been read this session/);
@@ -765,8 +765,8 @@ test('a batch is shown to the approver as one diff of the finished file', async 
 // A successful oldString edit records the file's new hash (for write_file's
 // benefit), which used to be indistinguishable from "the caller has read this".
 // A line-addressed edit could then run against a version whose numbers nobody
-// had ever seen — the exact thing its gate exists to prevent.
-test('an oldString edit does not unlock line addressing on an unread file', async () => {
+// had ever seen — the exact thing edit_lines's gate exists to prevent.
+test('an edit_file edit does not unlock edit_lines on an unread file', async () => {
   const root = tempRoot();
   writeFileSync(join(root, 'a.js'), 'alpha\nbeta\ngamma\n');
   const tools = createFileTools(makeConfig({ workspaceRoot: root }));
@@ -777,7 +777,7 @@ test('an oldString edit does not unlock line addressing on an unread file', asyn
   }, 'id');
   assert.match(first, /Successfully edited/, 'precondition: an oldString edit needs no read');
 
-  const byLine = await byName.edit_file.execute('a', 'b', {
+  const byLine = await byName.edit_lines.execute('a', 'b', {
     path: 'a.js', edits: [{ startLine: 1, endLine: 1, newString: 'ALPHA' }],
   }, 'id');
 
@@ -786,7 +786,7 @@ test('an oldString edit does not unlock line addressing on an unread file', asyn
     'and the line-addressed edit changed nothing');
 });
 
-test('a real read does unlock line addressing, including after an edit', async () => {
+test('a real read does unlock edit_lines, including after an edit_file edit', async () => {
   const root = tempRoot();
   writeFileSync(join(root, 'a.js'), 'alpha\nbeta\n');
   const tools = createFileTools(makeConfig({ workspaceRoot: root }));
@@ -794,7 +794,7 @@ test('a real read does unlock line addressing, including after an edit', async (
 
   await byName.read_file.execute('a', 'b', { path: 'a.js' }, 'id');
   await byName.edit_file.execute('a', 'b', { path: 'a.js', edits: [{ oldString: 'beta', newString: 'BETA' }] }, 'id');
-  const byLine = await byName.edit_file.execute('a', 'b', {
+  const byLine = await byName.edit_lines.execute('a', 'b', {
     path: 'a.js', edits: [{ startLine: 1, endLine: 1, newString: 'ALPHA\n' }],
   }, 'id');
 
@@ -844,4 +844,162 @@ test('an ordinary batch of small edits is unaffected by the ceiling', async () =
 
   assert.match(result, /Successfully edited m\.js \(3 changes\)/);
   assert.equal(readFileSync(join(root, 'm.js'), 'utf8'), 'ALPHA\nBETA\nGAMMA\n');
+});
+
+// ── edit_lines: line-addressed replacement, split out of edit_file ──────────
+//
+// edit_file and edit_lines used to be one tool with two addressing modes on
+// the same edits[] entry, which meant a schema that could never require
+// oldString+newString (or startLine+endLine+newString) outright — an item was
+// only valid in one of two shapes, and JSON Schema's `oneOf` for that has
+// uneven provider support. Splitting them means each schema is now fully
+// specified, `required` included, and a model reaching for line-addressing by
+// passing bare startLine/endLine at the top level gets the same fallback
+// oldString already had — not a bare "no edits given" with no hint why.
+
+test('edit_lines replaces a line range after a read', async () => {
+  const root = tempRoot();
+  writeFileSync(join(root, 'a.txt'), 'alpha\nbeta\ngamma\n');
+  const tools = createFileTools(makeConfig({ workspaceRoot: root }));
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+
+  await byName.read_file.execute('a', 'b', { path: 'a.txt' }, 'id');
+  const result = await byName.edit_lines.execute('a', 'b', {
+    path: 'a.txt', edits: [{ startLine: 2, endLine: 2, newString: 'BETA\n' }],
+  }, 'id');
+
+  assert.match(result, /Successfully edited/);
+  assert.equal(readFileSync(join(root, 'a.txt'), 'utf8'), 'alpha\nBETA\ngamma\n');
+});
+
+test('edit_lines accepts a bare startLine/endLine at the top level, same fallback as oldString', async () => {
+  const root = tempRoot();
+  writeFileSync(join(root, 'a.txt'), 'alpha\nbeta\n');
+  const tools = createFileTools(makeConfig({ workspaceRoot: root }));
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+
+  await byName.read_file.execute('a', 'b', { path: 'a.txt' }, 'id');
+  const result = await byName.edit_lines.execute('a', 'b', {
+    path: 'a.txt', startLine: 1, endLine: 1, newString: 'ALPHA\n',
+  }, 'id');
+
+  assert.match(result, /Successfully edited/);
+  assert.equal(readFileSync(join(root, 'a.txt'), 'utf8'), 'ALPHA\nbeta\n');
+});
+
+test('edit_lines batches several ranges in one call, applied against the original', async () => {
+  const root = tempRoot();
+  writeFileSync(join(root, 'a.txt'), 'alpha\nbeta\ngamma\n');
+  const tools = createFileTools(makeConfig({ workspaceRoot: root }));
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+
+  await byName.read_file.execute('a', 'b', { path: 'a.txt' }, 'id');
+  const result = await byName.edit_lines.execute('a', 'b', {
+    path: 'a.txt',
+    edits: [
+      { startLine: 1, endLine: 1, newString: 'ALPHA\n' },
+      { startLine: 3, endLine: 3, newString: 'GAMMA\n' },
+    ],
+  }, 'id');
+
+  assert.match(result, /Successfully edited a\.txt \(2 changes\)/);
+  assert.equal(readFileSync(join(root, 'a.txt'), 'utf8'), 'ALPHA\nbeta\nGAMMA\n');
+});
+
+test('edit_lines accepts edits sent as a JSON string', async () => {
+  const root = tempRoot();
+  writeFileSync(join(root, 'a.txt'), 'alpha\nbeta\n');
+  const tools = createFileTools(makeConfig({ workspaceRoot: root }));
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+
+  await byName.read_file.execute('a', 'b', { path: 'a.txt' }, 'id');
+  const result = await byName.edit_lines.execute('a', 'b', {
+    path: 'a.txt', edits: JSON.stringify([{ startLine: 1, endLine: 1, newString: 'ALPHA\n' }]),
+  }, 'id');
+
+  assert.match(result, /Successfully edited/);
+  assert.equal(readFileSync(join(root, 'a.txt'), 'utf8'), 'ALPHA\nbeta\n');
+});
+
+test('edit_lines rejects a range past the end of the file, naming the line count', async () => {
+  const root = tempRoot();
+  writeFileSync(join(root, 'a.txt'), 'alpha\nbeta\n');
+  const tools = createFileTools(makeConfig({ workspaceRoot: root }));
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+
+  await byName.read_file.execute('a', 'b', { path: 'a.txt' }, 'id');
+  const result = await byName.edit_lines.execute('a', 'b', {
+    path: 'a.txt', edits: [{ startLine: 5, endLine: 6, newString: 'x' }],
+  }, 'id');
+
+  assert.match(result, /not a valid range/);
+  assert.match(result, /3 lines/, 'the trailing newline leaves a final empty line, per applyEdits\' own convention');
+  assert.equal(readFileSync(join(root, 'a.txt'), 'utf8'), 'alpha\nbeta\n');
+});
+
+test('edit_lines rejects two ranges that overlap in the same call', async () => {
+  const root = tempRoot();
+  writeFileSync(join(root, 'a.txt'), 'alpha\nbeta\ngamma\n');
+  const tools = createFileTools(makeConfig({ workspaceRoot: root }));
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+
+  await byName.read_file.execute('a', 'b', { path: 'a.txt' }, 'id');
+  const result = await byName.edit_lines.execute('a', 'b', {
+    path: 'a.txt',
+    edits: [
+      { startLine: 1, endLine: 2, newString: 'x' },
+      { startLine: 2, endLine: 3, newString: 'y' },
+    ],
+  }, 'id');
+
+  assert.match(result, /overlaps another/);
+  assert.equal(readFileSync(join(root, 'a.txt'), 'utf8'), 'alpha\nbeta\ngamma\n', 'nothing written on failure');
+});
+
+test('edit_lines says so when given nothing to work with', async () => {
+  const root = tempRoot();
+  writeFileSync(join(root, 'a.txt'), 'alpha\n');
+  const tools = createFileTools(makeConfig({ workspaceRoot: root }));
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+
+  const result = await byName.edit_lines.execute('a', 'b', { path: 'a.txt' }, 'id');
+  assert.match(result, /no edits given/);
+  assert.match(result, /startLine, endLine, newString/);
+});
+
+test('edit_lines does not exist under the old edit_file name for line addressing', async () => {
+  const root = tempRoot();
+  writeFileSync(join(root, 'a.txt'), 'alpha\nbeta\n');
+  const tools = createFileTools(makeConfig({ workspaceRoot: root }));
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+
+  await byName.read_file.execute('a', 'b', { path: 'a.txt' }, 'id');
+  const result = await byName.edit_file.execute('a', 'b', {
+    path: 'a.txt', edits: [{ startLine: 1, endLine: 1, newString: 'ALPHA' }],
+  }, 'id');
+
+  // No oldString and no startLine/endLine support left in edit_file's own
+  // parsing — this is indistinguishable from an empty edits[] to it now.
+  assert.match(result, /no edits given/);
+  assert.equal(readFileSync(join(root, 'a.txt'), 'utf8'), 'alpha\nbeta\n');
+});
+
+test('edit_lines is shown to the approver as a diff, same as edit_file', async () => {
+  const root = tempRoot();
+  writeFileSync(join(root, 'a.txt'), 'alpha\nbeta\n');
+  const seen: ApprovalRequest[] = [];
+  const tools = createFileTools(makeConfig({
+    workspaceRoot: root,
+    approval: async (req) => { seen.push(req); return 'approve'; },
+  }));
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+
+  await byName.read_file.execute('a', 'b', { path: 'a.txt' }, 'id');
+  await byName.edit_lines.execute('a', 'b', {
+    path: 'a.txt', edits: [{ startLine: 2, endLine: 2, newString: 'BETA' }],
+  }, 'id');
+
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].toolName, 'edit_lines');
+  assert.match(seen[0].detail, /BETA/);
 });

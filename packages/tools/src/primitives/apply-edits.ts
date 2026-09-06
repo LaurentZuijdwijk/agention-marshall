@@ -29,7 +29,10 @@
  * they address it using the numbers already in front of it, with nothing to
  * reconstruct. The trade is that line numbers are only meaningful against the
  * version that was read, so a line-addressed edit is gated on the file being
- * unchanged since — see `read-gate.ts`.
+ * unchanged since — see the `edit_lines` tool in `read-gate.ts` (a separate
+ * tool from `edit_file`, which only ever produces the `oldString` variant —
+ * one schema per shape is what lets each be fully specified, `required`
+ * fields included).
  */
 export type EditRequest =
   | { oldString: string; newString: string; startLine?: undefined; endLine?: undefined }

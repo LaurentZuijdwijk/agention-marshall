@@ -68,6 +68,7 @@ const FILE_RULES = [
   '- Use edit_file for targeted changes, write_file only for new files or full rewrites',
   '- Batch every *small* change to one file into a single edit_file call, one entry per change in edits[]. Several calls to the same file cost far more than the same edits together, and keep each oldString only as long as it needs to be to be unique',
   '- Do not batch large edits. You pay output tokens for every character you put in edits[], and a call big enough to exhaust that budget is cut off mid-argument and lost whole. Rewriting most of a file is a write_file; the same mechanical change across many files is one run_shell script, not many edits',
+  '- If matching by content is awkward but you know the exact lines (e.g. from read_file), use edit_lines instead of edit_file — it needs a prior read_file on that file, unchanged since',
   '- Batch unrelated searches or directory listings the same way: several patterns in one search call via patterns[], several directories in one list_dir call via paths[], instead of issuing them one at a time',
   '- run_shell already starts in the workspace directory: do not cd to an invented or machine-specific absolute path; use relative paths such as ./src/main.js, and use pwd if you need to confirm the current directory',
 ];

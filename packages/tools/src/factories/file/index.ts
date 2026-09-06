@@ -26,9 +26,9 @@ export function createFileTools(config: ToolConfig, dedupeCache?: DedupeCache): 
   const { workspaceRoot, limits = {} } = config;
   const maxSearchResults = limits.maxSearchResults ?? MAX_SEARCH_RESULTS;
 
-  const { read_file, write_file, edit_file } = createReadGateTools(config, dedupeCache);
+  const { read_file, write_file, edit_file, edit_lines } = createReadGateTools(config, dedupeCache);
   const list_dir = buildListDir(workspaceRoot);
   const search = buildSearch(workspaceRoot, maxSearchResults);
 
-  return [read_file, list_dir, search, write_file, edit_file];
+  return [read_file, list_dir, search, write_file, edit_file, edit_lines];
 }
