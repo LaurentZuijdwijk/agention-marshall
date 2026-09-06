@@ -1,0 +1,91 @@
+# @agentionai/marshall-plugin-browser
+
+A local MCP server that gives the Marshall coding agent browser control and
+screenshots — navigate, click, type, read a page, read its console, and see
+what's on screen. It doesn't drive a browser itself; it's the server half of
+a pair with [`marshall-browser-extension`](../browser-extension), a Chrome
+extension that does the actual driving.
+
+```
+Chrome extension  <—WebSocket (loopback, token-paired)—>  this server  <—MCP over HTTP—>  Marshall
+```
+
+## Run it
+
+### The easy way: let Marshall manage it
+
+Inside the `marshall` CLI:
+
+```
+/plugins add browser
+```
+
+This spawns the server for you (reusing one already running at the default
+port, if there is one), health-checks it, registers it as an MCP server, and
+persists a pairing token in your global config — so it comes back up
+automatically on future launches too, with no re-pairing needed. The first
+time, it prints the token; click the extension's toolbar icon and paste it
+into the popup (below) and you're done. `/plugins disable browser` stops it and unregisters
+it. `/plugins` (or `/plugins list`) on its own lists what's configured.
+
+### The manual way
+
+```bash
+npx @agentionai/marshall-plugin-browser
+```
+
+It prints an MCP endpoint and a one-time pairing token:
+
+```
+marshall-plugin-browser is running.
+
+  MCP endpoint:  http://127.0.0.1:8712/mcp
+  Pairing token: <random>
+```
+
+1. Add the endpoint to your project's `.marshall/config.json`:
+
+   ```json
+   { "mcpServers": [{ "name": "browser", "url": "http://127.0.0.1:8712/mcp" }] }
+   ```
+
+2. Load `marshall-browser-extension`'s `dist/` folder into Chrome
+   (`chrome://extensions` → Developer mode → Load unpacked), click its
+   toolbar icon, and paste the pairing token into the popup.
+
+Restarting a manually-run server generates a new token; re-paste it into the
+extension. (The managed path above avoids this by persisting the token.)
+
+### Either way
+
+The server binds to `127.0.0.1` only. The token is what stops a page from
+pairing with the bridge itself — a bare open loopback port would otherwise be
+reachable from any tab's own `fetch`/`WebSocket`.
+
+## Tools
+
+| Tool | What it does |
+|---|---|
+| `browser_navigate` | Navigate the active tab to a URL |
+| `browser_screenshot` | Capture the active tab's visible viewport |
+| `browser_click` | Click the first element matching a CSS selector |
+| `browser_type` | Type into the first input/textarea matching a CSS selector |
+| `browser_read_page` | Read the active tab's visible text |
+| `browser_console_logs` | Read recent `console.*` output from the active tab |
+
+Every call goes through Marshall's normal MCP approval gate — nothing here
+bypasses it. `browser_screenshot`'s image reaches the model as real vision
+input (not a wall of base64 text), via Marshall's generic MCP image-result
+support (`ToolConfig.attachImages` in `@agentionai/marshall-tools`) — any MCP
+server returning image content blocks gets this, not just this one.
+
+Deliberately not in v1: multi-tab management, full-page screenshot
+stitching, an arbitrary-JS `eval` tool, and accessibility-tree reading.
+
+## Development
+
+```bash
+npm run build -w packages/plugin-browser   # compile
+npm run test -w packages/plugin-browser    # unit + a real MCP-client end-to-end test
+npm run start -w packages/plugin-browser   # run from source
+```

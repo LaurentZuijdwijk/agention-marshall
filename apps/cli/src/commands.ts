@@ -8,8 +8,9 @@ import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type {
-  AgentProfile, AgentJob, McpServerState, SafetyLevel, SafetyAgentConfig, UsageReport,
+  AgentProfile, AgentJob, McpServerState, PluginConfig, PluginState, SafetyLevel, SafetyAgentConfig, UsageReport,
 } from '@agentionai/marshall-engine';
+import { KNOWN_PLUGINS } from './services/known-plugins.js';
 import { formatUsageReport } from './format.js';
 import type { BackgroundJob } from '@agentionai/marshall-tools';
 import type { Approvals } from './hooks/useApprovals.js';
@@ -45,6 +46,10 @@ export interface CommandSession {
   mcpState(): McpServerState[];
   removeMcpServer(name: string): Promise<boolean>;
   reconnectMcpServer(name: string): Promise<McpServerState | null>;
+  pluginState(): PluginState[];
+  addPlugin(config: PluginConfig): Promise<{ state: PluginState; generatedToken?: string }>;
+  enablePlugin(name: string): Promise<{ state: PluginState; generatedToken?: string }>;
+  disablePlugin(name: string): Promise<boolean>;
   agents: {
     list(): AgentJob[];
     activity(id: string): string[];
@@ -77,6 +82,10 @@ export interface CommandDeps {
   /** Persist the server list after `/mcp remove` — the add path saves from the
    *  App, which is where the wizard's result lands. */
   onMcpChanged?(): void;
+  /** Persist the plugin list after `/plugins add`/`disable` — no wizard for
+   *  plugins (see resolveSlashCommand's `'plugins'` member), so this is the
+   *  only path, unlike `onMcpChanged`. */
+  onPluginsChanged?(): void;
   /** Persist the runtime mode, in the project config or globally. The App owns
    *  the write so this stays free of the filesystem. */
   onRuntimeModeChange?(mode: RuntimeMode, scope: SettingsScope): void;
@@ -145,6 +154,22 @@ function describeServer(server: McpServerState): string {
   if (server.error) return `${head}\n  ${server.error}`;
   if (server.toolNames.length === 0) return head;
   return `${head}\n  ${server.toolNames.length} tools: ${server.toolNames.join(', ')}`;
+}
+
+function describePlugin(plugin: PluginState): string {
+  const head = `${plugin.name}  ${plugin.status}  (${plugin.package})`;
+  return plugin.error ? `${head}\n  ${plugin.error}` : head;
+}
+
+/** What a freshly-generated token means for the human — the one moment it's
+ *  shown, since it's persisted from here on. Same text plugin-browser's own
+ *  standalone CLI banner prints, for a CLI-managed enable. */
+function pairingInstructions(token: string): string {
+  return [
+    `pairing token: ${token}`,
+    'paste this into the plugin\'s extension/client options — it will not be shown again ' +
+      '(re-enabling later reuses the same token, so this is a one-time step).',
+  ].join('\n');
 }
 
 /**
@@ -363,6 +388,60 @@ export function runSlashCommand(input: string, deps: CommandDeps): void {
 
       work
         .then(message => transcript.push('info', message))
+        .catch((err: unknown) => transcript.push('error', err instanceof Error ? err.message : String(err)));
+      return;
+    }
+
+    case 'plugins': {
+      if (!session) {
+        transcript.push('error', 'no model chosen yet — finish setup first');
+        return;
+      }
+
+      if (command.action === 'list') {
+        const plugins = session.pluginState();
+        transcript.push('info', plugins.length === 0
+          ? `no plugins configured — /plugins add <name> to start one (known: ${Object.keys(KNOWN_PLUGINS).join(', ')})`
+          : plugins.map(describePlugin).join('\n'));
+        return;
+      }
+
+      const { action, name } = command;
+      if (action === 'disable') {
+        session.disablePlugin(name)
+          .then(disabled => {
+            if (disabled) deps.onPluginsChanged?.();
+            transcript.push('info', disabled ? `disabled ${name}` : `${name} is not a configured plugin`);
+          })
+          .catch((err: unknown) => transcript.push('error', err instanceof Error ? err.message : String(err)));
+        return;
+      }
+
+      // add — already configured (a previous add, or hand-edited into the
+      // global config) just re-enables by name; a name nothing knows yet is
+      // looked up in KNOWN_PLUGINS and registered on the fly, which is
+      // "install" for a plugin that already ships as a dependency — see
+      // services/known-plugins.ts.
+      const alreadyConfigured = session.pluginState().some(p => p.name === name);
+      const work2 = alreadyConfigured
+        ? session.enablePlugin(name)
+        : (() => {
+            const pkg = KNOWN_PLUGINS[name];
+            if (!pkg) return Promise.resolve(null);
+            return session.addPlugin({ package: pkg, name });
+          })();
+
+      work2
+        .then(result => {
+          if (result === null) {
+            transcript.push('error', `no plugin named "${name}" — known: ${Object.keys(KNOWN_PLUGINS).join(', ')}`);
+            return;
+          }
+          deps.onPluginsChanged?.();
+          const lines = [describePlugin(result.state)];
+          if (result.generatedToken) lines.push('', pairingInstructions(result.generatedToken));
+          transcript.push(result.state.status === 'running' ? 'info' : 'error', lines.join('\n'));
+        })
         .catch((err: unknown) => transcript.push('error', err instanceof Error ? err.message : String(err)));
       return;
     }

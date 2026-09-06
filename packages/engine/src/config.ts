@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Limits, CommandPolicy } from '@agentionai/marshall-tools';
 import type { McpServerConfig } from './mcp.js';
+import type { PluginConfig } from './plugins.js';
 import type { AgentToolset } from './agent-jobs.js';
 
 export type Provider = 'claude' | 'openai' | 'gemini' | 'mistral' | 'ollama' | 'llamacpp' | 'openrouter' | 'cerebras' | 'openai-compatible';
@@ -312,6 +313,13 @@ export interface EngineConfig {
    * and the server writes its own name and description.
    */
   mcpServers?: McpServerConfig[];
+  /**
+   * Locally-spawned plugins to auto-enable at session start (those with
+   * `enabled !== false`) — see `PluginRegistry`. Each one ends up as another
+   * entry in `mcpServers` once running; this is only where its *definition*
+   * (which package, its persisted token) comes from.
+   */
+  plugins?: PluginConfig[];
   /** Tool-call approval gate. Defaults to 2 (human-in-the-loop) when unset. */
   safetyLevel?: SafetyLevel;
   /** Required when `safetyLevel` is 3 — the model that reviews each call. */

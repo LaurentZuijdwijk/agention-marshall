@@ -1,7 +1,7 @@
 import { readFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import type { AgentProfile, McpServerConfig } from '@agentionai/marshall-engine';
+import type { AgentProfile, McpServerConfig, PluginConfig } from '@agentionai/marshall-engine';
 
 // ── the on-disk shape ─────────────────────────────────────────────────────────
 //
@@ -148,6 +148,31 @@ const SavedProjectMcpSchema = z.object({
 });
 export type SavedProjectMcp = z.infer<typeof SavedProjectMcpSchema>;
 
+/** A locally-spawned plugin, as stored. `token` is a secret the same way an
+ *  MCP server's `headers` is — it's what the plugin's own client (e.g. a
+ *  browser extension) uses to pair with the server this definition starts —
+ *  which is why this lives in the same 0600, outside-the-repo file. */
+const SavedPluginSchema = z.object({
+  package: lenient(z.string()),
+  name: lenient(z.string()),
+  token: lenient(z.string()),
+  enabled: lenient(z.boolean()),
+});
+export type SavedPlugin = z.infer<typeof SavedPluginSchema>;
+
+/**
+ * The project file's plugin section — safe to commit. Same shape and same
+ * reason as `SavedProjectMcp`: `enable`/`disable` select from what the global
+ * config defines. Unlike MCP, a project cannot declare its own plugin —
+ * spawning a process needs a package resolvable in this environment, which
+ * is an install-time concern, not something a committed file should carry.
+ */
+const SavedProjectPluginSchema = z.object({
+  enable: lenient(z.array(z.string())),
+  disable: lenient(z.array(z.string())),
+});
+export type SavedProjectPlugin = z.infer<typeof SavedProjectPluginSchema>;
+
 /**
  * A user-defined agent the coder can delegate to by name — a persona
  * (`spawn_agent`'s `agent_name`), not an endpoint. No credential field: like
@@ -188,6 +213,8 @@ const SavedConfigShape = SavedProfileSchema.extend({
   providers: lenientArray(SavedProviderEntrySchema),
   mcpServers: lenientArray(SavedMcpServerSchema),
   mcp: lenient(SavedProjectMcpSchema),
+  plugins: lenientArray(SavedPluginSchema),
+  plugin: lenient(SavedProjectPluginSchema),
   agents: lenientArray(SavedAgentEntrySchema),
 });
 type SavedConfigShape = z.infer<typeof SavedConfigShape>;
@@ -257,6 +284,11 @@ export function validateForWrite(config: SavedConfig, previous?: SavedConfig): s
   for (const server of config.mcpServers ?? []) {
     if (priorServers.includes(server)) continue;
     if (!server.name || !server.url) problems.push('mcpServers: every server needs a name and a url');
+  }
+  const priorPlugins: readonly unknown[] = previous?.plugins ?? [];
+  for (const plugin of config.plugins ?? []) {
+    if (priorPlugins.includes(plugin)) continue;
+    if (!plugin.package || !plugin.name) problems.push('plugins: every plugin needs a package and a name');
   }
   return problems.length > 0 ? problems.join('; ') : undefined;
 }
@@ -810,6 +842,41 @@ export function danglingMcpSelections(global: SavedConfig, project: SavedConfig)
     .filter(name => !defined.has(name));
 }
 
+/**
+ * Configured plugins, with anything malformed dropped — same reasoning as
+ * `savedMcpServers`: this becomes a spawned process, so a `package`/`name`-
+ * less entry is discarded here rather than failing later at spawn time.
+ */
+export function savedPlugins(config: SavedConfig): PluginConfig[] {
+  return (config.plugins ?? [])
+    .filter((p): p is SavedPlugin & { package: string; name: string } =>
+      Boolean(p && typeof p.package === 'string' && typeof p.name === 'string'))
+    .map(p => ({
+      package: p.package,
+      name: p.name,
+      ...(p.token ? { token: p.token } : {}),
+      ...(p.enabled === false ? { enabled: false } : {}),
+    }));
+}
+
+/**
+ * The plugins to actually offer, from the two files — same enable/disable
+ * precedence as `resolveMcpServers`, minus the "project declares its own"
+ * case: a plugin's definition (the package to spawn) is a global-only,
+ * install-time concern, so there is nothing here for a project to strip
+ * credentials from.
+ */
+export function resolvePlugins(global: SavedConfig, project: SavedConfig): PluginConfig[] {
+  const section = project.plugin ?? {};
+  const disabled = new Set(section.disable ?? []);
+  const enabled = new Set(section.enable ?? []);
+
+  return savedPlugins(global)
+    .filter(p => !disabled.has(p.name))
+    .filter(p => p.enabled !== false || enabled.has(p.name))
+    .map(({ enabled: _on, ...p }) => p);
+}
+
 /** Read both files and report any selection that resolves to nothing. */
 export function loadMcpWarnings(workspaceRoot: string): string[] {
   const global = readJsonConfig(globalConfigPath());
@@ -945,6 +1012,12 @@ export function withMcpServers(config: SavedConfig, servers: McpServerConfig[]):
   return { ...config, mcpServers: servers };
 }
 
+/** Set the plugin definitions, leaving everything else untouched — same
+ *  shape and reason as `withMcpServers`. */
+export function withPlugins(config: SavedConfig, plugins: PluginConfig[]): SavedConfig {
+  return { ...config, plugins };
+}
+
 /**
  * Set the named-agent list, leaving everything else in the file untouched.
  *
@@ -962,4 +1035,12 @@ export function withProjectMcp(
   update: (current: SavedProjectMcp) => SavedProjectMcp,
 ): SavedConfig {
   return { ...config, mcp: update(config.mcp ?? {}) };
+}
+
+/** Set the project's plugin selection, preserving anything else the repo pins. */
+export function withProjectPlugin(
+  config: SavedConfig,
+  update: (current: SavedProjectPlugin) => SavedProjectPlugin,
+): SavedConfig {
+  return { ...config, plugin: update(config.plugin ?? {}) };
 }

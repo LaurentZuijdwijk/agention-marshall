@@ -49,9 +49,12 @@ export {
   adaptMcpTools,
   namespaceMcpTool,
   stringifyResult as stringifyMcpResult,
+  multimodalMcpResult,
   DEFAULT_MCP_TIMEOUT_MS,
+  SUPPORTED_IMAGE_MIME_TYPES,
+  MAX_TOOL_IMAGE_BYTES,
 } from './factories/mcp-tools.js';
-export type { McpToolOptions } from './factories/mcp-tools.js';
+export type { McpToolOptions, McpMultimodalResult } from './factories/mcp-tools.js';
 export { createScratchTools } from './factories/scratch-tools.js';
 export { createGitHubTools } from './factories/github-tools.js';
 export { createConflictTools } from './factories/conflict-tools.js';

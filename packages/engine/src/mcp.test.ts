@@ -1,12 +1,36 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { McpRegistry } from './mcp.js';
+import { McpRegistry, formatMcpResult } from './mcp.js';
 
 /** Nothing is listening on port 1, so connecting fails fast and for real —
  *  a stubbed client would prove the stub degrades gracefully, not the code. */
 const DEAD_URL = 'http://127.0.0.1:1/mcp';
 
 const toolConfig = { workspaceRoot: '/tmp', approval: async () => 'approve' as const };
+
+test('formatMcpResult renders a text-only result exactly as no formatter would', () => {
+  const result = formatMcpResult({ content: [{ type: 'text', text: 'hello' }] });
+  assert.equal(result, 'hello');
+});
+
+test('formatMcpResult splits an image out into a multimodal result', () => {
+  const result = formatMcpResult({
+    content: [
+      { type: 'text', text: 'Captured https://example.com' },
+      { type: 'image', data: 'ZmFrZQ==', mimeType: 'image/png' },
+    ],
+  }) as { __marshallMultimodal: true; text: string; images: { data: string; mimeType: string }[] };
+  assert.equal(result.__marshallMultimodal, true);
+  assert.equal(result.text, 'Captured https://example.com');
+  assert.deepEqual(result.images, [{ data: 'ZmFrZQ==', mimeType: 'image/png' }]);
+});
+
+test('formatMcpResult on an image-only result still returns the image, with empty text', () => {
+  const result = formatMcpResult({
+    content: [{ type: 'image', data: 'ZmFrZQ==', mimeType: 'image/png' }],
+  }) as { images: { data: string; mimeType: string }[] };
+  assert.equal(result.images.length, 1);
+});
 
 test('an empty registry reports itself as empty and offers no tools', () => {
   const registry = new McpRegistry();

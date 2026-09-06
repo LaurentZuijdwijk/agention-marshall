@@ -27,6 +27,43 @@ import { withApproval } from './approval.js';
 /** Cap on a single MCP call. Remote servers have no timeout of their own here. */
 export const DEFAULT_MCP_TIMEOUT_MS = 60_000;
 
+/**
+ * Mime types every provider we talk to accepts as an attached image, and the
+ * per-image size ceiling (measured on the decoded bytes, matching how
+ * providers publish their own limits). Mirrors
+ * `packages/engine/src/images.ts`'s limits for the same reason that file
+ * exists — Anthropic is the tightest of the providers, so one number covers
+ * all of them — duplicated here rather than imported so this package keeps
+ * its only dependency on `@agentionai/agents` and Node built-ins.
+ */
+export const SUPPORTED_IMAGE_MIME_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+export const MAX_TOOL_IMAGE_BYTES = 5 * 1024 * 1024;
+
+/**
+ * What `MCPClientOptions.formatResult` returns for a result carrying image
+ * content blocks — see `packages/engine/src/mcp.ts`. `adaptMcpTools` is the
+ * only place that constructs (via `multimodalMcpResult`) or reads this shape;
+ * everything else treats an MCP result as an opaque `unknown`.
+ */
+export interface McpMultimodalResult {
+  readonly __marshallMultimodal: true;
+  /** Rendered exactly as the SDK's default text renderer would, minus the image blocks. */
+  text: string;
+  images: { data: string; mimeType: string }[];
+}
+
+export function multimodalMcpResult(
+  text: string,
+  images: { data: string; mimeType: string }[],
+): McpMultimodalResult {
+  return { __marshallMultimodal: true, text, images };
+}
+
+function isMultimodalResult(value: unknown): value is McpMultimodalResult {
+  return typeof value === 'object' && value !== null
+    && (value as { __marshallMultimodal?: unknown }).__marshallMultimodal === true;
+}
+
 /** Sub-namespace separator, matching the convention MCP hosts have converged on. */
 const NAMESPACE = 'mcp__';
 
@@ -60,7 +97,7 @@ export function adaptMcpTools(
   config: ToolConfig,
   options: McpToolOptions,
 ): Tool<string>[] {
-  const { approval, signal, caller, taskContext } = config;
+  const { approval, signal, caller, taskContext, attachImages } = config;
   const timeoutMs = options.timeoutMs ?? DEFAULT_MCP_TIMEOUT_MS;
 
   return tools.map((tool) => {
@@ -82,6 +119,7 @@ export function adaptMcpTools(
         if (signal?.aborted) return 'Task interrupted — the tool was not called.';
         try {
           const result = await callWithTimeout(tool, prompt.name, input, timeoutMs, signal);
+          if (isMultimodalResult(result)) return renderMultimodalResult(result, attachImages);
           return stringifyResult(result);
         } catch (err) {
           // Never rethrow. The model can react to a described failure; it cannot
@@ -155,6 +193,50 @@ async function callWithTimeout(
  * `structuredContent`, so this is the difference between the model reading a
  * result and reading "[object Object]".
  */
+/**
+ * Turns a multimodal MCP result into the tool's text return value, pushing
+ * whatever images pass the mime/size check through `attachImages` so the
+ * belt's owner (the engine, via `History.addMessage`) can put them in front
+ * of the model on the next turn.
+ *
+ * Never drops an image silently: one that fails validation, or a belt with
+ * no `attachImages` at all (a sub-agent's belt, today), is named in the text
+ * result instead, so the model knows a screenshot existed even when it
+ * couldn't see it.
+ */
+function renderMultimodalResult(
+  result: McpMultimodalResult,
+  attachImages: ((images: { data: string; mimeType: string }[]) => void) | undefined,
+): string {
+  if (result.images.length === 0) return result.text;
+
+  const accepted: { data: string; mimeType: string }[] = [];
+  const rejected: string[] = [];
+  for (const image of result.images) {
+    if (!SUPPORTED_IMAGE_MIME_TYPES.includes(image.mimeType)) {
+      rejected.push(`unsupported type ${image.mimeType}`);
+      continue;
+    }
+    const bytes = Math.floor(image.data.length * 3 / 4);
+    if (bytes > MAX_TOOL_IMAGE_BYTES) {
+      rejected.push(`${(bytes / 1024 / 1024).toFixed(1)}MB, over the ${MAX_TOOL_IMAGE_BYTES / 1024 / 1024}MB limit`);
+      continue;
+    }
+    accepted.push(image);
+  }
+
+  const notes: string[] = [];
+  if (accepted.length > 0 && attachImages) {
+    attachImages(accepted);
+    notes.push(`(${accepted.length} image${accepted.length === 1 ? '' : 's'} attached above)`);
+  } else if (accepted.length > 0) {
+    notes.push(`(this tool returned ${accepted.length} image(s), but nothing here can display them)`);
+  }
+  for (const reason of rejected) notes.push(`(an image was dropped: ${reason})`);
+
+  return [result.text, ...notes].filter(Boolean).join('\n\n');
+}
+
 export function stringifyResult(result: unknown): string {
   if (typeof result === 'string') return result;
   if (result === null || result === undefined) return '(no result)';

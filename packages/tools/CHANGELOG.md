@@ -1,5 +1,15 @@
 # @agentionai/marshall-tools
 
+## 0.9.0
+
+### Minor Changes
+
+- Add browser control and screenshots for the coding agent, via a new local MCP server (`@agentionai/marshall-plugin-browser`) backed by a companion Chrome extension (`packages/browser-extension`, unpublished). Screenshots reach the model as real vision input: MCP tool results can now carry image content that lands in front of the model on the next turn, via a new `ToolConfig.attachImages` — any MCP server returning image content benefits, not just this one. `browser_read_page` supports a token-cheap `text` mode (default) and a full `html` mode. The extension shows a small on-page indicator while Marshall is driving a tab, hidden automatically during a screenshot.
+
+  Also adds a minimal, real slice of the plugin system: a `plugins` config array and a `/plugins add|disable|list` command that spawns a locally-managed plugin's server, health-checks it, and auto-registers it as an MCP server — no more hand-editing `mcpServers` or re-pasting a pairing token every session. `/plugins add browser` is the first consumer.
+
+- Split line-addressed replacement out of `edit_file` into its own `edit_lines` tool. `edit_file` now only accepts `oldString`/`newString`, with a fully-specified schema (`required` on both fields — previously impossible, since one `edits[]` entry had to validate against two different shapes). `edit_lines` takes `startLine`/`endLine`/`newString` and keeps the same read-before-line-edit safety gate `edit_file` used to enforce for that case, plus a bare top-level fallback symmetric with `edit_file`'s (a call with `startLine`/`endLine` and no `edits` wrapper now works, instead of failing with an unexplained "no edits given").
+
 ## 0.8.0
 
 ### Minor Changes

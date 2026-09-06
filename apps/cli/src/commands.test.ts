@@ -6,7 +6,8 @@ import type { Transcript } from './hooks/useTranscript.js';
 import type { Mode } from './mode.js';
 import type { Message } from './view/message.js';
 import type {
-  AgentProfile, AgentJob, McpServerState, RuntimeMode, SafetyLevel, SafetyAgentConfig, UsageReport,
+  AgentProfile, AgentJob, McpServerState, PluginConfig, PluginState, RuntimeMode, SafetyLevel,
+  SafetyAgentConfig, UsageReport,
 } from '@agentionai/marshall-engine';
 import type { BackgroundJob } from '@agentionai/marshall-tools';
 import type { SavedAgentEntry } from './services/config-store.js';
@@ -36,6 +37,7 @@ const PROFILE: AgentProfile = { provider: 'claude', model: 'claude-sonnet-4-6' }
 function setup(overrides: Partial<CommandDeps> & {
   jobs?: BackgroundJob[];
   servers?: McpServerState[];
+  plugins?: PluginState[];
   agents?: AgentJob[];
   activity?: Record<string, string[]>;
   runtime?: RuntimeMode;
@@ -57,6 +59,10 @@ function setup(overrides: Partial<CommandDeps> & {
     mcpRemoved: [] as string[],
     mcpReconnected: [] as string[],
     mcpChanged: 0,
+    pluginAdded: [] as PluginConfig[],
+    pluginEnabled: [] as string[],
+    pluginDisabled: [] as string[],
+    pluginsChanged: 0,
     light: [] as boolean[],
     runtime: [] as RuntimeMode[],
     agentStopped: [] as string[],
@@ -69,6 +75,7 @@ function setup(overrides: Partial<CommandDeps> & {
 
   const jobs = overrides.jobs ?? [];
   const servers = overrides.servers ?? [];
+  const plugins = overrides.plugins ?? [];
   const agents = overrides.agents ?? [];
   const usage: UsageReport = {
     turn: { inputTokens: 10, outputTokens: 20 },
@@ -102,6 +109,20 @@ function setup(overrides: Partial<CommandDeps> & {
     reconnectMcpServer: async (name) => {
       calls.mcpReconnected.push(name);
       return servers.find(s => s.name === name) ?? null;
+    },
+    pluginState: () => plugins,
+    addPlugin: async (config) => {
+      calls.pluginAdded.push(config);
+      return { state: { name: config.name, package: config.package, status: 'running' }, generatedToken: 'fresh-token' };
+    },
+    enablePlugin: async (name) => {
+      calls.pluginEnabled.push(name);
+      const existing = plugins.find(p => p.name === name);
+      return { state: existing ?? { name, package: '', status: 'error', error: 'not configured' } };
+    },
+    disablePlugin: async (name) => {
+      calls.pluginDisabled.push(name);
+      return plugins.some(p => p.name === name);
     },
     agents: {
       list: () => agents,
@@ -147,6 +168,7 @@ function setup(overrides: Partial<CommandDeps> & {
     quit: () => { calls.quit++; },
     startLogin: () => ({ authUrl: 'https://auth.example' } as never),
     onMcpChanged: () => { calls.mcpChanged++; },
+    onPluginsChanged: () => { calls.pluginsChanged++; },
     onSafetyLevelChange: (level) => { calls.safetyLevelReported.push(level); },
     onRuntimeModeChange: (mode, scope) => { calls.runtimeMode.push([mode, scope]); },
     ...overrides,
@@ -621,6 +643,95 @@ describe('/mcp', () => {
     runSlashCommand('/mcp', deps);
     assert.equal(pushed[0].role, 'error');
     assert.deepEqual(modes, []);
+  });
+});
+
+describe('/plugins', () => {
+  const plugin = (over: Partial<PluginState> = {}): PluginState => ({
+    name: 'browser',
+    package: '@agentionai/marshall-plugin-browser/plugin',
+    status: 'running',
+    ...over,
+  });
+
+  it('points at /plugins add when nothing is configured', () => {
+    const { deps, pushed } = setup();
+    runSlashCommand('/plugins', deps);
+    assert.equal(pushed[0].role, 'info');
+    assert.match(pushed[0].content, /no plugins configured/);
+    assert.match(pushed[0].content, /browser/, 'the known-plugins list should be named');
+  });
+
+  it('lists each plugin with its status and package', () => {
+    const { deps, pushed } = setup({ plugins: [plugin()] });
+    runSlashCommand('/plugins', deps);
+    assert.match(pushed[0].content, /browser\s+running/);
+  });
+
+  it('shows the reason a plugin failed instead of just "error"', () => {
+    const { deps, pushed } = setup({
+      plugins: [plugin({ status: 'error', error: 'did not become healthy within 10s' })],
+    });
+    runSlashCommand('/plugins', deps);
+    assert.match(pushed[0].content, /did not become healthy/);
+  });
+
+  it('adding an already-configured plugin calls enablePlugin, not addPlugin', async () => {
+    const { deps, calls } = setup({ plugins: [plugin()] });
+    runSlashCommand('/plugins add browser', deps);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(calls.pluginEnabled, ['browser']);
+    assert.deepEqual(calls.pluginAdded, []);
+    assert.equal(calls.pluginsChanged, 1);
+  });
+
+  it('adding an unconfigured but known plugin looks it up and calls addPlugin', async () => {
+    const { deps, calls, pushed } = setup();
+    runSlashCommand('/plugins add browser', deps);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(calls.pluginAdded, [{ package: '@agentionai/marshall-plugin-browser/plugin', name: 'browser' }]);
+    assert.equal(calls.pluginsChanged, 1);
+    assert.match(pushed[0].content, /pairing token: fresh-token/);
+  });
+
+  it('adding an unknown name reports the known list instead of guessing', async () => {
+    const { deps, calls, pushed } = setup();
+    runSlashCommand('/plugins add nonexistent', deps);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(calls.pluginAdded, []);
+    assert.equal(pushed[0].role, 'error');
+    assert.match(pushed[0].content, /no plugin named "nonexistent"/);
+    assert.match(pushed[0].content, /browser/);
+  });
+
+  it('disables a plugin and persists the change', async () => {
+    const { deps, calls, pushed } = setup({ plugins: [plugin()] });
+    runSlashCommand('/plugins disable browser', deps);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(calls.pluginDisabled, ['browser']);
+    assert.equal(calls.pluginsChanged, 1);
+    assert.match(pushed[0].content, /disabled browser/);
+  });
+
+  it('does not persist when the named plugin was not configured', async () => {
+    const { deps, calls, pushed } = setup();
+    runSlashCommand('/plugins disable ghost', deps);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(calls.pluginsChanged, 0);
+    assert.match(pushed[0].content, /not a configured plugin/);
+  });
+
+  it('rejects a malformed argument with usage', () => {
+    const { deps, pushed } = setup();
+    runSlashCommand('/plugins frobnicate', deps);
+    assert.equal(pushed[0].role, 'error');
+    assert.match(pushed[0].content, /usage: \/plugins/);
+  });
+
+  it('refuses before a model is chosen', () => {
+    const { deps, pushed } = setup({ session: null });
+    runSlashCommand('/plugins', deps);
+    assert.equal(pushed[0].role, 'error');
   });
 });
 

@@ -130,6 +130,17 @@ test('scrubs the environment', async () => {
   }
 });
 
+test('extraEnv reaches the child, on top of the scrubbed allowlist', async () => {
+  const { jobs, exited } = onExit();
+  const started = jobs.start({
+    command: 'echo "[$MARSHALL_EXTRA_ENV_TEST]"',
+    cwd: tempRoot(),
+    extraEnv: { MARSHALL_EXTRA_ENV_TEST: 'injected' },
+  });
+  await exited;
+  assert.match(jobs.read(started.id)!.stdout, /\[injected\]/);
+});
+
 test('unknown ids read as undefined rather than throwing', () => {
   const jobs = createBackgroundJobs();
   assert.equal(jobs.get('nope'), undefined);

@@ -7,7 +7,7 @@ import {
   withAgents, withModelSelection, withProviderCredentials, upsertProvider, loadConfig, savedDeepProfile,
   findProvider, providerCredentials, providerKeyForHost, configPath, globalConfigPath, savedMcpServers,
   resolveMcpServers, danglingMcpSelections, projectSecretWarnings, legacyProfileWarnings, removeProvider,
-  repairConfig, validateForWrite,
+  repairConfig, validateForWrite, savedPlugins, resolvePlugins,
 } from './config-store.js';
 import type { SavedConfig } from './config-store.js';
 import type { SavedAgentEntry, SavedProviderEntry } from './config-store.js';
@@ -679,6 +679,93 @@ describe('resolveMcpServers', () => {
       mcp: { enable: ['a'] },
     });
     assert.equal('enabled' in servers[0], false);
+  });
+});
+
+describe('savedPlugins', () => {
+  it('is empty when nothing is configured', () => {
+    assert.deepEqual(savedPlugins({}), []);
+  });
+
+  it('reads package, name, token and enabled', () => {
+    assert.deepEqual(
+      savedPlugins({
+        plugins: [
+          { package: '@agentionai/marshall-plugin-browser/plugin', name: 'browser', token: 'tok' },
+          { package: 'pkg', name: 'off', enabled: false },
+        ],
+      }),
+      [
+        { package: '@agentionai/marshall-plugin-browser/plugin', name: 'browser', token: 'tok' },
+        { package: 'pkg', name: 'off', enabled: false },
+      ],
+    );
+  });
+
+  // Untrusted file content that turns into a spawned process — a half-written
+  // entry is dropped here rather than failing later at spawn time.
+  it('drops entries missing a package or a name', () => {
+    const plugins = savedPlugins({
+      plugins: [
+        { package: 'pkg', name: 'ok' },
+        { package: 'pkg' },
+        { name: 'nameless' },
+        null as never,
+      ],
+    });
+    assert.deepEqual(plugins.map(p => p.name), ['ok']);
+  });
+
+  it('omits enabled entirely when it is not false, so the default stands', () => {
+    const [p] = savedPlugins({ plugins: [{ package: 'pkg', name: 'a', enabled: true }] });
+    assert.equal('enabled' in p, false);
+  });
+});
+
+describe('resolvePlugins', () => {
+  const global = (plugins: unknown[]): SavedConfig => ({ plugins } as SavedConfig);
+
+  it('uses the global plugins when the project says nothing', () => {
+    const plugins = resolvePlugins(global([{ package: 'pkg', name: 'a' }]), {});
+    assert.deepEqual(plugins.map(p => p.name), ['a']);
+  });
+
+  it('leaves a default-off plugin off until a project asks for it', () => {
+    const config = global([{ package: 'pkg', name: 'browser', enabled: false }]);
+    assert.deepEqual(resolvePlugins(config, {}), []);
+    assert.deepEqual(
+      resolvePlugins(config, { plugin: { enable: ['browser'] } }).map(p => p.name),
+      ['browser'],
+    );
+  });
+
+  it('lets a project switch off a plugin that is on by default', () => {
+    const config = global([{ package: 'pkg', name: 'browser' }]);
+    assert.deepEqual(resolvePlugins(config, { plugin: { disable: ['browser'] } }), []);
+  });
+
+  it('lets disable win over enable', () => {
+    const config = global([{ package: 'pkg', name: 'x', enabled: false }]);
+    assert.deepEqual(resolvePlugins(config, { plugin: { enable: ['x'], disable: ['x'] } }), []);
+  });
+
+  it('carries the global token through', () => {
+    const config = global([{ package: 'pkg', name: 'a', token: 'tok' }]);
+    assert.equal(resolvePlugins(config, {})[0].token, 'tok');
+  });
+
+  it('ignores enable/disable naming plugins that do not exist', () => {
+    const plugins = resolvePlugins(global([{ package: 'pkg', name: 'a' }]), {
+      plugin: { enable: ['ghost'], disable: ['phantom'] },
+    });
+    assert.deepEqual(plugins.map(p => p.name), ['a']);
+  });
+
+  it('does not leak the enabled flag into the engine config', () => {
+    const plugins = resolvePlugins(global([{ package: 'pkg', name: 'a', enabled: false }]), {
+      plugin: { enable: ['a'] },
+    });
+    assert.equal('enabled' in plugins[0], false);
   });
 });
 

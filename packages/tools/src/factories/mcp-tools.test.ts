@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Tool } from '@agentionai/agents/core';
-import { adaptMcpTools, namespaceMcpTool, stringifyResult } from './mcp-tools.js';
+import { adaptMcpTools, namespaceMcpTool, stringifyResult, multimodalMcpResult } from './mcp-tools.js';
 import type { ToolConfig, ApprovalRequest } from '../types.js';
 
 /** Stands in for what MCPClient.getTools() hands back — same class, same shape. */
@@ -135,6 +135,58 @@ test('denial stops the call from reaching the server', async () => {
   const result = await call(tool);
   assert.equal(called, false);
   assert.match(result, /denied/i);
+});
+
+// Multimodal results (screenshots, etc.) — see McpMultimodalResult.
+
+test('a multimodal result pushes its images through attachImages and notes it in the text', async () => {
+  const attached: unknown[] = [];
+  const image = { data: 'ZmFrZQ==', mimeType: 'image/png' };
+  const [tool] = adaptMcpTools(
+    [remoteTool(async () => multimodalMcpResult('Captured https://example.com', [image]))],
+    config({ attachImages: (images) => attached.push(...images) }),
+    { server: 'browser' },
+  );
+  const result = await call(tool);
+  assert.deepEqual(attached, [image]);
+  assert.match(result, /Captured https:\/\/example\.com/);
+  assert.match(result, /attached above/);
+});
+
+test('a multimodal result with no attachImages says so instead of dropping it silently', async () => {
+  const [tool] = adaptMcpTools(
+    [remoteTool(async () => multimodalMcpResult('done', [{ data: 'ZmFrZQ==', mimeType: 'image/png' }]))],
+    config(),
+    { server: 'browser' },
+  );
+  const result = await call(tool);
+  assert.match(result, /nothing here can display them/);
+});
+
+test('a multimodal image with an unsupported mime type is rejected, not attached', async () => {
+  const attached: unknown[] = [];
+  const [tool] = adaptMcpTools(
+    [remoteTool(async () => multimodalMcpResult('done', [{ data: 'ZmFrZQ==', mimeType: 'image/svg+xml' }]))],
+    config({ attachImages: (images) => attached.push(...images) }),
+    { server: 'browser' },
+  );
+  const result = await call(tool);
+  assert.equal(attached.length, 0);
+  assert.match(result, /dropped/);
+  assert.match(result, /image\/svg\+xml/);
+});
+
+test('a multimodal image over the size limit is rejected, not attached', async () => {
+  const attached: unknown[] = [];
+  const huge = 'A'.repeat(7 * 1024 * 1024); // decodes to ~5.25MB, over the 5MB cap
+  const [tool] = adaptMcpTools(
+    [remoteTool(async () => multimodalMcpResult('done', [{ data: huge, mimeType: 'image/png' }]))],
+    config({ attachImages: (images) => attached.push(...images) }),
+    { server: 'browser' },
+  );
+  const result = await call(tool);
+  assert.equal(attached.length, 0);
+  assert.match(result, /over the 5MB limit/);
 });
 
 test('stringifyResult leaves strings alone and names an empty result', () => {

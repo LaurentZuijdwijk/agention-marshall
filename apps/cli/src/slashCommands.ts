@@ -9,7 +9,7 @@ import type { RuntimeMode, SettingsScope } from './services/settings.js';
 // existing `/agents` (which lists what's been *spawned*, a different concept
 // — see the comment on `SlashCommandResult`'s `'team'` member). `/team` is
 // the new command instead.
-export const SLASH_COMMANDS = ['/agents', '/clear', '/config', '/cwd', '/exit', '/goal', '/help', '/jobs', '/login', '/mcp', '/memory', '/model', '/plan', '/review', '/runtime', '/safety', '/setup', '/stream', '/team', '/tokens', '/update', '/version'] as const;
+export const SLASH_COMMANDS = ['/agents', '/clear', '/config', '/cwd', '/exit', '/goal', '/help', '/jobs', '/login', '/mcp', '/memory', '/model', '/plan', '/plugins', '/review', '/runtime', '/safety', '/setup', '/stream', '/team', '/tokens', '/update', '/version'] as const;
 
 /** Which tier `/model` is about to change. `both` is the first-run chain. */
 export type ModelTarget = 'both' | 'deep' | 'fast' | 'off';
@@ -74,6 +74,12 @@ export type SlashCommandResult =
   | { type: 'mcp'; action: 'list' }
   | { type: 'mcp'; action: 'add' }
   | { type: 'mcp'; action: 'remove' | 'reconnect'; server: string }
+  /** `/plugins` lists (bare or `list`); `add`/`disable` name one. Unlike
+   *  `/mcp add`, this `add` needs no wizard — a not-yet-configured name is
+   *  looked up in services/known-plugins.ts, so it's a plain verb+name like
+   *  `remove`/`reconnect` above, not its own no-argument member. */
+  | { type: 'plugins'; action: 'list' }
+  | { type: 'plugins'; action: 'add' | 'disable'; name: string }
   /** `/team` lists named agents the coder can delegate to by name; `add` opens
    *  a wizard that defines or replaces one, `remove` forgets one by name. A
    *  different command from `/agents` on purpose: that one lists what's been
@@ -120,6 +126,7 @@ export const SUBCOMMANDS: Record<string, readonly SubcommandWord[]> = {
   '/jobs': [{ word: 'kill', operand: '<id>' }],
   '/agents': [{ word: 'stop', operand: '<id>' }],
   '/mcp': [{ word: 'add' }, { word: 'remove', operand: '<name>' }, { word: 'reconnect', operand: '<name>' }],
+  '/plugins': [{ word: 'list' }, { word: 'add', operand: '<name>' }, { word: 'disable', operand: '<name>' }],
   '/team': [{ word: 'add' }, { word: 'remove', operand: '<name>' }],
   '/config': [{ word: 'repair' }],
 };
@@ -241,6 +248,18 @@ export function resolveSlashCommand(input: string): SlashCommandResult {
       };
     }
 
+    case '/plugins': {
+      if (!args || args === 'list') return { type: 'plugins', action: 'list' };
+      const [verb, name] = args.split(/\s+/);
+      if ((verb === 'add' || verb === 'disable') && name) {
+        return { type: 'plugins', action: verb, name };
+      }
+      return {
+        type: 'usage',
+        message: `usage: /plugins [list|add <name>|disable <name>] — got "${args}"`,
+      };
+    }
+
     case '/jobs': {
       if (!args) return { type: 'jobs' };
       const [verb, id] = args.split(/\s+/);
@@ -297,6 +316,9 @@ export const HELP = `commands:
   /mcp add           — connect a new MCP server over http
   /mcp remove <name> — disconnect and forget a server
   /mcp reconnect <n> — retry a server that failed
+  /plugins           — list configured plugins and what each is doing
+  /plugins add <n>   — start (or reuse) a plugin's local server and register it
+  /plugins disable <n> — stop a plugin and unregister its server
   /config repair     — fix a pre-workspace-format model choice, or an apiKey
                        that leaked into the committed project file
   /clear             — clear history, dedupe cache, and scratch notes

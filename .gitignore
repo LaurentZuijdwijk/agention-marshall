@@ -13,6 +13,12 @@ dist/
 # agent scratch
 .marshall/
 
+# packages/engine/src/plugins.test.ts writes real fixture plugins here (needs
+# to be inside the repo tree so bare specifiers like '@modelcontextprotocol/sdk'
+# resolve) and cleans them up itself, but a killed test run can leave one behind
+.tmp-plugin-fixture-*/
+.tmp-plugin-bad-*/
+
 # editor
 .claude/
 .vscode/

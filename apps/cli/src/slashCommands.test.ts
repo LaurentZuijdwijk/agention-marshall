@@ -249,6 +249,27 @@ describe('slashCommands', () => {
     });
   });
 
+  describe('/plugins', () => {
+    it('lists with no arguments, and with "list"', () => {
+      assert.deepEqual(resolveSlashCommand('/plugins'), { type: 'plugins', action: 'list' });
+      assert.deepEqual(resolveSlashCommand('/plugins list'), { type: 'plugins', action: 'list' });
+    });
+
+    it('takes a name for add and disable', () => {
+      assert.deepEqual(resolveSlashCommand('/plugins add browser'), { type: 'plugins', action: 'add', name: 'browser' });
+      assert.deepEqual(resolveSlashCommand('/plugins disable browser'), { type: 'plugins', action: 'disable', name: 'browser' });
+    });
+
+    it('rejects add and disable with no name given', () => {
+      assert.equal(resolveSlashCommand('/plugins add').type, 'usage');
+      assert.equal(resolveSlashCommand('/plugins disable').type, 'usage');
+    });
+
+    it('rejects a verb it does not know', () => {
+      assert.equal(resolveSlashCommand('/plugins frobnicate x').type, 'usage');
+    });
+  });
+
   describe('/team', () => {
     it('lists with no arguments, and with "list"', () => {
       assert.deepEqual(resolveSlashCommand('/team'), { type: 'team', action: 'list' });

@@ -23,3 +23,5 @@ export type { Pricing, PriceBook, TokenCount, UsageTotals, RoleUsage, UsageRepor
 export { createUsageTally, throughputOf, pricingFor, rate, formatTokens, formatCost, formatRate } from './usage.js';
 export { McpRegistry } from './mcp.js';
 export type { McpServerConfig, McpServerState, McpStatus } from './mcp.js';
+export { PluginRegistry } from './plugins.js';
+export type { PluginConfig, PluginState, PluginStatus, MarshallServerPlugin } from './plugins.js';

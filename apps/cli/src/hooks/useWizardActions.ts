@@ -51,6 +51,14 @@ export function useWizardActions({
     if (enableForProjectOnly) void config.enableProjectMcpServer(enableForProjectOnly);
   };
 
+  /** Same relationship as `persistMcp`: the engine session owns the live
+   *  plugin (its token, whether it's currently running), the config file
+   *  only ever records what `session.pluginConfigs()` reports. */
+  const persistPlugins = () => {
+    if (!session) return;
+    void config.savePlugins(session.pluginConfigs());
+  };
+
   /**
    * Disconnect a server and forget it, in that order.
    *
@@ -178,7 +186,7 @@ export function useWizardActions({
   };
 
   return {
-    seedProfile, persistMcp, removeMcpServer, handleMcpAdd,
+    seedProfile, persistMcp, removeMcpServer, handleMcpAdd, persistPlugins,
     handleSafetySetupComplete, handleSetupComplete, persistSafety,
     applyAgents, handleTeamAdd,
   };

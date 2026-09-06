@@ -36,12 +36,12 @@
 
 import { writeFile, mkdir, chmod, rename, rm } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import type { AgentProfile, McpServerConfig } from '@agentionai/marshall-engine';
+import type { AgentProfile, McpServerConfig, PluginConfig } from '@agentionai/marshall-engine';
 import {
   configPath, findProvider, globalConfigPath, legacyProfileWarnings, loadConfig, loadMcpWarnings,
   projectSecretWarnings, providerCredentials, providerKeyForHost, readJsonConfig, removeProvider,
-  repairConfig, resolveMcpServers, validateForWrite, withAgents, withMcpServers, withModelSelection,
-  withProjectMcp, withProviderCredentials,
+  repairConfig, resolveMcpServers, resolvePlugins, validateForWrite, withAgents, withMcpServers,
+  withModelSelection, withPlugins, withProjectMcp, withProjectPlugin, withProviderCredentials,
 } from './config-store.js';
 import type { ProviderRef, SavedAgentEntry, SavedConfig, SavedProviderEntry } from './config-store.js';
 import {
@@ -63,6 +63,8 @@ export interface ConfigSnapshot {
   providers: SavedProviderEntry[];
   /** The servers this workspace should connect to, after the project's selection. */
   mcpServers: McpServerConfig[];
+  /** Plugins this workspace should auto-enable, after the project's selection. */
+  plugins: PluginConfig[];
   /** Named agents this workspace has defined, project-scoped. */
   agents: SavedAgentEntry[];
   /** Resolved settings, CLI flags applied. What the session runs with. */
@@ -143,6 +145,7 @@ export class ConfigService {
       config,
       providers: config.providers ?? [],
       mcpServers: resolveMcpServers(global, project),
+      plugins: resolvePlugins(global, project),
       agents: config.agents ?? [],
       settings: resolveSettings(readSettings(config), this.flags),
       projectSettings: readSettings(project),
@@ -311,6 +314,24 @@ export class ConfigService {
   enableProjectMcpServer(name: string): Promise<boolean> {
     return this.write('project', 'MCP selection', config =>
       withProjectMcp(config, current => ({
+        ...current,
+        enable: [...new Set([...(current.enable ?? []), name])],
+      })));
+  }
+
+  /**
+   * Persist the plugin definitions — always the global file, same reason as
+   * `saveMcpServers`: a plugin's `token` is a secret.
+   */
+  savePlugins(plugins: PluginConfig[]): Promise<boolean> {
+    return this.write('global', 'plugins', config => withPlugins(config, plugins));
+  }
+
+  /** Opt this checkout into a globally-defined plugin that is off by default —
+   *  same split as `enableProjectMcpServer`. */
+  enableProjectPlugin(name: string): Promise<boolean> {
+    return this.write('project', 'plugin selection', config =>
+      withProjectPlugin(config, current => ({
         ...current,
         enable: [...new Set([...(current.enable ?? []), name])],
       })));

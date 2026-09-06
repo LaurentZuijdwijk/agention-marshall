@@ -1,0 +1,6 @@
+{
+  // Build config. Identical to tsconfig.json except that tests are left out of
+  // `dist`, which `files: ["dist"]` publishes wholesale.
+  "extends": "./tsconfig.json",
+  "exclude": ["node_modules", "dist", "src/**/*.test.ts"]
+}

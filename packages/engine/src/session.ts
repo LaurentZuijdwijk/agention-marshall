@@ -28,6 +28,8 @@ import { createAgentJobs, summariseAgentJob } from './agent-jobs.js';
 import type { AgentJob, AgentJobs } from './agent-jobs.js';
 import { McpRegistry } from './mcp.js';
 import type { McpServerConfig, McpServerState } from './mcp.js';
+import { PluginRegistry } from './plugins.js';
+import type { PluginState, PluginConfig } from './plugins.js';
 import {
   createAgent,
   buildSystemPrompt,
@@ -315,6 +317,18 @@ export class Session {
    * silently absent from the belt.
    */
   private readonly mcp: McpRegistry;
+  /** Locally-spawned plugins — a real, minimal slice of the plugin system
+   *  this repo designed but never implemented, scoped to exactly one thing:
+   *  enable/disable a plugin that spawns a server and registers it here as
+   *  another MCP entry. See plugins.ts. */
+  private readonly plugins: PluginRegistry;
+  /** Settles once every configured plugin has finished trying to start —
+   *  awaited alongside `mcp.ready()` before a turn builds its belt, or a
+   *  plugin still spawning would silently miss the first turn's tools
+   *  (unlike `mcp.ready()`, `McpRegistry.add()` isn't tracked by anything a
+   *  turn already awaits, since it's normally called from a live `/mcp add`,
+   *  not session start). */
+  private readonly pluginsReady: Promise<void>;
 
   constructor(
     private config: EngineConfig,
@@ -351,6 +365,12 @@ export class Session {
     this.mcp = new McpRegistry(config.mcpServers);
     if (!this.mcp.isEmpty) void this.mcp.connectAll().then(() => this.reportMcpState());
 
+    // Auto-enabled the same way MCP servers auto-connect: a plugin that was
+    // on in a previous session comes back up without the user re-typing
+    // `/plugins add` every launch.
+    this.plugins = new PluginRegistry(config.plugins ?? [], { mcp: this.mcp });
+    this.pluginsReady = this.plugins.enableAll().then(() => this.reportMcpState());
+
     this.logPath = join(config.workspaceRoot, '.marshall', 'logs', 'session.log');
     // Private mode never creates the log directory in the first place — `log`/
     // `traceHistory`/`traceReasoning` below no-op instead of writing into it,
@@ -375,6 +395,7 @@ export class Session {
       dedupeCache: this.dedupeCache,
       maskingPlugin: this.maskingPlugin,
       mcp: this.mcp,
+      history: this.history,
     });
 
     this.logTierRouting();
@@ -1028,6 +1049,49 @@ export class Session {
     return state;
   }
 
+  // ── plugins ────────────────────────────────────────────────────────────────
+
+  /** What `/plugin` renders. */
+  pluginState(): PluginState[] {
+    return this.plugins.state();
+  }
+
+  /** Current effective configs, tokens included — for a client that persists
+   *  them. Same split as `mcpServers()`/`mcpState()`: this is for saving to
+   *  disk, `pluginState()` is for display. */
+  pluginConfigs(): PluginConfig[] {
+    return this.plugins.configs();
+  }
+
+  /** Register a not-yet-configured plugin's definition and enable it in one
+   *  step — what a fresh `/plugins add <name>` does when `name` isn't in
+   *  the config yet. Mirrors `addMcpServer`. */
+  async addPlugin(config: PluginConfig): Promise<{ state: PluginState; generatedToken?: string }> {
+    const result = await this.plugins.add(config);
+    this.log(`plugin add ${config.name} ${result.state.status} ${result.state.error ?? ''}`);
+    this.reportMcpState();
+    return result;
+  }
+
+  /** Bring an already-configured plugin up: spawn (or reuse an already-running
+   *  instance of) its server and register it as an MCP entry. Never throws —
+   *  a plugin that fails to start comes back as an `error` state. */
+  async enablePlugin(name: string): Promise<{ state: PluginState; generatedToken?: string }> {
+    const result = await this.plugins.enable(name);
+    this.log(`plugin enable ${name} ${result.state.status} ${result.state.error ?? ''}`);
+    this.reportMcpState();
+    return result;
+  }
+
+  async disablePlugin(name: string): Promise<boolean> {
+    const disabled = await this.plugins.disable(name);
+    if (disabled) {
+      this.log(`plugin disable ${name}`);
+      this.reportMcpState();
+    }
+    return disabled;
+  }
+
   /** Push the current picture to the client. Emitted on every change so the UI
    *  never has to poll, and once after the initial connect settles. */
   private reportMcpState(): void {
@@ -1044,6 +1108,7 @@ export class Session {
     this.jobs.killAll();
     this.agentJobs.killAll();
     void this.mcp.disconnect().catch(() => {});
+    void this.plugins.disposeAll().catch(() => {});
   }
 
   // ── turn lifecycle ───────────────────────────────────────────────────────────
@@ -1187,6 +1252,7 @@ export class Session {
       // Settles whether the servers connected or failed, so a dead server costs
       // this turn a bounded wait rather than dropping its tools without a word.
       this.mcp.ready(),
+      this.pluginsReady,
     ]);
 
     // Shrink before the turn rather than mid-turn: the plugin's own trigger was

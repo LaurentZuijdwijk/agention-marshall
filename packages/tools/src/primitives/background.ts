@@ -48,6 +48,15 @@ export interface StartJobOptions {
   timeoutMs?: number;
   /** Cap per stream, for each of the two views. Default: 64 KiB. */
   maxOutputBytes?: number;
+  /**
+   * Extra env vars merged into the scrubbed environment — mirrors
+   * `SpawnSandboxedOptions.extraEnv` in spawn.ts, which this file otherwise
+   * duplicates the scrubbing logic of. Reach for this instead of embedding a
+   * secret in `command`: a shell command line is visible to any local user
+   * via `ps`/`/proc`, while an env var set through `spawn()`'s own `env`
+   * option is not.
+   */
+  extraEnv?: Record<string, string>;
 }
 
 export interface BackgroundJobs {
@@ -172,7 +181,7 @@ export function createBackgroundJobs(options: BackgroundJobsOptions = {}): Backg
   };
 
   return {
-    start({ command, cwd, timeoutMs, maxOutputBytes }) {
+    start({ command, cwd, timeoutMs, maxOutputBytes, extraEnv }) {
       const maxChars = maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
       const job: BackgroundJob = {
         id: nextId(),
@@ -184,7 +193,7 @@ export function createBackgroundJobs(options: BackgroundJobsOptions = {}): Backg
 
       const child = spawn('sh', ['-c', command], {
         cwd,
-        env: scrubbedEnv(),
+        env: scrubbedEnv(extraEnv),
         detached: true,
         stdio: 'pipe',
       });

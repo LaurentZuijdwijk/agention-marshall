@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Marshall Browser Control</title>
+  <style>
+    body { width: 280px; font: 13px system-ui, sans-serif; margin: 0; padding: 12px; color: #1a1a1a; }
+    h1 { font-size: 14px; margin: 0 0 10px; }
+    .status { display: flex; align-items: center; gap: 7px; margin-bottom: 12px; padding: 6px 8px; background: #f4f4f4; border-radius: 6px; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: #999; flex: none; }
+    .dot.connected { background: #22c55e; }
+    .dot.error { background: #ef4444; }
+    .dot.pending { background: #eab308; }
+    label { display: block; font-weight: 600; margin: 8px 0 3px; }
+    input { width: 100%; box-sizing: border-box; padding: 5px 6px; font: inherit; border: 1px solid #ccc; border-radius: 4px; }
+    button { padding: 6px; font: inherit; cursor: pointer; border-radius: 4px; border: 1px solid #ccc; background: #fff; }
+    button.primary { width: 100%; margin-top: 6px; background: #111; color: #fff; border-color: #111; }
+    button.danger { color: #b91c1c; border-color: #f3c6c6; }
+    details { margin-top: 10px; }
+    summary { cursor: pointer; font-size: 12px; color: #555; }
+    .actions { display: flex; gap: 6px; margin-top: 14px; }
+    .actions button { flex: 1; }
+    #feedback { font-size: 12px; color: #555; margin-top: 8px; min-height: 14px; }
+  </style>
+</head>
+<body>
+  <h1>Marshall Browser Control</h1>
+
+  <div class="status">
+    <span class="dot" id="dot"></span>
+    <span id="statusText">loading…</span>
+  </div>
+
+  <label for="token">Pairing token</label>
+  <input id="token" type="text" placeholder="paste the token marshall printed">
+  <button id="save" class="primary">Save &amp; connect</button>
+
+  <details>
+    <summary>Advanced: bridge URL</summary>
+    <label for="url">Bridge URL</label>
+    <input id="url" type="text" placeholder="ws://127.0.0.1:8712/bridge">
+  </details>
+
+  <div class="actions">
+    <button id="toggle">Disable</button>
+    <button id="closeTabs" class="danger">Close tabs</button>
+  </div>
+  <div id="feedback"></div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

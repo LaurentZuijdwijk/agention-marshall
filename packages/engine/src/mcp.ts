@@ -1,6 +1,6 @@
-import { MCPClient, MCPClientEvent } from '@agentionai/agents/core';
-import type { Tool } from '@agentionai/agents/core';
-import { adaptMcpTools, namespaceMcpTool } from '@agentionai/marshall-tools';
+import { MCPClient, MCPClientEvent, renderToolResult } from '@agentionai/agents/core';
+import type { Tool, MCPCallToolResult, MCPImageContent } from '@agentionai/agents/core';
+import { adaptMcpTools, namespaceMcpTool, multimodalMcpResult } from '@agentionai/marshall-tools';
 import type { ToolConfig } from '@agentionai/marshall-tools';
 
 /**
@@ -18,6 +18,29 @@ import type { ToolConfig } from '@agentionai/marshall-tools';
 
 /** Ceiling on the initial handshake. An unreachable host must not stall a turn. */
 const CONNECT_TIMEOUT_MS = 15_000;
+
+/**
+ * Split image content blocks out of a raw MCP result so `adaptMcpTools` can
+ * route them to the model as vision input via `ToolConfig.attachImages`
+ * instead of losing them to text rendering.
+ *
+ * `MCPClientOptions.formatResult`, once supplied, is the *only* thing that
+ * renders every call on this client — there is no "return undefined to fall
+ * back to the default" — so the non-image branch calls the SDK's own
+ * `renderToolResult` explicitly. That keeps every server with no image
+ * output byte-for-byte identical to not having a formatter configured at
+ * all.
+ */
+export function formatMcpResult(result: MCPCallToolResult): unknown {
+  const content = result.content ?? [];
+  const images = content.filter((block): block is MCPImageContent => block.type === 'image');
+  if (images.length === 0) return renderToolResult(result);
+
+  const textOnly: MCPCallToolResult = { ...result, content: content.filter(b => b.type !== 'image') };
+  const rendered = renderToolResult(textOnly);
+  const text = typeof rendered === 'string' ? rendered : JSON.stringify(rendered, null, 2);
+  return multimodalMcpResult(text, images.map(img => ({ data: img.data, mimeType: img.mimeType })));
+}
 
 export interface McpServerConfig {
   /** Local name — namespaces the tools and identifies the server in `/mcp`. */
@@ -95,6 +118,7 @@ export class McpRegistry {
     try {
       const client = MCPClient.fromUrl(record.config.url, {
         clientName: 'marshall',
+        formatResult: formatMcpResult,
         ...(record.config.headers ? { headers: record.config.headers } : {}),
       });
       // MCPClient is an EventEmitter and emits errors in addition to rejecting

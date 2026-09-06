@@ -1,5 +1,5 @@
-import { History, webSearchTool, Tool, ToolResultEvent } from '@agentionai/agents/core';
-import type { BuiltInTool, ToolInputSchema } from '@agentionai/agents/core';
+import { History, webSearchTool, Tool, ToolResultEvent, imageBase64 } from '@agentionai/agents/core';
+import type { BuiltInTool, ToolInputSchema, ImageMimeType } from '@agentionai/agents/core';
 import type { ToolResultMaskingPlugin } from '@agentionai/agents/history/plugins';
 import {
   createFileTools,
@@ -34,6 +34,7 @@ import { describeAgentError, providerErrorDiagnostics } from './errors.js';
 import { summariseAgentJob } from './agent-jobs.js';
 import type { AgentJobs, AgentToolset } from './agent-jobs.js';
 import { McpRegistry } from './mcp.js';
+import type { SessionHistory } from './session-history.js';
 import {
   resolveRoleProfile, resolveModel, contextToolEnabled, resolveSearchProfile, resolveTierProfile,
   resolveNamedAgent,
@@ -110,6 +111,8 @@ export interface ToolBeltDeps {
   dedupeCache: DedupeCache;
   maskingPlugin: ToolResultMaskingPlugin;
   mcp: McpRegistry;
+  /** Where `ToolConfig.attachImages` lands a screenshot — see `forTurn`. */
+  history: SessionHistory;
 }
 
 export class ToolBelt {
@@ -251,6 +254,16 @@ export class ToolBelt {
       // schema — the factory keys the option off its presence, so light mode
       // does not need the shell tool to know it exists.
       ...(light ? {} : { jobs: this.deps.jobs }),
+      // A tool result can't carry an image itself (ToolResultContent.content is
+      // a plain string), so this is the escape hatch: land it as a synthetic
+      // user turn right after the tool_result, which the model sees on its very
+      // next inference call. See ToolConfig.attachImages and adaptMcpTools.
+      attachImages: (images) => {
+        this.deps.history.addMessage(
+          'user',
+          images.map(img => imageBase64(img.data, img.mimeType as ImageMimeType)),
+        );
+      },
     };
 
     const tools = [

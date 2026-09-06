@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "Marshall Browser Control",
+  "version": "0.1.0",
+  "description": "Gives the Marshall coding agent browser control and screenshots.",
+  "permissions": ["tabs", "tabGroups", "scripting", "storage", "alarms"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Marshall Browser Control"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["console-capture-main.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["console-capture-relay.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["overlay.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

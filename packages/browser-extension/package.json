@@ -1,0 +1,18 @@
+{
+  "name": "marshall-browser-extension",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Chrome extension (MV3) that backs @agentionai/marshall-plugin-browser — the browser-side half of browser control and screenshots for the Marshall coding agent.",
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx/esm --test 'src/**/*.test.ts'"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.280",
+    "esbuild": "^0.24.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}

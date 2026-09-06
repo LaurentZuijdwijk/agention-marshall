@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": ["chrome"]
+  },
+  "include": ["src"],
+  "exclude": [
+    // Test files fake chrome.*/WebSocket globals via `globalThis as any` and
+    // use node:test — mixing Node's ambient globals into this DOM+chrome
+    // program would conflict with them (e.g. two incompatible `setTimeout`
+    // overloads). They still run fine under tsx, which doesn't type-check.
+    "src/**/*.test.ts"
+  ]
+}

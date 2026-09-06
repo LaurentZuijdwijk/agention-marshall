@@ -197,6 +197,7 @@ export function App({
       contextAgentProfile, plannerAgentProfile, reviewerAgentProfile,
       enableGitHub, enableWebSearch, maxTokens, privateMode,
       mcpServers: savedConfig.mcpServers,
+      plugins: savedConfig.plugins,
       namedAgents: toNamedAgents(savedConfig.agents, config.credentialsFor),
       client, SessionCtor,
       light: settings.runtime === 'light',
@@ -399,7 +400,7 @@ export function App({
     session, config, transcript, activeProfile, fastProfile,
     applyProfiles, stageProfile, persistSafety, setMode, setSafetyLevelState,
   });
-  const { persistMcp } = wizardActions;
+  const { persistMcp, persistPlugins } = wizardActions;
 
   // ── submitting ─────────────────────────────────────────────────────────────
   const handleSubmit = (value: string) => {
@@ -453,6 +454,7 @@ export function App({
         workspaceRoot, transcript, session, approvals, prefs, setMode, setSteering,
         headerMessage: () => headerMessage(activeProfile, fastProfile),
         onMcpChanged: persistMcp,
+        onPluginsChanged: persistPlugins,
         mcpWarnings: savedConfig.mcpWarnings,
         applyProfiles, activeProfile, quit,
         onRuntimeModeChange: (mode, scope) => {

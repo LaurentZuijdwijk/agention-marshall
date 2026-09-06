@@ -198,6 +198,21 @@ export interface ToolConfig {
    * `killAll()` when the session ends.
    */
   jobs?: BackgroundJobs;
+  /**
+   * Lets a tool result put an image in front of the model, e.g. a screenshot
+   * an MCP server returned. `adaptMcpTools` is the only caller today — see
+   * `McpMultimodalResult` in factories/mcp-tools.ts.
+   *
+   * A `Tool`'s result is a plain string (the underlying library's
+   * `ToolResultContent.content` is typed `string`, not multimodal), so an
+   * image cannot ride inside the tool_result itself. This is the escape
+   * hatch: the engine wires it to append a synthetic message straight after
+   * the tool_result via `History.addMessage`, which the model sees on its
+   * very next turn. Absent means the belt has nowhere to put an image — a
+   * tool that receives one says so in its text result instead of dropping it
+   * silently.
+   */
+  attachImages?: (images: { data: string; mimeType: string }[]) => void;
 }
 
 /** Plain tool spec — used by withApproval so it doesn't need Tool internals */
