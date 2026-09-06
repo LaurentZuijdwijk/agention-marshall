@@ -1,6 +1,7 @@
 import React from 'react';
 import { Box, Text } from 'ink';
 import { formatTokens as groupDigits, formatRate } from '@agentionai/marshall-engine';
+import { formatDuration } from '../format.js';
 import { C, G } from './theme.js';
 import { Spinner } from './Spinner.js';
 
@@ -15,25 +16,6 @@ const formatTokens = (n?: number): string => {
   if (n < 10_000) return groupDigits(n);
   const [divisor, suffix] = n >= 1_000_000 ? [1_000_000, 'M'] as const : [1_000, 'k'] as const;
   return `${(n / divisor).toFixed(1).replace(/\.0$/, '')}${suffix}`;
-};
-
-/**
- * `12.3s`, `24m59s`, `1h05m` — a turn or a first-token wait can run long
- * enough that a raw seconds count stops being readable at a glance. Whole
- * seconds only past a minute: the tenths that matter for "how long did the
- * first token take" stop being interesting once the answer is in minutes.
- */
-const formatDuration = (ms: number): string => {
-  const totalSeconds = ms / 1000;
-  if (totalSeconds < 60) return `${totalSeconds.toFixed(1)}s`;
-  const pad = (n: number) => String(n).padStart(2, '0');
-  const roundedSeconds = Math.round(totalSeconds);
-  const minutes = Math.floor(roundedSeconds / 60);
-  const seconds = roundedSeconds % 60;
-  if (minutes < 60) return seconds === 0 ? `${minutes}m` : `${minutes}m${pad(seconds)}s`;
-  const hours = Math.floor(minutes / 60);
-  const remainingMinutes = minutes % 60;
-  return remainingMinutes === 0 ? `${hours}h` : `${hours}h${pad(remainingMinutes)}m`;
 };
 
 export type ActivityState = 'idle' | 'loading' | 'thinking' | 'generating' | 'complete' | 'error' | 'cancelled';
@@ -79,7 +61,10 @@ export interface ActivityMetrics {
  * waiting for a human, and that is the honest reading of "how fast is this
  * going", which is the question the row answers.
  */
-export function ActivityStatus({ state, metrics, pending = 0, blocked = false, canSkipReasoning = false }: {
+export function ActivityStatus({
+  state, metrics, pending = 0, blocked = false, canSkipReasoning = false,
+  columns = process.stdout.columns ?? 80,
+}: {
   state: ActivityState;
   metrics?: ActivityMetrics;
   pending?: number;
@@ -94,32 +79,62 @@ export function ActivityStatus({ state, metrics, pending = 0, blocked = false, c
    * every other provider, so it only shows here, not baked into `Spinner`.
    */
   canSkipReasoning?: boolean;
+  /** Terminal width, so the row sheds fields rather than lets the terminal
+   *  hard-wrap it mid-word (Spinner's own "generating" label included). */
+  columns?: number;
 }) {
   if (state === 'idle' && pending === 0) return null;
   const label = state[0].toUpperCase() + state.slice(1);
-  const withRate = (arrow: string, tokens?: number, perSecond?: number) => {
-    const rate = formatRate(perSecond);
+  const active = state === 'thinking' || state === 'generating' || state === 'loading';
+  // What the leading segment actually costs: the plain label when idle-ish,
+  // or the Spinner's frame + verb + its own live elapsed counter when active
+  // — accounted for here since it eats into the same row's budget below, even
+  // though Spinner renders it independently.
+  const leadingWidth = active
+    ? 2 /* frame + space */ + (blocked ? 'waiting for you' : state === 'loading' ? 'loading' : state).length
+      + 2 /* spaces before elapsed */ + 7 /* generous allowance for e.g. "23h59m" */
+    : label.length;
+  const withRate = (arrow: string, tokens?: number, perSecond?: number, showRate = true) => {
+    const rate = showRate ? formatRate(perSecond) : undefined;
     return `${arrow}${formatTokens(tokens)}${rate ? ` ~${rate}` : ''}`;
   };
   const thinking = metrics?.reasoningTokens
     ? ` (${formatTokens(metrics.reasoningTokens)} thinking)`
     : '';
-  const metric = metrics && (metrics.inputTokens !== undefined || metrics.outputTokens !== undefined)
-    ? [
-        withRate('↑', metrics.inputTokens, metrics.rates?.input)
-          + `  ↓${formatTokens(metrics.outputTokens)}${thinking}`
-          + (formatRate(metrics.rates?.output) ? ` ~${formatRate(metrics.rates?.output)}` : ''),
-        metrics.durationMs !== undefined ? formatDuration(metrics.durationMs) : undefined,
-        // Abbreviated because the row is already four segments wide, and this is
-        // the one a reader glances at rather than reads.
-        metrics.ttftMs !== undefined ? `${formatDuration(metrics.ttftMs)}→1st` : undefined,
-        metrics.cost,
-      ].filter(Boolean).join(`  ${G.bullet}  `)
+  let metric: string;
+  if (metrics && (metrics.inputTokens !== undefined || metrics.outputTokens !== undefined)) {
+    const counts = (showRates: boolean) =>
+      withRate('↑', metrics.inputTokens, metrics.rates?.input, showRates)
+        + `  ↓${formatTokens(metrics.outputTokens)}${thinking}`
+        + (showRates && formatRate(metrics.rates?.output) ? ` ~${formatRate(metrics.rates?.output)}` : '');
+    const duration = metrics.durationMs !== undefined ? formatDuration(metrics.durationMs) : undefined;
+    const ttft = metrics.ttftMs !== undefined ? `${formatDuration(metrics.ttftMs)}→1st` : undefined;
+    const cost = metrics.cost;
+
+    // The full row can outrun a narrow terminal's width; the terminal then
+    // hard-wraps it mid-character rather than reflowing cleanly (this is what
+    // turns "generating" into "generatin" on redraw). So fields are dropped,
+    // least essential first — ttft, then cost, then duration, then the ~/s
+    // rates — until what's left actually fits. Token counts are the one
+    // thing kept no matter how narrow the terminal gets.
+    const budget = Math.max(columns - 4 /* Box paddingX */ - leadingWidth - 4 /* leading bullet */, 12);
+    const build = (showTtft: boolean, showCost: boolean, showDuration: boolean, showRates: boolean) =>
+      [counts(showRates), showDuration ? duration : undefined, showTtft ? ttft : undefined, showCost ? cost : undefined]
+        .filter(Boolean).join(`  ${G.bullet}  `);
+
+    let [showTtft, showCost, showDuration, showRates] = [true, true, true, true];
+    let result = build(showTtft, showCost, showDuration, showRates);
+    if (result.length > budget) { showTtft = false; result = build(showTtft, showCost, showDuration, showRates); }
+    if (result.length > budget) { showCost = false; result = build(showTtft, showCost, showDuration, showRates); }
+    if (result.length > budget) { showDuration = false; result = build(showTtft, showCost, showDuration, showRates); }
+    if (result.length > budget) { showRates = false; result = build(showTtft, showCost, showDuration, showRates); }
+    metric = result;
+  } else {
     // Before the first response of a turn there is genuinely nothing to report,
     // and the engine says so by not sending anything rather than by sending
     // zeroes. Naming what is missing beats a row of placeholder dashes.
-    : 'no tokens yet';
-  const active = state === 'thinking' || state === 'generating' || state === 'loading';
+    metric = 'no tokens yet';
+  }
   return (
     <Box paddingX={2} marginTop={1}>
       {active ? (

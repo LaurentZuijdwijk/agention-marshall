@@ -650,6 +650,7 @@ export function App({
           pending={pendingPrompts.length}
           blocked={modal}
           canSkipReasoning={activeProfile?.provider === 'llamacpp'}
+          columns={columns}
         />
       )}
 

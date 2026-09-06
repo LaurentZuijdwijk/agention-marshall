@@ -51,20 +51,24 @@ export function fitSafetyReason(
 }
 
 /**
- * A nested agent's tool arguments, cut to whatever the rest of the row leaves.
+ * A tool call's arguments, cut to whatever the rest of the row leaves.
  *
  * Same arithmetic as `fitSafetyReason`, and the same failure it prevents — but
  * these rows are worse when they wrap, because the fixed part of the row is
  * *before* the content. A long shell command squeezes the columns to its left
  * until the tool name itself breaks, which is how `run_shell` under `agent2`
- * renders as "Run" above a stray "shell".
+ * renders as "Run" above a stray "shell" (nested, `parent` set), or "Run
+ * sheltail -5 …" with the separator swallowed (top-level, `caller` set or
+ * absent).
  */
 export function fitToolContent(
   content: string,
-  { parent, title, columns }: { parent: string; title: string; columns: number },
+  { parent, caller, title, columns }: { parent?: string; caller?: string; title: string; columns: number },
 ): string {
-  // gutter + parent + space + glyph + space + title + the two spaces before content
-  const fixed = GUTTER_COLS + parent.length + 1 + 2 + title.length + 2;
+  const label = parent ?? caller;
+  // gutter (nested rows only) + label + space + glyph + space + title + the
+  // two spaces before content
+  const fixed = (parent ? GUTTER_COLS : 0) + (label ? label.length + 1 : 0) + 2 + title.length + 2;
   const room = columns - fixed;
   return room <= 0 ? '' : truncate(content, room);
 }
@@ -138,7 +142,12 @@ export function MessageRow({ msg, columns = process.stdout.columns ?? 80 }: {
           <CallerTag caller={msg.caller} />
           <Text color={C.tool}>{G.tool} </Text>
           <Text color={C.tool}>{msg.title}</Text>
-          {msg.content !== '' && <Text color={C.muted}>  {msg.content}</Text>}
+          {msg.content !== '' && (
+            <Text color={C.muted}>
+              {'  '}
+              {fitToolContent(msg.content, { caller: msg.caller, title: msg.title ?? '', columns })}
+            </Text>
+          )}
           {msg.note && <Text color={C.faint}>  {msg.note}</Text>}
         </Box>
       );

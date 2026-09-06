@@ -114,4 +114,65 @@ describe('ActivityStatus', () => {
   it('does not render an idle status without queued prompts', () => {
     assert.equal(ActivityStatus({ state: 'idle' }), null);
   });
+
+  // A too-narrow terminal used to make the whole row (including the label the
+  // Spinner renders next to it, out of this function's view) run past the
+  // terminal's own width, which the terminal then hard-wraps mid-character
+  // rather than reflowing — "generating" becomes "generatin" on redraw. The
+  // fix sheds fields, least essential first, so the row fits before that can
+  // happen; these tests check the metric string alone stays within budget
+  // (the full-row width including the Spinner is covered by hand-verification,
+  // since Spinner manages its own elapsed-time state independently).
+  describe('narrow terminals', () => {
+    // metricRow stringifies the whole "  · metric" children array (commas and
+    // all) — fine for the regex checks above, but this suite needs the bare
+    // metric string's own length, so it reaches one array element deeper.
+    const metricOnly = (props: Parameters<typeof ActivityStatus>[0]) =>
+      String((((ActivityStatus(props) as any).props.children as any[])[1].props.children as any[])[3]);
+
+    const full = {
+      state: 'generating' as const,
+      metrics: {
+        inputTokens: 1_300_000, outputTokens: 106_500,
+        rates: { input: 617, output: 21.0 },
+        durationMs: 8_351_400, ttftMs: 2_172_000, cost: '$0',
+      },
+    };
+
+    it('keeps every field on a wide terminal', () => {
+      const text = metricRow({ ...full, columns: 200 });
+      assert.match(text, /↑1\.3M/);
+      assert.match(text, /↓106\.5k/);
+      assert.match(text, /2h19m/);
+      assert.match(text, /36m12s→1st/);
+      assert.match(text, /\$0/);
+    });
+
+    it('drops the least essential fields first on a narrow terminal, keeping token counts', () => {
+      const text = metricRow({ ...full, columns: 40 });
+      assert.match(text, /↑1\.3M/, 'token counts survive no matter how narrow');
+      assert.match(text, /↓106\.5k/);
+      assert.doesNotMatch(text, /→1st/, 'ttft is the first to go');
+    });
+
+    it('never returns a metric string wider than its budget allows, once the token counts alone fit', () => {
+      // leadingWidth for an unblocked 'generating' spinner: frame+space (2) +
+      // "generating".length (10) + spaces (2) + a generous elapsed allowance
+      // (7) — the same arithmetic ActivityStatus itself uses for `budget`.
+      // Below ~44 columns even the bare, never-dropped counts (14 chars)
+      // outrun the floor budget (12) — a hard floor, not a bug: there is no
+      // field left to shed.
+      const leadingWidth = 2 + 'generating'.length + 2 + 7;
+      for (const columns of [50, 60, 80, 120]) {
+        const budget = Math.max(columns - 4 - leadingWidth - 4, 12);
+        const text = metricOnly({ ...full, columns });
+        assert.ok(text.length <= budget, `at ${columns} columns got a ${text.length}-char metric: ${text}`);
+      }
+    });
+
+    it('keeps just the bare counts once nothing else fits', () => {
+      const text = metricOnly({ ...full, columns: 20 });
+      assert.equal(text, '↑1.3M  ↓106.5k', `expected only the bare counts, got: ${text}`);
+    });
+  });
 });

@@ -21,6 +21,29 @@ export function truncate(text: string, max: number): string {
   return text.length <= max ? text : text.slice(0, Math.max(0, max - 1)) + '…';
 }
 
+/**
+ * `12.3s`, `24m59s`, `1h05m` — a turn or a first-token wait can run long
+ * enough that a raw seconds count stops being readable at a glance. Whole
+ * seconds only past a minute: the tenths that matter for "how long did the
+ * first token take" stop being interesting once the answer is in minutes.
+ *
+ * Shared by `ActivityStatus`'s own duration segment and `Spinner`'s live
+ * elapsed counter, so a long-running turn never renders as an unabbreviated
+ * "8351.4s" wide enough to overflow the status row on its own.
+ */
+export function formatDuration(ms: number): string {
+  const totalSeconds = ms / 1000;
+  if (totalSeconds < 60) return `${totalSeconds.toFixed(1)}s`;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const roundedSeconds = Math.round(totalSeconds);
+  const minutes = Math.floor(roundedSeconds / 60);
+  const seconds = roundedSeconds % 60;
+  if (minutes < 60) return seconds === 0 ? `${minutes}m` : `${minutes}m${pad(seconds)}s`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return remainingMinutes === 0 ? `${hours}h` : `${hours}h${pad(remainingMinutes)}m`;
+}
+
 function scalar(value: unknown): string {
   if (typeof value === 'string') return value.replace(/\s+/g, ' ');
   if (Array.isArray(value)) return `[${value.length}]`;

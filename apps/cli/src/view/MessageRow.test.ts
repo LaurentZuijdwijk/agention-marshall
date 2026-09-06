@@ -84,3 +84,23 @@ test('a short command is left alone', () => {
 test('a row with no room drops the content rather than showing a bare ellipsis', () => {
   assert.equal(fitToolContent('anything', { parent: 'agent12', title: 'run_shell', columns: 20 }), '');
 });
+
+test('a top-level tool row (no parent) still fits a long command into the row', () => {
+  // The real one from the bug report: "Run shell" ran into the command with
+  // no visible separator on a narrow terminal.
+  const command = 'tail -5 pagoda-garden.html; echo ---; grep -n "ACTORS\\|PRESETS\\|crags\\|cragTop" pagoda-garden.html';
+  const columns = 60;
+  const fitted = fitToolContent(command, { title: 'Run shell', columns });
+
+  const rendered = '● ' + 'Run shell' + '  ' + fitted;
+  assert.ok(rendered.length <= columns,
+    `the whole row must fit in ${columns} columns, got ${rendered.length}`);
+  assert.ok(fitted.length > 0, 'a 60-column terminal has room for some of the command');
+});
+
+test('a top-level row with a caller reserves room for it too', () => {
+  const long = 'z'.repeat(400);
+  const withCaller = fitToolContent(long, { caller: 'agent2', title: 'run_shell', columns: 80 });
+  const without = fitToolContent(long, { title: 'run_shell', columns: 80 });
+  assert.equal(without.length - withCaller.length, 'agent2 '.length);
+});

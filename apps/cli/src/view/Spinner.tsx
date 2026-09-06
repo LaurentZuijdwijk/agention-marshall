@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Box, Text } from 'ink';
+import { formatDuration } from '../format.js';
 import { C, G, SPINNER_FRAMES, brand } from './theme.js';
 
 const FRAME_MS = 80;
@@ -45,7 +46,7 @@ export function Spinner({ label, inline = false, animate = true }: {
           "waiting on something else" glyph instead. */}
       <Text color={color}>{animate ? SPINNER_FRAMES[frame % SPINNER_FRAMES.length] : G.pending} </Text>
       <Text color={C.accent}>{verb}</Text>
-      <Text color={C.faint}>  {elapsed.toFixed(1)}s</Text>
+      <Text color={C.faint}>  {formatDuration(elapsed * 1000)}</Text>
       {!inline && <Text color={C.faint}>  {G.bullet}  esc to interrupt</Text>}
     </Box>
   );
