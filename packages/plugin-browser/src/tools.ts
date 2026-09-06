@@ -78,20 +78,51 @@ export function registerBrowserTools(server: McpServer, bridge: ExtensionBridge)
     'browser_read_page',
     {
       description:
-        "Read the active tab's content. 'text' (default) is the visible, " +
-        "whitespace-collapsed text — cheap on tokens, use it first. 'html' is " +
-        'the full page markup — use it only when you need real tags/attributes/' +
-        'classes (e.g. to find a CSS selector), since it costs far more.',
+        "Read the active tab's content. 'markdown' (default) keeps structure " +
+        "(headings, lists, links with their href) at a fraction of 'html''s " +
+        "cost — use it when you need to act on a link and not just read copy. " +
+        "'text' is the visible, whitespace-collapsed text only — cheaper still " +
+        "when structure and links don't matter. 'html' is the full page markup " +
+        '— use it only when you need real tags/attributes/classes (e.g. to find ' +
+        'a CSS selector), since it costs far more.',
       inputSchema: {
-        format: z.enum(['text', 'html']).optional()
-          .describe("'text' (default) or 'html'"),
+        format: z.enum(['markdown', 'text', 'html']).optional()
+          .describe("'markdown' (default), 'text', or 'html'"),
       },
     },
     async ({ format }) => {
-      const result = await bridge.call('read_page', { format: format ?? 'text' }) as ReadPageResult;
+      const result = await bridge.call('read_page', { format: format ?? 'markdown' }) as ReadPageResult;
       const header = [result.title, result.url].filter(Boolean).join(' — ');
       const body = capText(result.text, MAX_PAGE_TEXT_CHARS);
       return textResult(header ? `${header}\n\n${body}` : body);
+    },
+  );
+
+  server.registerTool(
+    'browser_press_key',
+    {
+      description:
+        'Press a key on the active tab, optionally with modifiers — for ' +
+        "submitting a form with Enter, dismissing a dialog with Escape, or " +
+        "moving focus with Tab/arrow keys, none of which browser_type covers. " +
+        'Targets the focused element by default, or a specific one via selector.',
+      inputSchema: {
+        key: z.string().describe(
+          "The key to press: a named key ('Enter', 'Escape', 'Tab', 'Backspace', " +
+          "'Delete', 'ArrowUp'/'ArrowDown'/'ArrowLeft'/'ArrowRight', 'Home', 'End', " +
+          "'PageUp', 'PageDown', ' ') or a single printable character (e.g. 'a').",
+        ),
+        selector: z.string().optional()
+          .describe('CSS selector of the element to focus first; defaults to the currently focused element'),
+        ctrlKey: z.boolean().optional().describe('Hold Ctrl'),
+        shiftKey: z.boolean().optional().describe('Hold Shift'),
+        altKey: z.boolean().optional().describe('Hold Alt'),
+        metaKey: z.boolean().optional().describe('Hold Meta/Cmd'),
+      },
+    },
+    async ({ key, selector, ctrlKey, shiftKey, altKey, metaKey }) => {
+      await bridge.call('press_key', { key, selector, ctrlKey, shiftKey, altKey, metaKey });
+      return textResult(`Pressed "${key}"${selector ? ` on "${selector}"` : ''}.`);
     },
   );
 

@@ -1,7 +1,7 @@
 /** One relayed command from the bridge server — see packages/plugin-browser/src/bridge.ts. */
 export interface BridgeCommand {
   id: string;
-  type: 'navigate' | 'screenshot' | 'click' | 'type' | 'read_page' | 'console_logs';
+  type: 'navigate' | 'screenshot' | 'click' | 'type' | 'press_key' | 'read_page' | 'console_logs';
   params: Record<string, unknown>;
 }
 

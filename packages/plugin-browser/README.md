@@ -70,8 +70,15 @@ reachable from any tab's own `fetch`/`WebSocket`.
 | `browser_screenshot` | Capture the active tab's visible viewport |
 | `browser_click` | Click the first element matching a CSS selector |
 | `browser_type` | Type into the first input/textarea matching a CSS selector |
-| `browser_read_page` | Read the active tab's visible text |
+| `browser_press_key` | Press a key (Enter, Escape, Tab, arrows, a character), with optional modifiers |
+| `browser_read_page` | Read the active tab's content as `markdown` (default), `text`, or `html` |
 | `browser_console_logs` | Read recent `console.*` output from the active tab |
+
+`browser_read_page`'s `markdown` mode keeps structure — headings, lists,
+links with their `href` — at a fraction of `html`'s cost, so the model can
+act on a link without a second `html` read just to find its destination.
+`text` is cheaper still when structure and links don't matter; `html` is the
+full page markup for when real tags/attributes/classes are needed.
 
 Every call goes through Marshall's normal MCP approval gate — nothing here
 bypasses it. `browser_screenshot`'s image reaches the model as real vision

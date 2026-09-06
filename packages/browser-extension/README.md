@@ -53,6 +53,14 @@ Click the toolbar icon any time to see:
   the connection so Chrome's MV3 service-worker eviction doesn't silently
   drop it. Also marks each tab it touches — see "Visual indicators" below —
   and handles the popup's `close_marshall_tabs` message.
+- `page-scripts.ts` — the functions actually injected into the page via
+  `chrome.scripting.executeScript` (page reads in `markdown`/`text`/`html`,
+  and `press_key`'s key dispatch). Kept separate from `background.ts` because
+  an injected function is serialised with `Function.prototype.toString()`
+  and re-run standalone in the page's own JS world, so each one must be
+  fully self-contained — no closures over anything outside its own body.
+  Split out on its own it's also testable directly against jsdom, which
+  `background.ts`'s chrome/WebSocket-faking test setup doesn't need.
 - `popup.ts`/`popup.html` — the toolbar popup described above, backed by
   `chrome.storage.local`.
 - `overlay.ts` (isolated world) — the in-page pulsing border + badge,

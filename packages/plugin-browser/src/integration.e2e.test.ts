@@ -32,7 +32,7 @@ test('a real MCP client can list and call browser tools through a fake extension
 
   const tools = client.getTools().map(tool => tool.getPrompt().name);
   assert.deepEqual(tools.sort(), [
-    'browser_click', 'browser_console_logs', 'browser_navigate',
+    'browser_click', 'browser_console_logs', 'browser_navigate', 'browser_press_key',
     'browser_read_page', 'browser_screenshot', 'browser_type',
   ]);
 

@@ -9,6 +9,8 @@
 // than duplicating it.
 import type { BridgeCommand } from './protocol.js';
 import { DRAIN_CONSOLE_LOGS } from './protocol.js';
+import { extractHtml, extractText, extractMarkdown, dispatchKeyPress } from './page-scripts.js';
+import type { ScriptOutcome, KeyModifiers } from './page-scripts.js';
 
 const KEEPALIVE_ALARM = 'marshall-keepalive';
 const RECONNECT_DELAY_MS = 3_000;
@@ -168,9 +170,12 @@ async function runCommand(command: BridgeCommand): Promise<unknown> {
     case 'type':
       markTabControlled(tab);
       return typeInto(tab, String(command.params.selector), String(command.params.text));
+    case 'press_key':
+      markTabControlled(tab);
+      return pressKey(tab, command.params);
     case 'read_page':
       markTabControlled(tab);
-      return readPage(tab, command.params.format === 'html' ? 'html' : 'text');
+      return readPage(tab, toReadFormat(command.params.format));
     case 'console_logs':
       markTabControlled(tab);
       return consoleLogs(tab);
@@ -213,8 +218,6 @@ async function screenshot(tab: chrome.tabs.Tab): Promise<{ data: string; mimeTyp
   return { data, mimeType: 'image/png', url: tab.url, title: tab.title };
 }
 
-interface ScriptOutcome { ok: boolean; error?: string }
-
 async function click(tab: chrome.tabs.Tab, selector: string): Promise<Record<string, never>> {
   const [{ result }] = await chrome.scripting.executeScript({
     target: { tabId: tab.id! },
@@ -248,25 +251,42 @@ async function typeInto(tab: chrome.tabs.Tab, selector: string, text: string): P
   return {};
 }
 
+async function pressKey(
+  tab: chrome.tabs.Tab,
+  params: { selector?: unknown } & KeyModifiers & Record<string, unknown>,
+): Promise<Record<string, never>> {
+  const selector = params.selector !== undefined ? String(params.selector) : undefined;
+  const key = String(params.key);
+  const mods: KeyModifiers = {
+    ctrlKey: params.ctrlKey === true, shiftKey: params.shiftKey === true,
+    altKey: params.altKey === true, metaKey: params.metaKey === true,
+  };
+  const [{ result }] = await chrome.scripting.executeScript({
+    target: { tabId: tab.id! },
+    func: dispatchKeyPress,
+    args: [selector, key, mods],
+  });
+  if (!result?.ok) throw new Error(result?.error ?? 'press_key failed');
+  return {};
+}
+
+type ReadFormat = 'markdown' | 'text' | 'html';
+
+function toReadFormat(value: unknown): ReadFormat {
+  return value === 'text' || value === 'html' ? value : 'markdown';
+}
+
+const EXTRACTORS: Record<ReadFormat, () => string> = {
+  html: extractHtml, text: extractText, markdown: extractMarkdown,
+};
+
 async function readPage(
   tab: chrome.tabs.Tab,
-  format: 'text' | 'html',
+  format: ReadFormat,
 ): Promise<{ text: string; url?: string; title?: string }> {
   const [{ result }] = await chrome.scripting.executeScript({
     target: { tabId: tab.id! },
-    func: (fmt: 'text' | 'html'): string => {
-      if (fmt === 'html') return document.documentElement.outerHTML;
-      const raw = document.body?.innerText ?? '';
-      // innerText alone leaves trailing spaces and can pile up blank lines
-      // from stacked block elements — real token savings, not just a format
-      // change, is the point of the 'text' mode.
-      return raw
-        .split('\n')
-        .map(line => line.replace(/[ \t]+$/, ''))
-        .join('\n')
-        .replace(/\n{3,}/g, '\n\n');
-    },
-    args: [format],
+    func: EXTRACTORS[format],
   });
   return { text: String(result ?? ''), url: tab.url, title: tab.title };
 }

@@ -35,10 +35,17 @@ async function harness(answers: Record<string, unknown>) {
   };
 }
 
-test('browser_read_page defaults to text format', async (t) => {
+test('browser_read_page defaults to markdown format', async (t) => {
   const h = await harness({ read_page: { text: 'hello', url: 'https://x.test', title: 'X' } });
   t.after(h.close);
   await h.call('browser_read_page');
+  assert.deepEqual(h.seenParams[0], { format: 'markdown' });
+});
+
+test('browser_read_page forwards an explicit text format', async (t) => {
+  const h = await harness({ read_page: { text: 'hello' } });
+  t.after(h.close);
+  await h.call('browser_read_page', { format: 'text' });
   assert.deepEqual(h.seenParams[0], { format: 'text' });
 });
 
@@ -63,4 +70,19 @@ test('browser_read_page does not truncate a page under the cap', async (t) => {
   t.after(h.close);
   const result = await h.call('browser_read_page');
   assert.equal(result, 'short page');
+});
+
+test('browser_press_key forwards the key, selector and modifiers', async (t) => {
+  const h = await harness({ press_key: {} });
+  t.after(h.close);
+  await h.call('browser_press_key', { key: 'Enter', selector: '#q', ctrlKey: true });
+  assert.deepEqual(h.seenParams[0], { key: 'Enter', selector: '#q', ctrlKey: true });
+});
+
+test('browser_press_key works with no selector or modifiers', async (t) => {
+  const h = await harness({ press_key: {} });
+  t.after(h.close);
+  const result = await h.call('browser_press_key', { key: 'Escape' });
+  assert.match(result, /Pressed "Escape"/);
+  assert.doesNotMatch(result, /on "/);
 });

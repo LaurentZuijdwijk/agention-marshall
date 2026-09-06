@@ -306,6 +306,48 @@ test('a click command calls executeScript with the selector as an argument', asy
   assert.equal(response.ok, true);
 });
 
+test('press_key calls executeScript with the selector, key and modifiers as arguments', async () => {
+  const fakes = installFakes();
+  Object.assign(fakes.storage, { bridgeUrl: 'ws://127.0.0.1:1/bridge', token: 'tok' });
+  await loadBackground();
+  await new Promise(resolve => setTimeout(resolve, 10));
+
+  const socket = fakes.created[0];
+  socket.readyState = 1;
+  socket.emit('open');
+  socket.emit('message', {
+    data: JSON.stringify({ id: 'k1', type: 'press_key', params: { selector: '#q', key: 'Enter', ctrlKey: true } }),
+  });
+  await new Promise(resolve => setTimeout(resolve, 10));
+
+  assert.equal(fakes.executeScriptCalls.length, 1);
+  assert.equal(fakes.executeScriptCalls[0].func.name, 'dispatchKeyPress');
+  assert.deepEqual(
+    fakes.executeScriptCalls[0].args,
+    ['#q', 'Enter', { ctrlKey: true, shiftKey: false, altKey: false, metaKey: false }],
+  );
+  const response = JSON.parse(socket.sent.at(-1)!);
+  assert.equal(response.ok, true);
+});
+
+test('press_key with no selector still forwards undefined, not a stray string', async () => {
+  const fakes = installFakes();
+  Object.assign(fakes.storage, { bridgeUrl: 'ws://127.0.0.1:1/bridge', token: 'tok' });
+  await loadBackground();
+  await new Promise(resolve => setTimeout(resolve, 10));
+
+  const socket = fakes.created[0];
+  socket.readyState = 1;
+  socket.emit('open');
+  socket.emit('message', { data: JSON.stringify({ id: 'k2', type: 'press_key', params: { key: 'Escape' } }) });
+  await new Promise(resolve => setTimeout(resolve, 10));
+
+  assert.deepEqual(
+    fakes.executeScriptCalls[0].args,
+    [undefined, 'Escape', { ctrlKey: false, shiftKey: false, altKey: false, metaKey: false }],
+  );
+});
+
 test('console_logs relays through tabs.sendMessage to the content-script relay', async () => {
   const fakes = installFakes();
   Object.assign(fakes.storage, { bridgeUrl: 'ws://127.0.0.1:1/bridge', token: 'tok' });
@@ -323,7 +365,7 @@ test('console_logs relays through tabs.sendMessage to the content-script relay',
   assert.deepEqual(response.result.logs, [{ level: 'log', text: 'hi' }]);
 });
 
-test('read_page passes the requested format through to executeScript, defaulting to text', async () => {
+test('read_page passes the requested format through to executeScript, defaulting to markdown', async () => {
   const fakes = installFakes();
   Object.assign(fakes.storage, { bridgeUrl: 'ws://127.0.0.1:1/bridge', token: 'tok' });
   await loadBackground();
@@ -336,12 +378,19 @@ test('read_page passes the requested format through to executeScript, defaulting
   await new Promise(resolve => setTimeout(resolve, 10));
   socket.emit('message', { data: JSON.stringify({ id: 'r2', type: 'read_page', params: { format: 'html' } }) });
   await new Promise(resolve => setTimeout(resolve, 10));
+  socket.emit('message', { data: JSON.stringify({ id: 'r3', type: 'read_page', params: { format: 'text' } }) });
+  await new Promise(resolve => setTimeout(resolve, 10));
 
-  assert.deepEqual(fakes.executeScriptCalls[0].args, ['text']);
-  assert.deepEqual(fakes.executeScriptCalls[1].args, ['html']);
+  // readPage injects one of three named, argument-free extractor functions
+  // (see page-scripts.ts) rather than an inline func taking a format
+  // argument — asserting on the function's own name is what distinguishes
+  // them here.
+  assert.equal(fakes.executeScriptCalls[0].func.name, 'extractMarkdown');
+  assert.equal(fakes.executeScriptCalls[1].func.name, 'extractHtml');
+  assert.equal(fakes.executeScriptCalls[2].func.name, 'extractText');
 });
 
-test('click/type/read_page/console_logs show the overlay on the active tab', async () => {
+test('click/type/press_key/read_page/console_logs show the overlay on the active tab', async () => {
   const fakes = installFakes();
   Object.assign(fakes.storage, { bridgeUrl: 'ws://127.0.0.1:1/bridge', token: 'tok' });
   await loadBackground();
