@@ -338,9 +338,12 @@ test('the approval shows the brief whole, since that is what is being consented 
 test('an agent that finishes reports back, once', async (t) => {
   const root = tempRoot();
   const report = 'done: restyled the header\nchecked: nothing\nblocked: nothing';
+  // The parent's closing turn and the agent's only turn race for the next
+  // scripted response — the fake serves in arrival order. Both get the report
+  // text, so the agent's result is the same whichever request landed first.
   const fake = await startFakeProvider(
     { toolCalls: [spawnCall({})] },
-    { text: 'started it' },
+    { text: report },
     { text: report },
     { text: 'noted' },
   );
@@ -455,9 +458,12 @@ test('an agent whose report was not read does wake the parent', async (t) => {
 test('a report nobody read arrives whole at the front of the next turn', async (t) => {
   const root = tempRoot();
   const report = 'done: restyled the header\nchecked: nothing\nblocked: nothing';
+  // The parent's closing turn and the agent's only turn race for the next
+  // scripted response — the fake serves in arrival order. Both get the report
+  // text, so the agent's result is the same whichever request landed first.
   const fake = await startFakeProvider(
     { toolCalls: [spawnCall({})] },
-    { text: 'started it' },
+    { text: report },
     { text: report },
     { text: 'noted' },
   );
