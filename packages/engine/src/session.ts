@@ -161,6 +161,13 @@ function connectionRetryDelayMs(attempt: number, baseMs: number): number {
 interface PendingReport {
   kind: 'job' | 'agent';
   render(): string;
+  /**
+   * True once there is nothing left to tell: the model already took the
+   * report itself, so delivering "you already read it" would only wake it to
+   * say nothing. Checked, never drained — it must be safe to ask before
+   * deciding whether a turn is worth starting.
+   */
+  spent(): boolean;
 }
 
 function resumeInstructionFor(reports: readonly PendingReport[]): string {
@@ -876,7 +883,9 @@ export class Session {
       `${(durationMs / 1000).toFixed(1)}s ${JSON.stringify(job.command.slice(0, 200))}`,
     );
 
-    this.pendingJobReports.push({ kind: 'job', render: () => this.formatJobReport(job) });
+    // A job's exit is always news — its output may have been read, its exit
+    // status has not — so a job report is never spent.
+    this.pendingJobReports.push({ kind: 'job', render: () => this.formatJobReport(job), spent: () => false });
 
     // Announced before any turn starts, so the client can say what is about to
     // happen rather than print a completion and be surprised by a turn starting
@@ -914,7 +923,15 @@ export class Session {
       (job.error ?? `${(job.result ?? '').length} chars`),
     );
 
-    this.pendingJobReports.push({ kind: 'agent', render: () => this.formatAgentReport(job) });
+    this.pendingJobReports.push({
+      kind: 'agent',
+      render: () => this.formatAgentReport(job),
+      // Only a *successful* report can be spent: `agent_output` drains a
+      // result, and a parent that drained it saw the job's status alongside.
+      // A failure or timeout drains nothing, so nothing says it was seen.
+      spent: () => job.status === 'done' && !!job.result
+        && this.agentJobs.get(job.id) !== undefined && !this.agentJobs.hasUnread(job.id),
+    });
 
     this.client.onOutput({
       type: 'agent-done',
@@ -936,6 +953,18 @@ export class Session {
    * parent that already pulled the report with `agent_output` does not pay for
    * it twice; the same rule as a background command's output.
    */
+  /**
+   * Forget reports the model has already read for itself. Called before
+   * deciding to wake it and before building a turn — the two moments a spent
+   * report could otherwise cost something: an unattended turn that says
+   * nothing, or a block of "already read" at the top of one that does.
+   */
+  private dropSpentReports(): void {
+    for (let i = this.pendingJobReports.length - 1; i >= 0; i--) {
+      if (this.pendingJobReports[i].spent()) this.pendingJobReports.splice(i, 1);
+    }
+  }
+
   private formatAgentReport(job: AgentJob): string {
     const report = this.agentJobs.read(job.id);
     let body: string;
@@ -997,6 +1026,7 @@ export class Session {
    * quiet with the report undelivered.
    */
   private maybeResume(): void {
+    this.dropSpentReports();
     if (this.pendingJobReports.length === 0) return;
     // A run already in flight claims the controller; `run` would refuse the call
     // and the report would be dropped on the floor. Its own `finally` calls back
@@ -1305,6 +1335,8 @@ export class Session {
 
     // Every finished job is reported exactly once, at the front of the next
     // turn — whether that turn was started by the user or by the job itself.
+    // Unless the model already read it, in which case not at all.
+    this.dropSpentReports();
     const jobReports = this.pendingJobReports.splice(0);
     const jobBlock = jobReports.length ? `${jobReports.map(r => r.render()).join('\n\n')}\n\n` : '';
 

@@ -368,13 +368,88 @@ test('an agent that finishes reports back, once', async (t) => {
   assert.equal(session.agents.read('agent1'), report);
   assert.equal(session.agents.read('agent1'), undefined, 'and reading drains it');
 
-  // The wake-up still names the agent, but does not repeat what was read.
+  // Read, so spent: the next turn opens on the task alone. The parent saw
+  // the status when it read the report, and has nothing more to be told.
   await session.run('carry on');
   const lastUser = [...(fake.requests.at(-1)?.messages ?? [])].reverse().find(m => m.role === 'user');
   const text = String(lastUser?.content ?? '');
-  assert.match(text, /\[Agent finished\]/);
-  assert.match(text, /already read its report with agent_output/);
+  assert.doesNotMatch(text, /\[Agent finished\]/);
   assert.doesNotMatch(text, /restyled the header/, 'the body was paid for once, via agent_output');
+  assert.match(text, /carry on/);
+});
+
+// The case the drop exists for. A parent still working when its agent finishes
+// reads the report with agent_output, acts on it, and ends its turn — and used
+// to be woken straight back up to be told, in effect, "the thing you already
+// read". An unattended turn that has nothing to say is pure cost.
+test('an agent whose report was read mid-turn does not wake the parent afterwards', async (t) => {
+  const root = tempRoot();
+  const fake = await startFakeProvider(
+    // A turn slow enough for the agent to finish and be read while it runs.
+    { toolCalls: [{ name: 'run_shell', arguments: { command: 'sleep 0.4', background: false } }] },
+    { text: 'done here' },
+  );
+  t.after(() => fake.close());
+
+  const events: OutputEvent[] = [];
+  const session = makeSession(root, fake, { autoResume: true }, {
+    onOutput: (event) => { events.push(event); },
+    requestApproval: async () => 'approve',
+  });
+  t.after(() => session.dispose());
+
+  let finish!: (report: string) => void;
+  session.agents.start({
+    brief: 'look around', tier: 'fast', toolset: 'readonly', label: 'fake/fast',
+    run: () => new Promise<string>(resolve => { finish = resolve; }),
+  });
+
+  const turn = session.run('wait for it');
+  await new Promise(resolve => setTimeout(resolve, 100));
+  finish('done: looked\nchecked: nothing\nblocked: nothing');
+  await agentsSettled(session);
+  assert.equal(session.busy, true, 'the parent is still mid-turn when the agent finishes');
+  assert.match(session.agents.read('agent1') ?? '', /looked/, 'and reads the report itself');
+  await turn;
+
+  await new Promise(resolve => setTimeout(resolve, 200));
+  assert.equal(events.filter(e => e.type === 'thinking').length, 1, 'no second turn was started');
+  assert.equal(fake.requests.length, 2, 'and nothing more went to the provider');
+});
+
+// The other half: unread, the same finish does wake the parent.
+test('an agent whose report was not read does wake the parent', async (t) => {
+  const root = tempRoot();
+  const fake = await startFakeProvider(
+    { toolCalls: [{ name: 'run_shell', arguments: { command: 'sleep 0.4', background: false } }] },
+    { text: 'done here' },
+    { text: 'noted the report' },
+  );
+  t.after(() => fake.close());
+
+  const events: OutputEvent[] = [];
+  const session = makeSession(root, fake, { autoResume: true }, {
+    onOutput: (event) => { events.push(event); },
+    requestApproval: async () => 'approve',
+  });
+  t.after(() => session.dispose());
+
+  let finish!: (report: string) => void;
+  session.agents.start({
+    brief: 'look around', tier: 'fast', toolset: 'readonly', label: 'fake/fast',
+    run: () => new Promise<string>(resolve => { finish = resolve; }),
+  });
+
+  const turn = session.run('wait for it');
+  await new Promise(resolve => setTimeout(resolve, 100));
+  finish('done: looked\nchecked: nothing\nblocked: nothing');
+  await agentsSettled(session);
+  await turn;
+
+  for (let i = 0; i < 100 && fake.pending > 0; i++) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(events.filter(e => e.type === 'thinking').length, 2, 'the wake-up turn ran');
+  const lastUser = [...(fake.requests.at(-1)?.messages ?? [])].reverse().find(m => m.role === 'user');
+  assert.match(String(lastUser?.content ?? ''), /looked/, 'carrying the report');
 });
 
 test('a report nobody read arrives whole at the front of the next turn', async (t) => {

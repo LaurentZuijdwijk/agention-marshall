@@ -106,6 +106,8 @@ export interface AgentJobs {
    * parent's context, and an agent's final message is not small.
    */
   read(id: string): string | undefined;
+  /** Whether `read` would return anything — without taking it. */
+  hasUnread(id: string): boolean;
   /** What the job has been doing lately, oldest first. Never drained. */
   activity(id: string): string[];
   /** Record a step. Called by whoever wired up the agent's tool listeners. */
@@ -244,6 +246,10 @@ export function createAgentJobs(options: AgentJobsOptions = {}): AgentJobs {
       const out = rec.unread;
       rec.unread = undefined;
       return out;
+    },
+
+    hasUnread(id) {
+      return records.get(id)?.unread !== undefined;
     },
 
     activity(id) {

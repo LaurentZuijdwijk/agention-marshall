@@ -187,6 +187,19 @@ describe('createAgentJobs', () => {
     assert.equal(trail[0], 'read_file f8.ts');
   });
 
+  it('says whether a report is still unread, without taking it', async () => {
+    const jobs = createAgentJobs();
+    jobs.start(opts({ run: async () => 'the report' }));
+    assert.equal(jobs.hasUnread('agent1'), false, 'nothing to read while running');
+    await settled();
+
+    assert.equal(jobs.hasUnread('agent1'), true);
+    assert.equal(jobs.hasUnread('agent1'), true, 'asking is not taking');
+    assert.equal(jobs.read('agent1'), 'the report');
+    assert.equal(jobs.hasUnread('agent1'), false);
+    assert.equal(jobs.hasUnread('agent9'), false, 'unknown ids read as nothing to read');
+  });
+
   it('ignores notes for a job that has already stopped', async () => {
     const jobs = createAgentJobs();
     jobs.start(opts({ run: async () => 'done' }));
