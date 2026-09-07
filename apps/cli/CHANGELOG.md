@@ -1,5 +1,14 @@
 # @agentionai/marshall-cli
 
+## 0.24.4
+
+### Patch Changes
+
+- Pick up marshall-engine 0.24.2 and marshall-tools 0.9.2: reports from agents and jobs that
+  finish mid-turn are readable on demand and no longer wake the parent once read, and the read
+  gate accepts a whole file asked for by line range. The CLI has to move for the update to reach
+  an installed copy — its own version is what an update checks.
+
 ## 0.24.3
 
 ### Patch Changes
