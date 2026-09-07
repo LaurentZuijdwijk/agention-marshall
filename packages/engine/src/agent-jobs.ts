@@ -67,6 +67,8 @@ export interface AgentJob {
   startedAt: number;
   status: AgentJobStatus;
   endedAt?: number;
+  /** When its most recent tool call returned. Absent until the first one does. */
+  lastActivityAt?: number;
   /** The agent's final message. Present once status is `done`. */
   result?: string;
   /** Why it failed. Present once status is `failed`. */
@@ -253,6 +255,7 @@ export function createAgentJobs(options: AgentJobsOptions = {}): AgentJobs {
       if (!rec || rec.job.status !== 'running') return;
       rec.activity.push(line);
       if (rec.activity.length > MAX_ACTIVITY) rec.activity.shift();
+      rec.job.lastActivityAt = Date.now();
     },
 
     kill(id) {
@@ -273,9 +276,15 @@ export function createAgentJobs(options: AgentJobsOptions = {}): AgentJobs {
 /** One line describing a job — shared by `agent_list`, `agent_output` and the
  *  completion report the engine feeds back into history. */
 export function summariseAgentJob(job: AgentJob): string {
-  const elapsed = ((job.endedAt ?? Date.now()) - job.startedAt) / 1000;
+  const now = Date.now();
+  const elapsed = ((job.endedAt ?? now) - job.startedAt) / 1000;
+  // Elapsed time alone cannot tell thinking from wedged; when the last tool
+  // call came back can. Only for a running job — a finished one has an end.
+  const idle = job.status === 'running' && job.lastActivityAt !== undefined
+    ? `, last tool result ${((now - job.lastActivityAt) / 1000).toFixed(1)}s ago`
+    : '';
   const state = job.status === 'running'
-    ? `running for ${elapsed.toFixed(1)}s`
+    ? `running for ${elapsed.toFixed(1)}s${idle}`
     : `${job.status} after ${elapsed.toFixed(1)}s`;
   return `${job.id} (${job.agentName ?? job.tier}, ${job.label}, ${job.toolset}) — ${state}`;
 }

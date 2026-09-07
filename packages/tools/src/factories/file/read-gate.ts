@@ -103,6 +103,29 @@ function simpleDiff(filePath: string, edits: readonly EditRequest[]): string {
  */
 export const MAX_EDIT_PAYLOAD_CHARS = 16_000;
 
+/**
+ * The refusal for a batch over `MAX_EDIT_PAYLOAD_CHARS`, shared by both edit
+ * tools. The advice it gives — "rewrite with write_file" — has to be advice
+ * the caller can actually follow: write_file is gated on a complete read, and
+ * a model that was told to use it while its last read was ranged went back
+ * and forth between the two refusals until it gave up and edited piecemeal.
+ * So when the read on record would not unlock write_file, say what would.
+ */
+function overSizedEdits(tool: string, count: number, payload: number, coverage: ReadCoverage | undefined): string {
+  const writeRoute = coverage === 'complete'
+    ? 'Rewrite the file with write_file if most of it is changing'
+    : coverage === 'over-limit'
+      ? 'Rewrite the file with write_file if most of it is changing (it needs the complete file read first — raise maxFileBytes)'
+      : 'Rewrite the file with write_file if most of it is changing (it needs the whole file read first: call read_file with no line range, then write)';
+  return (
+    `Error: ${count === 1 ? 'this edit carries' : `these ${count} edits carry`} ${payload} characters, ` +
+    `over the ${MAX_EDIT_PAYLOAD_CHARS} a single ${tool} call accepts. Batching is for several ` +
+    `*small* changes; this is large enough to be a different job. ${writeRoute}, split the edits ` +
+    `across calls if not, or — if the same mechanical change applies across many files — do it in ` +
+    `one run_shell script instead.`
+  );
+}
+
 function editPayloadChars(edits: readonly EditRequest[]): number {
   return edits.reduce((n, e) => n + (e.oldString?.length ?? 0) + e.newString.length, 0);
 }
@@ -273,12 +296,26 @@ export function buildReadFile(
         const { totalLines } = scan;
         const rel = relative(workspaceRoot, resolved);
 
-        readFiles.set(resolved, scan.hash);
-        // A full read that rendered every line is the only thing that
-        // authorizes a wholesale overwrite; anything else says why not.
-        const coverage: ReadCoverage = !isFullRead ? 'range' : scan.truncated ? 'over-limit' : 'complete';
         const coverageByPath = coverageSnapshot ?? coverageByReadMap.get(readFiles) ?? new Map<string, ReadCoverage>();
         if (!coverageSnapshot) coverageByReadMap.set(readFiles, coverageByPath);
+        // Both captured before this read is recorded: whether the caller had
+        // already seen the whole of *this exact* content.
+        const previousHash = readFiles.get(resolved);
+        const previousCoverage = coverageByPath.get(resolved);
+        readFiles.set(resolved, scan.hash);
+        // Having rendered every line is what authorizes a wholesale overwrite,
+        // and a range can do that too: `startLine: 1, endLine: 100000` is how a
+        // model told to "read the whole file" often asks for it, and refusing
+        // that as a partial read sent one in circles. So can a ranged re-read
+        // of a file already read whole and unchanged since — looking at one
+        // section again does not un-see the rest, as long as the rest is still
+        // what it was. The hash comparison is what makes that safe: the moment
+        // the file changes underneath, a ranged read is partial again.
+        const renderedAll = !scan.truncated && start <= 1 && scan.end >= totalLines;
+        const stillWhole = previousCoverage === 'complete' && previousHash === scan.hash;
+        const coverage: ReadCoverage = scan.truncated
+          ? (isFullRead ? 'over-limit' : 'range')
+          : (isFullRead || renderedAll || stillWhole) ? 'complete' : 'range';
         coverageByPath.set(resolved, coverage);
 
         // Dedupe: on full reads, return a lightweight marker if content unchanged.
@@ -492,13 +529,7 @@ export function createReadGateTools(
         }
         const payload = editPayloadChars(edits);
         if (payload > MAX_EDIT_PAYLOAD_CHARS) {
-          return (
-            `Error: these ${edits.length} edit${edits.length === 1 ? '' : 's'} carry ${payload} characters, ` +
-            `over the ${MAX_EDIT_PAYLOAD_CHARS} a single edit_file call accepts. Batching is for several ` +
-            `*small* changes; this is large enough to be a different job. Rewrite the file with ` +
-            `write_file if most of it is changing, split the edits across calls if not, or — if the ` +
-            `same mechanical change applies across many files — do it in one run_shell script instead.`
-          );
+          return overSizedEdits('edit_file', edits.length, payload, readCoverage.get(resolved));
         }
         return await withFileLock(resolved, async () => {
           const original = await readFile(resolved, 'utf8');
@@ -602,13 +633,7 @@ export function createReadGateTools(
         }
         const payload = editPayloadChars(edits);
         if (payload > MAX_EDIT_PAYLOAD_CHARS) {
-          return (
-            `Error: these ${edits.length} edit${edits.length === 1 ? '' : 's'} carry ${payload} characters, ` +
-            `over the ${MAX_EDIT_PAYLOAD_CHARS} a single edit_lines call accepts. Batching is for several ` +
-            `*small* changes; this is large enough to be a different job. Rewrite the file with ` +
-            `write_file if most of it is changing, split the edits across calls if not, or — if the ` +
-            `same mechanical change applies across many files — do it in one run_shell script instead.`
-          );
+          return overSizedEdits('edit_lines', edits.length, payload, readCoverage.get(resolved));
         }
         return await withFileLock(resolved, async () => {
           const original = await readFile(resolved, 'utf8');

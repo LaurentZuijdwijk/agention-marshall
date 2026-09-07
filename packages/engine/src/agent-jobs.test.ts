@@ -220,4 +220,20 @@ describe('summariseAgentJob', () => {
     assert.match(line, /^agent1 \(fast, openrouter\/some-model, edit\)/);
     assert.match(line, /running for \d+\.\ds$/);
   });
+
+  it('says when a running job last heard from a tool, since elapsed time alone cannot tell thinking from wedged', async () => {
+    const gate = deferred();
+    const jobs = createAgentJobs();
+    jobs.start(opts({ run: () => gate.promise }));
+    assert.doesNotMatch(summariseAgentJob(jobs.get('agent1')!), /last tool result/,
+      'nothing to say before the first tool call returns');
+
+    jobs.note('agent1', 'read_file a.ts');
+    assert.match(summariseAgentJob(jobs.get('agent1')!), /running for \d+\.\ds, last tool result \d+\.\ds ago$/);
+
+    gate.resolve('done');
+    await settled();
+    assert.match(summariseAgentJob(jobs.get('agent1')!), /done after \d+\.\ds$/,
+      'a finished job has an end, which says more than its last tool call');
+  });
 });

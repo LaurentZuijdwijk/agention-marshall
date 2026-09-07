@@ -242,8 +242,7 @@ test('write_file refuses after a ranged read, and names the range as the reason'
   const tools = createFileTools(makeConfig({ workspaceRoot: root }));
   const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
 
-  // A range that happens to cover the whole file is still a ranged read.
-  await byName.read_file.execute('a', 'b', { path: 'small.txt', endLine: 999 }, 'id');
+  await byName.read_file.execute('a', 'b', { path: 'small.txt', endLine: 2 }, 'id');
   const result = await byName.write_file.execute('a', 'b', { path: 'small.txt', content: 'x' }, 'id');
 
   assert.match(result, /read with startLine\/endLine/);
@@ -255,6 +254,44 @@ test('write_file refuses after a ranged read, and names the range as the reason'
   // Re-reading without a range is the stated fix, so it has to work.
   await byName.read_file.execute('a', 'b', { path: 'small.txt' }, 'id');
   assert.match(await byName.write_file.execute('a', 'b', { path: 'small.txt', content: 'x' }, 'id'), /Wrote/);
+});
+
+// Observed live: told "call read_file again without a line range", a model
+// asked for lines 1–100000 instead — every line, by a range — and was refused
+// as a partial read. It then tried 0–0 and 1–0, gave up on write_file, and
+// spent four minutes rewriting the file in pieces. Rendering every line is
+// what the gate is for; how the caller asked for them is not.
+test('a ranged read that renders every line counts as having read the whole file', async () => {
+  const root = tempRoot();
+  writeFileSync(join(root, 'small.txt'), 'one\ntwo\nthree\n');
+  const tools = createFileTools(makeConfig({ workspaceRoot: root }));
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+
+  await byName.read_file.execute('a', 'b', { path: 'small.txt', startLine: 1, endLine: 100000 }, 'id');
+  assert.match(await byName.write_file.execute('a', 'b', { path: 'small.txt', content: 'x' }, 'id'), /Wrote/);
+});
+
+// Also observed live, right after the case above: a full read had unlocked the
+// write, then two ranged re-reads of one section locked it again — the model
+// looked at lines 1–57 twice and was back where it started. Looking at part of
+// a file again does not un-see the rest, provided the rest is still what it was.
+test('a ranged re-read of an unchanged file keeps a complete read complete', async () => {
+  const root = tempRoot();
+  writeFileSync(join(root, 'small.txt'), 'one\ntwo\nthree\n');
+  const tools = createFileTools(makeConfig({ workspaceRoot: root }));
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+
+  await byName.read_file.execute('a', 'b', { path: 'small.txt' }, 'id');
+  await byName.read_file.execute('a', 'b', { path: 'small.txt', startLine: 1, endLine: 2 }, 'id');
+  assert.match(await byName.write_file.execute('a', 'b', { path: 'small.txt', content: 'x\ny\nz\n' }, 'id'), /Wrote/);
+
+  // But not once the file has moved on: the section it re-read is current,
+  // the rest of what it remembers is not, and that is exactly a partial read.
+  writeFileSync(join(root, 'small.txt'), 'x\ny\nz\nnew tail\n');
+  await byName.read_file.execute('a', 'b', { path: 'small.txt', startLine: 1, endLine: 2 }, 'id');
+  const refused = await byName.write_file.execute('a', 'b', { path: 'small.txt', content: 'q' }, 'id');
+  assert.match(refused, /read with startLine\/endLine/);
+  assert.equal(readFileSync(join(root, 'small.txt'), 'utf8'), 'x\ny\nz\nnew tail\n');
 });
 
 // The way around the gate above, if an edit counted as having read the file:
@@ -825,6 +862,34 @@ test('an oversized batch is refused, and says what to do instead', async () => {
   assert.match(result, /write_file/, 'the way out for a whole-file rewrite');
   assert.match(result, /run_shell/, 'and for the same change across many files');
   assert.equal(readFileSync(join(root, 'big.js'), 'utf8'), `${body}\nTAIL\n`, 'nothing was written');
+});
+
+// The refusal above says "rewrite with write_file", and write_file is gated on
+// a complete read. Observed live: a model whose last read was ranged bounced
+// between the two refusals — edit too big, write not allowed — and never got
+// told the one step that joins them.
+test('an oversized batch after a ranged read says how to unlock write_file', async () => {
+  const root = tempRoot();
+  const body = 'x'.repeat(9_000);
+  writeFileSync(join(root, 'big.js'), `${body}\nTAIL\n`);
+  const tools = createFileTools(makeConfig({ workspaceRoot: root }));
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+
+  await byName.read_file.execute('a', 'b', { path: 'big.js', startLine: 1, endLine: 1 }, 'id');
+  const ranged = await byName.edit_lines.execute('a', 'b', {
+    path: 'big.js',
+    edits: [{ startLine: 1, endLine: 1, newString: 'y'.repeat(17_000) }],
+  }, 'id');
+  assert.match(ranged, /over the 16000/);
+  assert.match(ranged, /read_file with no line range/, 'names the step that makes write_file possible');
+
+  await byName.read_file.execute('a', 'b', { path: 'big.js' }, 'id');
+  const whole = await byName.edit_lines.execute('a', 'b', {
+    path: 'big.js',
+    edits: [{ startLine: 1, endLine: 1, newString: 'y'.repeat(17_000) }],
+  }, 'id');
+  assert.match(whole, /over the 16000/);
+  assert.doesNotMatch(whole, /no line range/, 'write_file is already open — no detour to suggest');
 });
 
 test('an ordinary batch of small edits is unaffected by the ceiling', async () => {

@@ -488,7 +488,8 @@ export class ToolBelt {
         description:
           'Read an agent\'s report. Returns its status, and its final report once it has finished — ' +
           'each report only once, since you are also told it directly. Use this to check on an agent ' +
-          'mid-run; you do not need it to learn that one finished.',
+          'mid-run, or to read the report of one that finished while you were still working: that ' +
+          'report otherwise waits until your turn ends. You do not need it to learn that one finished.',
         properties: {
           agent_id: { type: 'string', description: 'The id returned by spawn_agent, e.g. "agent1"' },
         },

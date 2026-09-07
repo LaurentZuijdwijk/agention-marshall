@@ -146,10 +146,21 @@ function connectionRetryDelayMs(attempt: number, baseMs: number): number {
   return Math.round(capped * (0.75 + Math.random() * 0.5));
 }
 
-/** A queued report, and what produced it — the kind picks the wake-up wording. */
+/**
+ * A queued report, and what produced it — the kind picks the wake-up wording.
+ *
+ * Rendered when it is *delivered*, not when it is queued. Both report bodies are
+ * drained from their registry (`AgentJobs.read`, `BackgroundJobs.read`) so the
+ * model never pays for one twice, and a queue that drained at enqueue time got
+ * the order wrong: a job finishing mid-turn sat in this queue until the turn
+ * ended, while `agent_output`/`shell_output` in that same turn found the
+ * registry already empty and told the model its report had "already been
+ * delivered". Draining at render time means whichever reader comes first —
+ * the model asking, or the wake-up — gets the body, and the other says so.
+ */
 interface PendingReport {
   kind: 'job' | 'agent';
-  text: string;
+  render(): string;
 }
 
 function resumeInstructionFor(reports: readonly PendingReport[]): string {
@@ -865,7 +876,7 @@ export class Session {
       `${(durationMs / 1000).toFixed(1)}s ${JSON.stringify(job.command.slice(0, 200))}`,
     );
 
-    this.pendingJobReports.push({ kind: 'job', text: this.formatJobReport(job) });
+    this.pendingJobReports.push({ kind: 'job', render: () => this.formatJobReport(job) });
 
     // Announced before any turn starts, so the client can say what is about to
     // happen rather than print a completion and be surprised by a turn starting
@@ -903,7 +914,7 @@ export class Session {
       (job.error ?? `${(job.result ?? '').length} chars`),
     );
 
-    this.pendingJobReports.push({ kind: 'agent', text: this.formatAgentReport(job) });
+    this.pendingJobReports.push({ kind: 'agent', render: () => this.formatAgentReport(job) });
 
     this.client.onOutput({
       type: 'agent-done',
@@ -920,9 +931,12 @@ export class Session {
     this.maybeResume();
   }
 
+  /**
+   * Called at delivery, not at completion — see `PendingReport`. `read`, so a
+   * parent that already pulled the report with `agent_output` does not pay for
+   * it twice; the same rule as a background command's output.
+   */
   private formatAgentReport(job: AgentJob): string {
-    // `read`, so a parent that already polled `agent_output` does not pay for
-    // the whole report twice — the same rule as a background command's output.
     const report = this.agentJobs.read(job.id);
     let body: string;
     if (job.status === 'timed-out') {
@@ -936,15 +950,27 @@ export class Session {
         'whether to do it yourself, narrow the brief and try again, or leave it.';
     } else if (job.error) {
       body = `It failed: ${job.error}`;
+    } else if (report !== undefined) {
+      body = report;
+    } else if (!job.result) {
+      body = '(it produced no report)';
+    } else if (this.agentJobs.get(job.id)) {
+      // Still registered but nothing unread: the model already took it.
+      body = 'You already read its report with agent_output.';
     } else {
-      body = report ?? '(it produced no report)';
+      // Pruned from the registry before this was delivered — a long turn that
+      // spawned more agents than it retains. The snapshot still has the words.
+      body = job.result;
     }
     return `[Agent finished]\n${summariseAgentJob(job)}\n\n${body}`;
   }
 
+  /** Same delivery-time rule as `formatAgentReport`, for the same reason. */
   private formatJobReport(job: BackgroundJob): string {
     const output = formatJobOutput(this.jobs.read(job.id));
-    return `[Background job finished]\n${summariseJob(job)}\n\n${output || '(no output)'}`;
+    const alreadyRead = !output && formatJobOutput(this.jobs.tail(job.id));
+    const body = output || (alreadyRead ? 'You already read its output with shell_output.' : '(no output)');
+    return `[Background job finished]\n${summariseJob(job)}\n\n${body}`;
   }
 
   /**
@@ -1280,7 +1306,7 @@ export class Session {
     // Every finished job is reported exactly once, at the front of the next
     // turn — whether that turn was started by the user or by the job itself.
     const jobReports = this.pendingJobReports.splice(0);
-    const jobBlock = jobReports.length ? `${jobReports.map(r => r.text).join('\n\n')}\n\n` : '';
+    const jobBlock = jobReports.length ? `${jobReports.map(r => r.render()).join('\n\n')}\n\n` : '';
 
     const effectiveTask = jobBlock + (steering
       ? `[Previous task was interrupted: "${steering}"]\n\nNew direction: ${task}`

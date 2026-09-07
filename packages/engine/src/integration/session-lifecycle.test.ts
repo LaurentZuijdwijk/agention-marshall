@@ -249,6 +249,39 @@ test('a background job finishing while idle wakes the agent', async (t) => {
     'the resumed turn is prefixed with the job report');
 });
 
+test('a job that finishes while the model is still working keeps its output for shell_output', async (t) => {
+  const root = tempRoot();
+  const fake = await startFakeProvider(
+    { toolCalls: [{ name: 'run_shell', arguments: { command: 'echo $((6*7))', background: true } }] },
+    { text: 'Started it in the background.' },
+    { text: 'noted' },
+  );
+  t.after(() => fake.close());
+
+  const { client, events } = collector();
+  // Auto-resume off, so the report is queued and not delivered — the same
+  // state a job is in when it exits mid-turn, where the model's next move is
+  // often `shell_output` on it. That used to answer "no new output", because
+  // the exit handler had already drained the output into the queue.
+  const session = makeSession(root, fake, client, { autoResume: false });
+  t.after(() => session.dispose());
+
+  await session.run('run it in the background');
+  await waitFor(() => events.some(e => e.type === 'job-done'), 5000, 'the job to exit');
+
+  const output = session.backgroundJobs.read('job1');
+  assert.match(output?.stdout ?? '', /\b42\b/, 'the output is still there to be read');
+
+  // And the wake-up says it was read, rather than repeating it.
+  await session.run('carry on');
+  const resumed = fake.requests[fake.requests.length - 1];
+  const lastUser = resumed.messages.filter(m => m.role === 'user').pop();
+  const text = JSON.stringify(lastUser?.content);
+  assert.match(text, /Background job finished/);
+  assert.match(text, /already read its output with shell_output/);
+  assert.doesNotMatch(text, /\b42\b/, 'paid for once, via shell_output');
+});
+
 // A tool result whose call is gone is rejected exactly like a call with no
 // result — OpenAI, Azure and OpenRouter all answer with a bare 400, and because
 // it carries no context-length wording the engine used to read it as an

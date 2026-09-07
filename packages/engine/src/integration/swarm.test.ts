@@ -337,10 +337,12 @@ test('the approval shows the brief whole, since that is what is being consented 
 
 test('an agent that finishes reports back, once', async (t) => {
   const root = tempRoot();
+  const report = 'done: restyled the header\nchecked: nothing\nblocked: nothing';
   const fake = await startFakeProvider(
     { toolCalls: [spawnCall({})] },
     { text: 'started it' },
-    { text: 'done: restyled the header\nchecked: nothing\nblocked: nothing' },
+    { text: report },
+    { text: 'noted' },
   );
   t.after(() => fake.close());
 
@@ -357,10 +359,48 @@ test('an agent that finishes reports back, once', async (t) => {
   assert.ok(done, 'the parent has to be told, or delegation is a black hole');
   assert.equal(done.status, 'done');
   assert.equal(done.brief, 'restyle the header');
-
-  // Drained by the report, so a parent that also polls does not pay twice.
-  assert.equal(session.agents.read('agent1'), undefined);
   assert.equal(session.agents.get('agent1')?.status, 'done');
+
+  // Queued but not yet delivered (auto-resume is off), so the report is still
+  // there for `agent_output` to read. This is the mid-turn case: an agent that
+  // finishes while the parent is still working must not be told "already
+  // delivered" about a report that is only sitting in the queue.
+  assert.equal(session.agents.read('agent1'), report);
+  assert.equal(session.agents.read('agent1'), undefined, 'and reading drains it');
+
+  // The wake-up still names the agent, but does not repeat what was read.
+  await session.run('carry on');
+  const lastUser = [...(fake.requests.at(-1)?.messages ?? [])].reverse().find(m => m.role === 'user');
+  const text = String(lastUser?.content ?? '');
+  assert.match(text, /\[Agent finished\]/);
+  assert.match(text, /already read its report with agent_output/);
+  assert.doesNotMatch(text, /restyled the header/, 'the body was paid for once, via agent_output');
+});
+
+test('a report nobody read arrives whole at the front of the next turn', async (t) => {
+  const root = tempRoot();
+  const report = 'done: restyled the header\nchecked: nothing\nblocked: nothing';
+  const fake = await startFakeProvider(
+    { toolCalls: [spawnCall({})] },
+    { text: 'started it' },
+    { text: report },
+    { text: 'noted' },
+  );
+  t.after(() => fake.close());
+
+  const session = makeSession(root, fake);
+  t.after(() => session.dispose());
+  await session.run('restyle things');
+  await agentsSettled(session);
+
+  await session.run('carry on');
+  const lastUser = [...(fake.requests.at(-1)?.messages ?? [])].reverse().find(m => m.role === 'user');
+  const text = String(lastUser?.content ?? '');
+  assert.match(text, /\[Agent finished\]/);
+  assert.match(text, /restyled the header/);
+  // Delivered, so drained: a poll after the wake-up says so instead of
+  // handing the same words over a second time.
+  assert.equal(session.agents.read('agent1'), undefined);
 });
 
 test('two agents editing one file both land', async (t) => {
