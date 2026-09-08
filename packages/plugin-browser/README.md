@@ -72,7 +72,7 @@ reachable from any tab's own `fetch`/`WebSocket`.
 | `browser_type` | Type into the first input/textarea matching a CSS selector |
 | `browser_press_key` | Press a key (Enter, Escape, Tab, arrows, a character), with optional modifiers |
 | `browser_read_page` | Read the active tab's content as `markdown` (default), `text`, or `html` |
-| `browser_console_logs` | Read recent `console.*` output from the active tab |
+| `browser_console_logs` | Read recent `console.*` output, uncaught errors and failed resource loads from the active tab |
 
 `browser_read_page`'s `markdown` mode keeps structure — headings, lists,
 links with their `href` — at a fraction of `html`'s cost, so the model can

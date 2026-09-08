@@ -129,7 +129,9 @@ export function registerBrowserTools(server: McpServer, bridge: ExtensionBridge)
   server.registerTool(
     'browser_console_logs',
     {
-      description: 'Read recent console messages (log/warn/error) captured from the active tab.',
+      description: 'Read recent console output from the active tab, including uncaught exceptions, '
+        + 'unhandled promise rejections and failed resource loads. Draining is destructive: each call '
+        + 'returns only what was captured since the last one.',
       inputSchema: {},
     },
     async () => {

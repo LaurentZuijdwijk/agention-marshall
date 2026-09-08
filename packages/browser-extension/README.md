@@ -66,12 +66,15 @@ Click the toolbar icon any time to see:
 - `overlay.ts` (isolated world) — the in-page pulsing border + badge,
   toggled by `show_overlay`/`hide_overlay` runtime messages from
   `background.ts`.
-- `console-capture-main.ts` (runs in the page's **MAIN** world) +
-  `console-capture-relay.ts` (isolated world) — a content-script pair that
-  wraps the page's own `console.*` and buffers it for `browser_console_logs`.
-  Two scripts because a MAIN-world script sees the page's real console but
-  has no access to `chrome.*` APIs, and an isolated-world script has the
-  opposite problem — the pair talks to each other over `window.postMessage`.
+- `console-capture-main.ts` + `console-capture.ts` (run in the page's
+  **MAIN** world) + `console-capture-relay.ts` (isolated world) — a
+  content-script pair that wraps the page's own `console.*` and listens for
+  the failures the console never sees (uncaught exceptions, unhandled
+  promise rejections, failed resource loads), buffering both for
+  `browser_console_logs`. Two scripts because a MAIN-world script sees the
+  page's real console but has no access to `chrome.*` APIs, and an
+  isolated-world script has the opposite problem — the pair talks to each
+  other over `window.postMessage`.
 - `protocol.ts` — the shapes shared across the above, matching
   `plugin-browser`'s `bridge.ts` on the other end of the WebSocket.
 
