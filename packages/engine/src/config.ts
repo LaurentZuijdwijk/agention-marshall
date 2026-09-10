@@ -1,11 +1,10 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { isExpired, readCredentials } from './oauth-store.js';
 import type { Limits, CommandPolicy } from '@agentionai/marshall-tools';
 import type { McpServerConfig } from './mcp.js';
 import type { PluginConfig } from './plugins.js';
 import type { AgentToolset } from './agent-jobs.js';
 
-export type Provider = 'claude' | 'openai' | 'gemini' | 'mistral' | 'ollama' | 'llamacpp' | 'openrouter' | 'cerebras' | 'openai-compatible';
+export type Provider = 'claude' | 'openai' | 'codex' | 'gemini' | 'mistral' | 'ollama' | 'llamacpp' | 'openrouter' | 'cerebras' | 'openai-compatible';
 
 export interface AgentProfile {
   /** User-visible name for an OpenAI-compatible endpoint. */
@@ -540,6 +539,10 @@ export function cheapModelFor(provider: Provider): string | undefined {
 export const PROVIDER_DEFAULTS = {
   claude:     { model: 'claude-sonnet-4-6',    envKey: 'ANTHROPIC_API_KEY' as const },
   openai:     { model: 'gpt-4o',               envKey: 'OPENAI_API_KEY' as const },
+  // No env key at all: this provider is a ChatGPT *subscription*, reached with
+  // an OAuth login rather than a `sk-...` platform key. `/login codex` is the
+  // only way in, which is why `resolveAuth` handles it before the env lookup.
+  codex:      { model: 'gpt-5.6-luna',         envKey: null },
   gemini:     { model: 'gemini-2.0-flash',     envKey: 'GEMINI_API_KEY' as const },
   mistral:    { model: 'mistral-large-latest', envKey: 'MISTRAL_API_KEY' as const },
   ollama:     { model: 'llama3.2',             envKey: null, host: 'http://localhost:11434' },
@@ -549,41 +552,57 @@ export const PROVIDER_DEFAULTS = {
   'openai-compatible': { model: 'default', envKey: null, host: 'http://localhost:8000/v1' },
 } as const satisfies Record<Provider, { model: string; envKey: string | null; host?: string }>;
 
-interface MarshallCredentials {
-  accessToken: string;
-  expiresAt: number;
-}
-
 function readMarshallToken(): string | null {
-  try {
-    const credPath = join(process.env.HOME ?? '~', '.marshall', 'credentials.json');
-    if (!existsSync(credPath)) return null;
-    const creds = JSON.parse(readFileSync(credPath, 'utf8')) as MarshallCredentials;
-    if (!creds.accessToken) return null;
-    if (Date.now() > creds.expiresAt - 60_000) {
-      throw new Error('Marshall OAuth token has expired. Run `marshall login` to re-authenticate.');
-    }
-    return creds.accessToken;
-  } catch (err) {
-    if (err instanceof Error && err.message.includes('expired')) throw err;
-    return null;
+  const creds = readCredentials('claude');
+  if (!creds) return null;
+  if (isExpired(creds)) {
+    throw new Error('Marshall OAuth token has expired. Run `marshall login` to re-authenticate.');
   }
+  return creds.accessToken;
 }
 
 export interface ResolvedAuth {
   key: string;
-  /** How `key` should be presented to the provider's SDK — `'oauth'` for Marshall's
-   *  stored Claude OAuth token, `'apiKey'` for everything else. */
+  /** How `key` should be presented to the provider's SDK — `'oauth'` for a
+   *  stored OAuth login, `'apiKey'` for everything else. */
   authType: 'apiKey' | 'oauth';
+  /**
+   * ChatGPT account the OAuth token belongs to, when there is one. Only the
+   * OpenAI Codex backend asks for it, and only ever as a header — see
+   * `openai-oauth.ts`.
+   */
+  accountId?: string;
 }
 
 export function resolveAuth(profile: AgentProfile): ResolvedAuth {
+  // Checked before `profile.apiKey`, unlike every other provider: there is no
+  // platform key that works here, so a key left over from an `openai` profile
+  // would only produce a confusing 401 from the ChatGPT backend.
+  if (profile.provider === 'codex') {
+    // Expiry is deliberately not checked. The SDK's token provider refreshes on
+    // demand, so an aged token is still a working login — and `key` is replaced
+    // before the request goes out either way.
+    const creds = readCredentials('codex');
+    if (!creds) {
+      throw new Error(
+        'Not signed in to ChatGPT. Run `/login codex` — it adopts an existing `codex login` if you have one, '
+        + 'and opens a browser otherwise.',
+      );
+    }
+    return {
+      key: creds.accessToken,
+      authType: 'oauth',
+      ...(creds.accountId ? { accountId: creds.accountId } : {}),
+    };
+  }
   if (profile.apiKey) return { key: profile.apiKey, authType: 'apiKey' };
   const envKey = PROVIDER_DEFAULTS[profile.provider].envKey;
   if (!envKey) return { key: '', authType: 'apiKey' }; // ollama — no key needed
   const val = process.env[envKey];
   if (val) return { key: val, authType: 'apiKey' };
-  // Fall back to Marshall's stored OAuth token for the claude provider.
+  // Fall back to Marshall's stored OAuth login. The env key is checked first:
+  // someone who has exported a key has said which account pays, and a `/login`
+  // done months ago should not quietly override that.
   if (profile.provider === 'claude') {
     const token = readMarshallToken();
     if (token) return { key: token, authType: 'oauth' };

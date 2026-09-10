@@ -109,5 +109,39 @@ describe('runHeadless — happy path', () => {
     assert.strictEqual(usageLines.length, 1, 'only the final usage sample should be printed');
     const parsed = JSON.parse(usageLines[0].split('MARSHALL_USAGE ')[1]);
     assert.deepStrictEqual(parsed.session, { inputTokens: 100, outputTokens: 40, reasoningTokens: 15, costUsd: 0.02 });
+    assert.ok(!('quota' in parsed), 'no quota key at all on a provider that does not report one');
+  });
+
+  it('carries cache tokens and subscription quota through the marker line', async () => {
+    // What a bench harness reads back: cacheReadTokens is what makes an input
+    // count comparable against another agent's, and quota is the only spend
+    // figure a ChatGPT subscription has — costUsd is undefined there by design.
+    class QuotaSession extends FakeSession {
+      override emit = (client: ClientInterface) => {
+        client.onOutput({
+          type: 'usage', durationMs: 20, final: true,
+          turn: { inputTokens: 500, outputTokens: 40, cacheReadTokens: 384 },
+          session: { inputTokens: 500, outputTokens: 40, cacheReadTokens: 384 },
+          quota: {
+            primary: { usedPercent: 1, windowMinutes: 300, resetAt: '2026-09-10T18:00:00.000Z' },
+            secondary: { usedPercent: 49 },
+            planType: 'plus',
+          },
+        } as OutputEvent);
+      };
+    }
+    const written: string[] = [];
+    const originalWrite = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: string) => { written.push(String(chunk)); return true; }) as typeof process.stdout.write;
+    try {
+      await runHeadless(flags({ safety: 'yolo' }), '/ws', profiles, QuotaSession as any);
+    } finally {
+      process.stdout.write = originalWrite;
+    }
+    const parsed = JSON.parse(written.filter(l => l.includes('MARSHALL_USAGE'))[0].split('MARSHALL_USAGE ')[1]);
+    assert.strictEqual(parsed.session.cacheReadTokens, 384);
+    assert.strictEqual(parsed.session.costUsd, undefined, 'a subscription reports no dollar cost');
+    assert.deepStrictEqual(parsed.quota.primary, { usedPercent: 1, windowMinutes: 300, resetAt: '2026-09-10T18:00:00.000Z' });
+    assert.strictEqual(parsed.quota.planType, 'plus');
   });
 });

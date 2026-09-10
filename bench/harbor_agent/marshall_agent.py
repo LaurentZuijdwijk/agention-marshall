@@ -46,13 +46,33 @@ _PROVIDER_TO_MARSHALL = {
     "google": "gemini",
 }
 
+# marshall authenticates `codex` and `claude` from an OAuth login on disk, not
+# from an env var — PROVIDER_DEFAULTS gives both `envKey: null` — so a key
+# passed through model_connection cannot reach them. Harbor's own Codex agent
+# has the same problem and solves it the same way: upload the host's credential
+# file into the container (see codex.py's CODEX_AUTH_JSON_PATH /
+# CODEX_FORCE_AUTH_JSON). Ours is ~/.marshall/credentials.json, written by
+# `/login codex` or by adopting an existing `codex login`; the file's shape and
+# location are owned by packages/engine/src/oauth-store.ts.
+_OAUTH_PROVIDERS = frozenset({"codex", "claude"})
+_REMOTE_CREDENTIALS = "/tmp/marshall-credentials.json"
+
+
+def _marshall_provider(model_name: str | None) -> str | None:
+    """The marshall `--provider` name a Harbor `provider/model` string implies."""
+    if not model_name or "/" not in model_name:
+        return None
+    harbor_provider = model_name.split("/", 1)[0]
+    return _PROVIDER_TO_MARSHALL.get(harbor_provider, harbor_provider)
+
+
 # Module-level, not per-instance: Harbor runs several trials concurrently
 # within one process (--n-concurrent, default 4), each with its own
 # MarshallAgent instance, and every one of them would otherwise race to
 # `npm pack` the same checkout into the same dist/ output. Built once, shared
 # by whichever instance asks first.
 _pack_lock = asyncio.Lock()
-_cached_tarball: Path | None = None
+_cached_tarballs: list[Path] | None = None
 
 
 class MarshallAgent(BaseInstalledAgent):
@@ -66,28 +86,32 @@ class MarshallAgent(BaseInstalledAgent):
         return "marshall"
 
     @staticmethod
-    def _build_and_pack() -> Path:
-        """`npm pack` this checkout's apps/cli into a fresh temp dir, built first.
+    def _build_and_pack() -> list[Path]:
+        """`npm pack` this checkout's workspaces into a fresh temp dir, built first.
 
         Blocking — always called through `_pack_local_cli`, which keeps it off
         the event loop and runs it at most once per process.
-        @agentionai/marshall-engine and -tools aren't touched here: their
-        published versions already match this checkout (see the module
-        docstring), so the packed tarball's `"*"` dependency on them resolves
-        from the registry as normal.
+        Packs the CLI *and* @agentionai/marshall-tools, -engine and
+        -plugin-browser: the checkout's cli imports engine exports that the
+        registry version of the same version number does not carry yet
+        (seen 2026-09-10: `listCodexModels`), so the registry copies cannot be
+        relied on to match. install() drops the workspace tarballs into the
+        CLI's own node_modules. Order matters: dependencies first.
         """
         subprocess.run(
             ["npm", "run", "build:all"], cwd=_REPO_ROOT, check=True, capture_output=True, text=True,
         )
         pack_dir = Path(tempfile.mkdtemp(prefix="marshall-cli-pack-"))
-        result = subprocess.run(
-            ["npm", "pack", "--pack-destination", str(pack_dir)],
-            cwd=_REPO_ROOT / "apps" / "cli", check=True, capture_output=True, text=True,
-        )
-        tarball_name = result.stdout.strip().splitlines()[-1]
-        return pack_dir / tarball_name
+        tarballs = []
+        for ws in ("packages/tools", "packages/engine", "packages/plugin-browser", "apps/cli"):
+            result = subprocess.run(
+                ["npm", "pack", "--pack-destination", str(pack_dir)],
+                cwd=_REPO_ROOT / ws, check=True, capture_output=True, text=True,
+            )
+            tarballs.append(pack_dir / result.stdout.strip().splitlines()[-1])
+        return tarballs
 
-    async def _pack_local_cli(self) -> Path:
+    async def _pack_local_cli(self) -> list[Path]:
         """The build+pack, done at most once per process and shared.
 
         The lock alone would only stop two builds from *overlapping* — the
@@ -96,25 +120,65 @@ class MarshallAgent(BaseInstalledAgent):
         concurrent trial's install too. `asyncio.to_thread` keeps that off
         the loop; the lock is what stops it from running twice.
         """
-        global _cached_tarball
+        global _cached_tarballs
         async with _pack_lock:
-            if _cached_tarball is None or not _cached_tarball.exists():
-                _cached_tarball = await asyncio.to_thread(self._build_and_pack)
-            return _cached_tarball
+            if _cached_tarballs is None or not all(t.exists() for t in _cached_tarballs):
+                _cached_tarballs = await asyncio.to_thread(self._build_and_pack)
+            return _cached_tarballs
 
     @override
     async def install(self, environment: BaseEnvironment) -> None:
         await self.ensure_system_dependencies(environment, ("curl",))
-        local_tarball = await self._pack_local_cli()
-        remote_tarball = "/tmp/marshall-cli.tgz"
-        await environment.upload_file(local_tarball, remote_tarball)
+        tarballs = await self._pack_local_cli()
+        remote = []
+        for t in tarballs:
+            r = f"/tmp/{t.name}"
+            await environment.upload_file(t, r)
+            remote.append(r)
+        cli_tgz, deps = remote[-1], remote[:-1]
         await self.exec_as_agent(
             environment,
             command=(
                 "set -euo pipefail; "
                 f"{nvm_node_install_snippet()} && "
-                f"npm install -g {remote_tarball} && "
+                f"npm install -g {cli_tgz} && "
+                # replace the registry copies of the workspace packages with this checkout's
+                f"cd \"$(npm root -g)/@agentionai/marshall-cli\" && npm install {' '.join(deps)} && "
                 "marshall --version"
+            ),
+        )
+        await self._install_credentials(environment)
+
+    async def _install_credentials(self, environment: BaseEnvironment) -> None:
+        """Put this host's marshall OAuth login inside the container.
+
+        Only for the providers that authenticate that way, and only when a
+        login exists: every other provider takes an API key through the
+        environment, and shipping a token file to one would hand a benchmark
+        container a credential it has no use for.
+        """
+        if _marshall_provider(self.model_name) not in _OAUTH_PROVIDERS:
+            return
+        override = self._get_env("MARSHALL_CREDENTIALS_PATH")
+        local = (
+            Path(override) if override
+            else Path.home() / ".marshall" / "credentials.json"
+        )
+        if not local.is_file():
+            raise ValueError(
+                f"--model {self.model_name} needs a marshall OAuth login, but "
+                f"{local} does not exist. Sign in on this host first (`/login codex` "
+                "adopts an existing `codex login`), or point --ae "
+                "MARSHALL_CREDENTIALS_PATH=<path> at the file."
+            )
+        await environment.upload_file(local, _REMOTE_CREDENTIALS)
+        await self.exec_as_agent(
+            environment,
+            command=(
+                "set -euo pipefail; "
+                'mkdir -p "$HOME/.marshall" && '
+                f'cp {_REMOTE_CREDENTIALS} "$HOME/.marshall/credentials.json" && '
+                'chmod 600 "$HOME/.marshall/credentials.json"'
             ),
         )
 
@@ -137,8 +201,8 @@ class MarshallAgent(BaseInstalledAgent):
                 "Model name must be in the format provider/model, "
                 "e.g. anthropic/claude-sonnet-4-6"
             )
-        harbor_provider, model = self.model_name.split("/", 1)
-        provider = _PROVIDER_TO_MARSHALL.get(harbor_provider, harbor_provider)
+        provider = _marshall_provider(self.model_name)
+        model = self.model_name.split("/", 1)[1]
 
         # Not every provider needs a key — llamacpp is host-only, and isn't
         # even in Harbor's own PROVIDERS registry, so model_connection.env is
@@ -187,10 +251,29 @@ class MarshallAgent(BaseInstalledAgent):
         session = usage.get("session") or {}
         context.n_input_tokens = session.get("inputTokens")
         context.n_output_tokens = session.get("outputTokens")
+        # A subset of inputTokens, which is also how Harbor's own agents report
+        # it — codex.py sets n_cache_tokens from `cached_tokens` while leaving
+        # n_input_tokens as the full prompt. Absent (rather than 0) whenever the
+        # provider said nothing about caching, so a missing figure never reads
+        # as "nothing was cached".
+        context.n_cache_tokens = session.get("cacheReadTokens")
+        # None on a ChatGPT subscription: that backend bills plan allowance, not
+        # dollars, so there is no per-call cost to report.
         context.cost_usd = session.get("costUsd")
+        extra: dict[str, object] = {}
         # No first-class AgentContext field for it — reasoningTokens is a
         # subset of outputTokens (billed as output either way), so it only
         # belongs in metadata, not counted again on top of n_output_tokens.
         reasoning_tokens = session.get("reasoningTokens")
         if reasoning_tokens:
-            context.metadata = {**(context.metadata or {}), "reasoning_tokens": reasoning_tokens}
+            extra["reasoning_tokens"] = reasoning_tokens
+        # Plan allowance rather than dollars — what a run on a ChatGPT
+        # subscription actually spends, since cost_usd is undefined there. Sits
+        # beside the token counts rather than in them: it is a level describing
+        # the account, not a total describing this trial, so two trials' values
+        # cannot be added and a later trial's reading supersedes an earlier one.
+        quota = usage.get("quota")
+        if quota:
+            extra["quota"] = quota
+        if extra:
+            context.metadata = {**(context.metadata or {}), **extra}

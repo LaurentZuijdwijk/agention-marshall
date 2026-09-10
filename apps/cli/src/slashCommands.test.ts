@@ -38,9 +38,25 @@ describe('slashCommands', () => {
       assert.equal(result.type, 'memory');
     });
 
-    it('returns login for /login', () => {
-      const result = resolveSlashCommand('/login');
-      assert.equal(result.type, 'login');
+    it('returns login for /login, defaulting to the Claude account', () => {
+      // Bare `/login` predates there being more than one account to sign in
+      // to, and has to keep meaning what it always did.
+      assert.deepEqual(resolveSlashCommand('/login'), { type: 'login', provider: 'claude' });
+    });
+
+    it('takes the provider as an argument', () => {
+      assert.deepEqual(resolveSlashCommand('/login codex'), { type: 'login', provider: 'codex' });
+      assert.deepEqual(resolveSlashCommand('/login CLAUDE'), { type: 'login', provider: 'claude' });
+    });
+
+    it('reports an unknown provider as usage rather than signing in to the wrong one', () => {
+      // `openai` in particular: it is a real provider but not one you can log
+      // in to, so it has to be a usage error rather than a silent Codex login.
+      for (const input of ['/login gemini', '/login openai']) {
+        const result = resolveSlashCommand(input);
+        assert.equal(result.type, 'usage', input);
+        assert.match(result.type === 'usage' ? result.message : '', /\[claude\|codex\]/);
+      }
     });
 
     it('returns clear for /clear', () => {

@@ -1,6 +1,10 @@
 import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { readCredentials, saveCredentials } from '@agentionai/marshall-engine';
 import { buildAuthSession, completeLogin, refreshCredentials } from './login.js';
 import type { MarshallCredentials } from './login.js';
 
@@ -73,6 +77,27 @@ describe('completeLogin', () => {
     })) as unknown as typeof globalThis.fetch;
 
     await assert.rejects(() => completeLogin('code', session), /403.*invalid_grant/);
+  });
+
+  it('stores Claude credentials without removing an existing Codex login', async () => {
+    const previousHome = process.env.HOME;
+    process.env.HOME = mkdtempSync(join(tmpdir(), 'marshall-claude-login-'));
+    try {
+      saveCredentials('codex', {
+        accessToken: 'codex-access', refreshToken: 'codex-refresh', expiresAt: Date.now() + 3600_000,
+      });
+      globalThis.fetch = (async () => ({
+        ok: true,
+        json: async () => ({ access_token: 'claude-access', refresh_token: 'claude-refresh', expires_in: 3600 }),
+      })) as unknown as typeof globalThis.fetch;
+
+      await completeLogin('code', session);
+
+      assert.equal(readCredentials('claude')?.accessToken, 'claude-access');
+      assert.equal(readCredentials('codex')?.accessToken, 'codex-access');
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
+    }
   });
 });
 

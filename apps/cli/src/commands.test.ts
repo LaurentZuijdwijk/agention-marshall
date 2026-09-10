@@ -167,6 +167,12 @@ function setup(overrides: Partial<CommandDeps> & {
     activeProfile: PROFILE,
     quit: () => { calls.quit++; },
     startLogin: () => ({ authUrl: 'https://auth.example' } as never),
+    startCodexLogin: async () => ({
+      authUrl: 'https://auth.openai.example',
+      completed: Promise.resolve(),
+      cancel: () => {},
+    }),
+    importCodexCliLogin: async () => null,
     onMcpChanged: () => { calls.mcpChanged++; },
     onPluginsChanged: () => { calls.pluginsChanged++; },
     onSafetyLevelChange: (level) => { calls.safetyLevelReported.push(level); },

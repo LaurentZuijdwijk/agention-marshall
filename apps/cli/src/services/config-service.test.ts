@@ -208,9 +208,8 @@ describe('disk is the source of truth', () => {
     writeGlobal({ providers: [{ provider: 'llamacpp', host: 'http://old-host', apiKey: 'k' }] });
     writeProject(root, { providers: [{ provider: 'llamacpp', host: 'http://ci-box:8080' }] });
     const config = new ConfigService(root);
-    // The merged view: project's host wins, global's key survives since the
-    // project layer can never supply one.
-    assert.deepEqual(config.snapshot().providers, [{ provider: 'llamacpp', host: 'http://ci-box:8080', apiKey: 'k' }]);
+    // The project may not redirect the globally stored credential.
+    assert.deepEqual(config.snapshot().providers, [{ provider: 'llamacpp', host: 'http://old-host', apiKey: 'k' }]);
 
     await config.removeProvider({ provider: 'llamacpp' });
     assert.deepEqual(config.snapshot().providers, []);
@@ -489,5 +488,31 @@ describe('refresh', () => {
 
     config.refresh();
     assert.equal(config.snapshot().providers.length, 2, 'refresh re-reads the file');
+  });
+});
+
+describe('filesystem save failures', () => {
+  it('returns false on rename failure and the queue still accepts later saves', async () => {
+    const root = ws();
+    mkdirSync(globalConfigPath(), { recursive: true });
+    const errors: string[] = [];
+    const service = new ConfigService(root, {}, message => errors.push(message));
+    assert.equal(await service.saveMcpServers([{ name: 'test', url: 'http://localhost:1' }]), false);
+    assert.match(errors.join('\n'), /could not save MCP servers/);
+    assert.equal(await service.saveAgents([{ name: 'tester', provider: 'llamacpp', model: 'test' }]), true);
+    assert.equal(service.snapshot().agents[0].name, 'tester');
+  });
+
+  it('refreshes the snapshot when one scope saved and the other failed', async () => {
+    const root = ws();
+    mkdirSync(configPath(root), { recursive: true });
+    const service = new ConfigService(root);
+    const before = service.snapshot();
+    let notifications = 0;
+    service.subscribe(() => notifications++);
+    assert.equal(await service.saveProfiles(ROUTER, undefined), false);
+    assert.notEqual(service.snapshot(), before);
+    assert.equal(service.credentialsFor({ provider: 'openrouter' }).apiKey, 'or-key');
+    assert.equal(notifications, 1);
   });
 });

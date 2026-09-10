@@ -298,6 +298,45 @@ describe('formatUsageReport', () => {
     assert.doesNotMatch(formatUsageReport(report()), /thinking/);
   });
 
+  it('shows cached prompt tokens as a share of the input, not an addition to it', () => {
+    const text = formatUsageReport(report({
+      session: { inputTokens: 100_000, outputTokens: 900, cacheReadTokens: 92_000 },
+    }));
+    assert.match(text, /↑100,000 {2}↓900 \(92,000 cached\)/);
+  });
+
+  it('reports a measured zero but stays quiet when caching was never mentioned', () => {
+    assert.match(
+      formatUsageReport(report({ session: { inputTokens: 500, outputTokens: 10, cacheReadTokens: 0 } })),
+      /\(0 cached\)/,
+      'the provider said the prompt was recomputed — that is a fact, not a blank',
+    );
+    assert.doesNotMatch(formatUsageReport(report()), /cached/);
+  });
+
+  it('reports plan allowance for a subscription, whose cost column is always blank', () => {
+    const text = formatUsageReport(report({
+      session: { inputTokens: 5_000, outputTokens: 500 },
+      quota: {
+        primary: { usedPercent: 1, windowMinutes: 300 },
+        secondary: { usedPercent: 49, windowMinutes: 10080 },
+        planType: 'plus',
+      },
+    }));
+    assert.match(text, /plus plan {2}1% of 5h {2}49% of week/);
+  });
+
+  it('says nothing about allowance on a provider that bills in dollars', () => {
+    assert.doesNotMatch(formatUsageReport(report()), /plan/);
+  });
+
+  it('skips a credit balance of zero rather than reading it as a problem', () => {
+    const text = formatUsageReport(report({
+      quota: { primary: { usedPercent: 3 }, planType: 'plus', credits: { balance: 0, hasCredits: false } },
+    }));
+    assert.match(text, /plus plan {2}3% of 5h$/m, 'no credits clause at all');
+  });
+
   it('says nothing about cost for a role that has no price', () => {
     const text = formatUsageReport(report({
       session: { inputTokens: 100, outputTokens: 50 },

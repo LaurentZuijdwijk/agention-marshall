@@ -97,3 +97,19 @@ test('detaches its turn listener when the run throws', async () => {
   );
   assert.equal(agent.listenerCount(AgentEvent.TOOL_USE), 0);
 });
+
+for (const streaming of [true, false]) {
+  test(`cancellation reaches the ${streaming ? 'streaming' : 'ordinary'} execution`, async () => {
+    const controller = new AbortController();
+    const agent = new EventEmitter() as any;
+    const execute = (_input: unknown, options: { signal: AbortSignal }) => new Promise<string>((_resolve, reject) => {
+      assert.equal(options.signal, controller.signal);
+      options.signal.addEventListener('abort', () => reject(new DOMException('cancelled', 'AbortError')), { once: true });
+    });
+    if (streaming) agent.executeStream = async function* (input: unknown, options: { signal: AbortSignal }) { yield { type: 'text', content: await execute(input, options) }; };
+    else agent.execute = execute;
+    const running = runAgent(agent, 'task', () => {}, controller.signal);
+    controller.abort();
+    await assert.rejects(running, { name: 'AbortError' });
+  });
+}

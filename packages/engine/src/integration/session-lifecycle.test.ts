@@ -7,7 +7,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { History, toolResult } from '@agentionai/agents/core';
@@ -496,4 +496,26 @@ test('a system prompt that changes mid-session stays first, not duplicated', asy
   assert.equal(systemMessages.length, 1,
     `exactly one system message, not a stale one plus a new one: ${JSON.stringify(messages.map(m => m.role))}`);
   assert.equal(messages[0].role, 'system', 'the system message must be first, not wherever it landed');
+});
+
+test('an interrupted provider request cannot run scratch tools or add a late answer', async t => {
+  const root = tempRoot();
+  const fake = await startFakeProvider({ delayMs: 150, text: 'abandoned response', toolCalls: [
+    { name: 'note_write', arguments: { name: 'late', content: 'must not be written' } },
+  ] });
+  t.after(() => fake.close());
+  const { client } = collector();
+  const session = makeSession(root, fake, client);
+  t.after(() => session.dispose());
+  const running = session.run('interrupt this');
+  await waitFor(() => fake.requests.length === 1);
+  session.interrupt();
+  await running;
+  // Outwait the delayed response to expose a loop which only stopped awaiting.
+  await new Promise(resolve => setTimeout(resolve, 300));
+  assert.equal(fake.requests.length, 1, 'no further provider request after interrupt');
+  assert.equal(existsSync(join(root, '.marshall/notes/late.md')), false);
+  fake.script({ text: 'new answer' });
+  await session.run('new task');
+  assert.doesNotMatch(JSON.stringify(fake.requests.at(-1)?.messages), /abandoned response/);
 });

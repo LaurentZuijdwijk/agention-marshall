@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { createUsageTally, throughputOf, pricingFor, rate, formatCost, formatRate, formatTokens } from './usage.js';
+import { createUsageTally, throughputOf, quotaOf, pricingFor, rate, formatCost, formatRate, formatTokens } from './usage.js';
 import type { TokenUsage } from '@agentionai/agents/core';
 import type { AgentProfile } from './config.js';
 
@@ -336,5 +336,106 @@ describe('formatRate', () => {
 
   it('is absent when the rate is', () => {
     assert.equal(formatRate(undefined), undefined);
+  });
+});
+
+describe('cache accounting', () => {
+  it('reports a cached zero, and stays silent when the provider never mentioned caching', () => {
+    // The distinction the bench turns on: a provider that says `0` has told us
+    // the whole prompt was recomputed, while one that says nothing has told us
+    // nothing. Collapsing both to "absent" makes an expensive prompt and an
+    // unmeasured one look identical, which is how the first codex-vs-marshall
+    // comparison ended up with uncomparable input-token columns.
+    const tally = createUsageTally();
+    tally.startTurn();
+    tally.record('quiet', { role: 'coder', profile: CLAUDE }, spend(100, 50));
+    assert.equal(tally.report().session.cacheReadTokens, undefined, 'nothing said');
+
+    const measured = createUsageTally();
+    measured.startTurn();
+    measured.record('cold', { role: 'coder', profile: CLAUDE }, { ...spend(100, 50), cacheReadTokens: 0 });
+    assert.equal(measured.report().session.cacheReadTokens, 0, 'said zero');
+  });
+
+  it('sums cache reads across agents without adding them to inputTokens', () => {
+    // cacheReadTokens is a *subset* of inputTokens. Adding the two would
+    // double-count every reused token and report a prompt larger than the one
+    // that was sent.
+    const tally = createUsageTally();
+    tally.startTurn();
+    tally.record('coder', { role: 'coder', profile: CODER }, { ...spend(1000, 100), cacheReadTokens: 800 });
+    tally.record('context', { role: 'context', profile: CODER }, { ...spend(500, 50), cacheReadTokens: 480 });
+
+    const session = tally.report().session;
+    assert.equal(session.inputTokens, 1500, 'input is the full prompt, cache included');
+    assert.equal(session.cacheReadTokens, 1280);
+  });
+
+  it('keeps a reported zero through a mix of measured and silent agents', () => {
+    // One agent reporting caching is enough to make the total meaningful; the
+    // silent one contributes nothing rather than poisoning it to undefined.
+    const tally = createUsageTally();
+    tally.startTurn();
+    tally.record('measured', { role: 'coder', profile: CODER }, { ...spend(100, 10), cacheReadTokens: 0 });
+    tally.record('silent', { role: 'context', profile: CLAUDE }, spend(200, 20));
+
+    assert.equal(tally.report().session.cacheReadTokens, 0);
+  });
+
+  it('carries cache writes separately from cache reads', () => {
+    const tally = createUsageTally();
+    tally.startTurn();
+    tally.record('coder', { role: 'coder', profile: CODER }, { ...spend(100, 10), cacheWriteTokens: 64 });
+
+    const session = tally.report().session;
+    assert.equal(session.cacheWriteTokens, 64);
+    assert.equal(session.cacheReadTokens, undefined, 'a write says nothing about a read');
+  });
+});
+
+describe('quotaOf', () => {
+  it('is absent on a provider that bills in dollars', () => {
+    // Every provider but codex reaches here as a plain BaseAgent with no
+    // `lastUsageLimits` at all.
+    assert.equal(quotaOf({}), undefined);
+    assert.equal(quotaOf({ lastUsageLimits: undefined }), undefined);
+  });
+
+  it('converts the windows to ISO strings so the reading survives serialisation', () => {
+    // The SDK hands back `Date`s. This crosses a client boundary and is written
+    // into headless mode's MARSHALL_USAGE line, and a Date survives neither.
+    const resetAt = new Date('2026-09-10T18:00:00.000Z');
+    const at = new Date('2026-09-10T13:00:00.000Z');
+    const quota = quotaOf({
+      lastUsageLimits: {
+        primary: { usedPercent: 1, windowMinutes: 300, resetAfterSeconds: 18000, resetAt },
+        secondary: { usedPercent: 49, windowMinutes: 10080 },
+        planType: 'plus',
+        credits: { balance: 0, hasCredits: false },
+        at,
+      },
+    });
+
+    assert.deepEqual(quota, {
+      primary: { usedPercent: 1, windowMinutes: 300, resetAt: '2026-09-10T18:00:00.000Z' },
+      secondary: { usedPercent: 49, windowMinutes: 10080 },
+      planType: 'plus',
+      credits: { balance: 0, hasCredits: false },
+      at: '2026-09-10T13:00:00.000Z',
+    });
+  });
+
+  it('drops resetAfterSeconds, which is only true at the instant it arrived', () => {
+    // The reading is not refreshed until the next API call, so a countdown
+    // stored alongside it goes stale immediately while `resetAt` stays true.
+    const quota = quotaOf({ lastUsageLimits: { primary: { usedPercent: 12, resetAfterSeconds: 600 }, at: new Date() } });
+    assert.deepEqual(Object.keys(quota?.primary ?? {}), ['usedPercent']);
+  });
+
+  it('keeps a used-zero window rather than dropping it as empty', () => {
+    // 0% used is a real state — a fresh window — and is not the same as a
+    // provider that reported no window at all.
+    const quota = quotaOf({ lastUsageLimits: { primary: { usedPercent: 0 }, at: new Date() } });
+    assert.deepEqual(quota?.primary, { usedPercent: 0 });
   });
 });

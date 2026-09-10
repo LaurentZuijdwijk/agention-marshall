@@ -1,6 +1,6 @@
 import type { ApprovalRequest, ApprovalDecision, AskRequest } from '@agentionai/marshall-tools';
 import type { McpServerState } from './mcp.js';
-import type { UsageTotals } from './usage.js';
+import type { UsageTotals, UsageQuota } from './usage.js';
 
 export type { ApprovalRequest, ApprovalDecision, AskRequest };
 
@@ -139,6 +139,14 @@ export type OutputEvent =
       rates?: { input?: number; output?: number };
       /** Time to the turn's first token. Absent until one arrives. */
       ttftMs?: number;
+      /**
+       * Subscription allowance remaining, on a provider that bills that way
+       * instead of per token (codex today). A level describing the account
+       * rather than a total describing the turn, so it is not summed into
+       * `turn`/`session` and does not reset between turns — it simply carries
+       * the freshest reading, which only a real API call can refresh.
+       */
+      quota?: UsageQuota;
     }
   | { type: 'error'; message: string }
   /**

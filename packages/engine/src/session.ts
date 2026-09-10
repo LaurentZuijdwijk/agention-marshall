@@ -53,8 +53,8 @@ import { resolveRoleProfile, resolveModel, routingSummary, resolveSearchProfile 
 import type {
   EngineConfig, AgentProfile, Role, SafetyLevel, SafetyAgentConfig, RuntimeMode, NamedAgent,
 } from './config.js';
-import { createUsageTally, throughputOf } from './usage.js';
-import type { PriceBook, UsageReport } from './usage.js';
+import { createUsageTally, quotaOf, throughputOf } from './usage.js';
+import type { PriceBook, UsageQuota, UsageReport } from './usage.js';
 import type { ClientInterface } from './types.js';
 
 const NEVER_MASK_TOOLS = [
@@ -200,17 +200,8 @@ function hasSkipReasoning(agent: BaseAgent<string, string> | null): agent is Bas
   return !!agent && typeof (agent as { skipReasoning?: unknown }).skipReasoning === 'function';
 }
 
-/**
- * Await `work`, but reject immediately if `signal` fires first.
- *
- * The agent SDK has no cancellation hook of its own: an abort can only stop
- * this process *awaiting* the call, not the in-flight LLM/tool-call loop
- * itself, which keeps running in the background until it ends naturally
- * (every tool call it makes finds `signal.aborted` and short-circuits, so the
- * abandoned work goes quiet rather than doing anything). Without this race,
- * Esc would do nothing until that background work finished on its own, which
- * can take minutes on a local model or a long `/review`.
- */
+/** Await work while allowing an interrupt to release the UI immediately.
+ * The execution itself must also receive the signal so it stops its SDK loop. */
 function raceAbort<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     work.then(resolve, reject);
@@ -408,6 +399,7 @@ export class Session {
       jobs: this.jobs,
       agentJobs: this.agentJobs,
       usage: this.usage,
+      sessionId: this.sessionId,
       readFiles: this.readFiles,
       fileLock: this.fileLock,
       dedupeCache: this.dedupeCache,
@@ -567,9 +559,12 @@ export class Session {
     this.log(`PRICING ${prices.size} models`);
   }
 
+  /** Freshest subscription-allowance reading, on a provider that reports one. */
+  private lastQuota?: UsageQuota;
+
   /** What every agent has spent, for `/tokens`. */
   usageReport(): UsageReport {
-    return this.usage.report();
+    return { ...this.usage.report(), ...(this.lastQuota ? { quota: this.lastQuota } : {}) };
   }
 
   /**
@@ -600,6 +595,11 @@ export class Session {
           inputTokens: usage.input_tokens,
           outputTokens: usage.output_tokens,
           ...(usage.reasoning_tokens !== undefined ? { reasoningTokens: usage.reasoning_tokens } : {}),
+          ...(usage.cache_read_tokens !== undefined ? { cacheReadTokens: usage.cache_read_tokens } : {}),
+          ...(usage.cache_write_tokens !== undefined ? { cacheWriteTokens: usage.cache_write_tokens } : {}),
+          // Undefined on a ChatGPT subscription and always will be: that backend
+          // prices in plan allowance, not dollars. `lastUsageLimits` is where
+          // what a codex call actually spent shows up.
           ...(usage.cost_usd !== undefined ? { costUsd: usage.cost_usd } : {}),
         });
       }
@@ -607,6 +607,10 @@ export class Session {
       // The rollup below includes sub-agents, which ran on their own clocks in
       // parallel and so share no wall-clock a rate could be taken over.
       const speed = usage ? throughputOf(usage) : undefined;
+      const quota = quotaOf(agent);
+      // Kept on the session, not the tally: allowance survives the turn that
+      // observed it, and only another real API call can move it.
+      if (quota) this.lastQuota = quota;
       const report = this.usage.report();
       // Silence rather than zeroes, the final reading included. Before the first
       // response lands there is nothing to report yet, and on a provider that
@@ -622,6 +626,10 @@ export class Session {
           ...(speed && (speed.input !== undefined || speed.output !== undefined)
             ? { rates: { ...(speed.input !== undefined ? { input: speed.input } : {}), ...(speed.output !== undefined ? { output: speed.output } : {}) } }
             : {}),
+          // Read off the agent, not the tally: allowance is a level describing
+          // the account, so there is nothing to accumulate and nothing to reset
+          // when a turn ends.
+          ...(quota ? { quota } : {}),
           ...(speed?.ttftMs !== undefined ? { ttftMs: speed.ttftMs } : {}),
         });
       }
@@ -1475,7 +1483,7 @@ export class Session {
           this.client.onOutput(chunk.type === 'reasoning'
             ? { type: 'reasoning', text: chunk.content }
             : { type: 'token', text: chunk.content });
-        }), signal);
+        }, signal), signal);
 
       const maxConnectionRetries = this.config.maxConnectionRetries ?? DEFAULT_MAX_CONNECTION_RETRIES;
       const connectionRetryBaseMs = this.config.connectionRetryBaseMs ?? DEFAULT_CONNECTION_RETRY_BASE_MS;
@@ -1643,6 +1651,7 @@ export class Session {
         systemPrompt,
         extraInstructions: contextTool ? SURVEY_TOOL_GUIDANCE : undefined,
         name: eventType,
+        sessionId: this.sessionId,
         privateMode: this.config.privateMode,
       });
       this.currentAgent = agent;
@@ -1657,7 +1666,7 @@ export class Session {
       stopSampling = this.sampleUsage(usageKey, eventType === 'review' ? 'reviewer' : 'planner', profile, agent, startMs);
 
       throwIfAborted(signal);
-      const text = await raceAbort(agent.execute(prompt), signal);
+      const text = await raceAbort(agent.execute(prompt, { signal }), signal);
 
       // /goal shares the plan slot rather than getting its own: both exist to
       // prime the next run() call with context the user approved beforehand,

@@ -1,5 +1,26 @@
 # @agentionai/marshall-engine
 
+## 0.25.0
+
+### Minor Changes
+
+- Add a `codex` provider: OpenAI models reached through a ChatGPT subscription rather than a platform API key, built on `CodexAgent` from `@agentionai/agents` 1.13. It serves its own model namespace (`gpt-5.6-luna`, `gpt-5.6-sol`, …), listed live from the account's plan, and defaults to `gpt-5.6-luna`. The `openai` provider is unchanged and remains the platform-key path.
+
+  Add `/login codex` to sign in with ChatGPT. It adopts an existing `codex login` when there is one, and otherwise runs the PKCE flow in a browser, capturing the authorization code on a loopback callback listener rather than asking for a paste. The access token is refreshed as it ages out and the rotated refresh token written back, so a session outlives its hour-long token.
+
+  Store OAuth logins per provider, so signing in to one account no longer signs out the other. The previous single-login file is still read, and the setup wizard stops asking for an API key for a provider that is already signed in.
+
+  Fix the `openai` model shortlist, which listed `gpt-5.6-luna` and its siblings — Codex-only models that the platform API rejects outright. Those now appear under `codex`, and `openai` offers platform ids.
+
+### Patch Changes
+
+- Keep approval and image-recovery selections from also submitting or changing the query draft. Preserve endpoint identity when resolving fast-tier credentials, prevent project host overrides from redirecting global or ambient credentials, and report failed configuration saves accurately while refreshing partially saved state.
+
+  Cancel SDK execution and delegated calls when a turn is interrupted, preventing abandoned work from issuing requests or altering subsequent history. Preserve external file changes across targeted edits by invalidating stale full-read coverage, and reject scratch paths containing symlinks before ungated filesystem access.
+
+- Updated dependencies
+  - @agentionai/marshall-tools@0.9.3
+
 ## 0.24.2
 
 ### Patch Changes

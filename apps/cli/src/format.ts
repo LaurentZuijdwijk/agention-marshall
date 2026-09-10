@@ -2,7 +2,7 @@
 
 import wrapAnsi from 'wrap-ansi';
 import { formatCost, formatTokens } from '@agentionai/marshall-engine';
-import type { UsageReport } from '@agentionai/marshall-engine';
+import type { UsageQuota, UsageReport } from '@agentionai/marshall-engine';
 
 /**
  * Keys that carry the "what is this call actually doing" information. When a
@@ -230,6 +230,28 @@ export function windowRange(count: number, cursor: number, size: number): { star
  * naming a local model and a `coder` line naming a hosted one answer it at a
  * glance, and rolling them together does not.
  */
+/**
+ * Plan allowance, for a provider that bills that way instead of per token.
+ *
+ * Rendered as used-percentages rather than what is left, matching what the
+ * backend actually reports — deriving "remaining" would invent a denominator
+ * nobody published. Absent windows are skipped rather than shown as 0%, which
+ * would claim a fresh allowance the provider never mentioned.
+ */
+function formatQuota(quota: UsageQuota): string | undefined {
+  const windows = [
+    quota.primary ? `${quota.primary.usedPercent}% of 5h` : undefined,
+    quota.secondary ? `${quota.secondary.usedPercent}% of week` : undefined,
+  ].filter(Boolean);
+  if (windows.length === 0) return undefined;
+  const plan = quota.planType ? `${quota.planType} plan` : 'plan';
+  // Credits only when they are actually the thing paying — an account with none
+  // has nothing useful to say here, and "0 credits" reads as a problem.
+  const credits = quota.credits?.unlimited ? ', unlimited credits'
+    : quota.credits?.balance ? `, ${quota.credits.balance} credits` : '';
+  return `  ${plan}  ${windows.join('  ')}${credits}`;
+}
+
 export function formatUsageReport(report: UsageReport): string {
   const { session, byRole } = report;
   if (byRole.length === 0) return 'no tokens spent yet';
@@ -238,6 +260,10 @@ export function formatUsageReport(report: UsageReport): string {
   const lines = [
     `session  ↑${formatTokens(session.inputTokens)}  ↓${formatTokens(session.outputTokens)}`
     + (session.reasoningTokens ? ` (${formatTokens(session.reasoningTokens)} thinking)` : '')
+    // A subset of ↑, so it reads as "of which", never added to it. Only shown
+    // when the provider reported caching at all: silence and a measured zero
+    // mean different things, and only the second is worth a column.
+    + (session.cacheReadTokens !== undefined ? ` (${formatTokens(session.cacheReadTokens)} cached)` : '')
     + (cost ? `  ${cost}` : ''),
   ];
 
@@ -264,5 +290,9 @@ export function formatUsageReport(report: UsageReport): string {
   if (session.costPartial) {
     lines.push('  (+ means part of this ran on a model with no published price)');
   }
+  // Last, and only on a subscription: it answers "what did this cost" for a
+  // provider where the cost column above is permanently blank.
+  const quota = report.quota && formatQuota(report.quota);
+  if (quota) lines.push(quota);
   return lines.join('\n');
 }

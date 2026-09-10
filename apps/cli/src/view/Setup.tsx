@@ -5,7 +5,7 @@
 
 import React, { useState } from 'react';
 import { Box, Text, useInput } from 'ink';
-import { PROVIDER_DEFAULTS } from '@agentionai/marshall-engine';
+import { PROVIDER_DEFAULTS, readCredentials } from '@agentionai/marshall-engine';
 import type { Provider, Tier } from '@agentionai/marshall-engine';
 import type { ProviderRef } from '../services/config-store.js';
 import { C, G } from './theme.js';
@@ -210,9 +210,15 @@ export function Setup({ initial, tier = 'deep', title, blurb, deepLabel, credent
     return credentials?.(refFor(provider, name)).apiKey
       || (envKey ? process.env[envKey] : undefined) || undefined;
   };
+  /** Signed in through `/login`, so there is a credential the wizard never
+   *  sees — it lives in `~/.marshall/credentials.json`, not in `providers[]`,
+   *  and asking for an API key on top of it is asking for a second one. */
+  const hasOAuthLogin = (provider: Provider): boolean =>
+    (provider === 'claude' || provider === 'codex') && readCredentials(provider) !== null;
+
   const needsKey = (provider: Provider): boolean => Boolean(
     (provider === 'openai-compatible' || provider === 'llamacpp')
-      || (PROVIDER_DEFAULTS[provider].envKey && !keyFor(provider)),
+      || (PROVIDER_DEFAULTS[provider].envKey && !keyFor(provider) && !hasOAuthLogin(provider)),
   );
 
   const keyIsOptional = (provider: Provider): boolean =>

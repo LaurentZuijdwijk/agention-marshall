@@ -165,8 +165,8 @@ describe('providerKeyForHost', () => {
     assert.equal(providerKeyForHost(entries, 'openai-compatible', 'http://lm'), 'lm-key');
   });
 
-  it('falls back to the unnamed entry when no host matches', () => {
-    assert.equal(providerKeyForHost(entries, 'openai-compatible', 'http://elsewhere'), 'plain-key');
+  it('does not send the unnamed credential to an unmatched host', () => {
+    assert.equal(providerKeyForHost(entries, 'openai-compatible', 'http://elsewhere'), undefined);
   });
 
   it('does not guess between named endpoints', () => {
@@ -339,7 +339,7 @@ describe('loadConfig', () => {
     const merged = loadConfig(root);
     assert.equal(merged.provider, 'openrouter', 'project value wins');
     assert.equal(merged.model, 'deepseek/v4', 'project value wins');
-    assert.equal(merged.apiKey, 'global-secret', 'global-only fields survive the merge');
+    assert.equal(merged.apiKey, undefined, 'a different provider cannot inherit the previous provider credential');
     assert.deepEqual(merged.models?.fast, { provider: 'claude', model: 'haiku' }, 'untouched nested global fields survive');
   });
 
@@ -796,5 +796,47 @@ describe('danglingMcpSelections', () => {
 
   it('is empty when the project has no mcp section at all', () => {
     assert.deepEqual(danglingMcpSelections({ mcpServers: [{ name: 'a', url: 'https://a/mcp' }] }, {}), []);
+  });
+});
+
+describe('project endpoint trust', () => {
+  for (const location of ['flat', 'deep', 'fast', 'providers'] as const) {
+    it(`cannot redirect a global key through ${location}`, () => {
+      writeGlobal({ providers: [{ provider: 'openai-compatible', host: 'https://trusted.example', apiKey: 'global-key' }] });
+      const root = ws();
+      const profile = { provider: 'openai-compatible', model: 'test', host: 'https://untrusted.example' };
+      write(root, location === 'flat' ? profile : location === 'providers'
+        ? { providers: [profile] } : { models: { [location]: profile } });
+      const config = loadConfig(root);
+      const resolved = location === 'flat' ? config : location === 'providers' ? config.providers![0] : config.models![location]!;
+      assert.equal(resolved.host, 'https://trusted.example');
+      assert.equal(providerCredentials(config.providers, { provider: 'openai-compatible' }).apiKey, 'global-key');
+      assert.match(projectSecretWarnings(root).join('\n'), /cannot redirect/);
+    });
+  }
+
+  it('protects ambient credentials even when no key is stored in the global file', () => {
+    const root = ws();
+    write(root, { models: { deep: { provider: 'openrouter', host: 'https://untrusted.example', model: 'test' } } });
+    assert.equal(loadConfig(root).models?.deep?.host, 'https://openrouter.ai/api/v1');
+  });
+
+  it('keeps a globally defined named endpoint selectable by the project', () => {
+    writeGlobal({ providers: [{ provider: 'openai-compatible', name: 'server', host: 'https://trusted.example', apiKey: 'key' }] });
+    const root = ws();
+    write(root, { models: { deep: { provider: 'openai-compatible', name: 'server', model: 'test' } } });
+    const config = loadConfig(root);
+    assert.deepEqual(providerCredentials(config.providers, config.models!.deep as { provider: string; name: string }),
+      { host: 'https://trusted.example', apiKey: 'key' });
+    assert.deepEqual(projectSecretWarnings(root), []);
+  });
+
+  it('does not allow a flat host override to redirect an inherited named credential', () => {
+    writeGlobal({ provider: 'openai-compatible', name: 'server', host: 'https://trusted.example', apiKey: 'key' });
+    const root = ws();
+    write(root, { host: 'https://untrusted.example' });
+    const config = loadConfig(root);
+    assert.equal(config.host, 'https://trusted.example');
+    assert.equal(config.apiKey, 'key');
   });
 });

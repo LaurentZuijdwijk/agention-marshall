@@ -34,9 +34,10 @@ const PROMPTS: Record<PromptKind, {
   },
 };
 
-export function InputPrompt({ kind, value, ghost, onPaste, onChange, onSubmit }: {
+export function InputPrompt({ kind, value, ghost, focus = true, onPaste, onChange, onSubmit }: {
   kind: PromptKind;
   value: string;
+  focus?: boolean;
   /** Completion of the slash command being typed, shown dimmed after the cursor. */
   ghost: string;
   /** Rewrites pasted text before it is inserted — see usePasteBuffer. */
@@ -47,7 +48,7 @@ export function InputPrompt({ kind, value, ghost, onPaste, onChange, onSubmit }:
   const { color, glyph, hint, placeholder } = PROMPTS[kind];
 
   return (
-    <PromptFrame color={color} hint={hint}>
+    <PromptFrame color={color} hint={focus ? hint : 'finish the selection above to resume typing'}>
       {/* A pasted value can be several lines, so the glyph sits in its own
           column rather than sharing a line box with the text. */}
       <Box>
@@ -56,6 +57,7 @@ export function InputPrompt({ kind, value, ghost, onPaste, onChange, onSubmit }:
           <Text>
             <TextInput
               value={value}
+              focus={focus}
               onPaste={onPaste}
               onChange={onChange}
               onSubmit={onSubmit}

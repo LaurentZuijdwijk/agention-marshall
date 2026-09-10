@@ -19,7 +19,7 @@ export type AgentTokenUsage = Pick<TokenUsage, 'input_tokens' | 'output_tokens' 
 
 /** The slice of an agent this module needs — keeps the seam testable. */
 export interface Executable {
-  execute(instructions: string): Promise<string>;
+  execute(instructions: string, options?: { signal?: AbortSignal }): Promise<string>;
   /**
    * What this instance has spent, as the provider counted it. Optional because
    * not every provider reports usage, and read *after* execute rather than
@@ -77,7 +77,7 @@ export function agentTool(opts: AgentToolOptions): Tool<string> {
       },
       required: ['instructions'],
     },
-    execute: async (input: { instructions: string }) => {
+    execute: async (input: { instructions: string }, _context, options) => {
       const id = nextId++;
       const instructions = input.instructions;
       const startedAt = Date.now();
@@ -88,8 +88,10 @@ export function agentTool(opts: AgentToolOptions): Tool<string> {
       // exactly the one worth seeing on the bill.
       let agent: Executable | undefined;
       try {
+        options?.signal?.throwIfAborted();
         agent = await opts.spawn({ id });
-        const result = await agent.execute(instructions);
+        options?.signal?.throwIfAborted();
+        const result = await agent.execute(instructions, options);
         opts.onEnd?.({ id, instructions, ms: Date.now() - startedAt, result, usage: agent.lastTokenUsage });
         return result;
       } catch (error) {
@@ -97,6 +99,7 @@ export function agentTool(opts: AgentToolOptions): Tool<string> {
         // the deep model should see it and adapt, not have its turn aborted.
         const message = error instanceof Error ? error.message : String(error);
         opts.onEnd?.({ id, instructions, ms: Date.now() - startedAt, error: message, usage: agent?.lastTokenUsage });
+        if (options?.signal?.aborted) throw error;
         return JSON.stringify({ error: `Failed to execute instructions: ${message}` });
       }
     },
