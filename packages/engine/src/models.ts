@@ -321,3 +321,54 @@ export function parseOpenRouterModels(payload: unknown, pinned: string[] = []): 
   });
   return withCreated.map(x => x.m);
 }
+
+/**
+ * The models this ChatGPT account may actually drive.
+ *
+ * Worth a live call rather than a preset list: the Codex catalogue is gated on
+ * the subscription plan, so what a Plus account can select differs from a Pro
+ * one, and the context window reported is the one this plan gets. The card also
+ * names the reasoning efforts the model accepts, which is the only place that
+ * set is stated.
+ *
+ * Returns `[]` on any failure — no login, an expired refresh token, a backend
+ * that has moved — so the wizard falls back to `MODEL_PRESETS` rather than
+ * stalling. Same contract as every other discovery path here.
+ */
+export async function listCodexModels(): Promise<ModelInfo[]> {
+  try {
+    const { CodexAgent } = await import('@agentionai/agents/openai');
+    const { codexCredentials, toCodexCredentials, fromCodexCredentials } = await import('./codex-oauth.js');
+    const { saveCredentials } = await import('./oauth-store.js');
+    const stored = codexCredentials();
+    if (!stored) return [];
+    const agent = CodexAgent.fromCredentials(toCodexCredentials(stored), {
+      id: 'marshall-model-catalogue',
+      name: 'Marshall model catalogue',
+      description: 'Lists available Codex models',
+      tokenOptions: {
+        onRefresh: refreshed => { saveCredentials('codex', fromCodexCredentials(refreshed)); },
+      },
+    });
+    const listed = await agent.listModels();
+    return listed
+      // `visibility: 'list'` is the backend's own marker for "show this in a
+      // picker". Absent means the field was not reported — not a reason to hide
+      // a model, so only an explicit other value is filtered out.
+      .filter(model => {
+        const visibility = (model.raw as { visibility?: string } | undefined)?.visibility;
+        return visibility === undefined || visibility === 'list';
+      })
+      .map(model => ({
+        id: model.id,
+        ...(model.displayName ? { label: model.displayName } : {}),
+        ...(model.contextLength ? { context: model.contextLength, contextSource: 'configured' as const } : {}),
+        ...(model.maxOutputTokens ? { maxOutput: model.maxOutputTokens } : {}),
+        ...(model.capabilities?.tools !== undefined ? { supportsTools: model.capabilities.tools } : {}),
+        ...(model.capabilities?.thinking ? { reasoning: true } : {}),
+        ...(model.capabilities?.vision ? { extraModalities: ['image'] } : {}),
+      }));
+  } catch {
+    return [];
+  }
+}

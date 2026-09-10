@@ -36,6 +36,9 @@ import { useWizardActions } from './hooks/useWizardActions.js';
 import { useHeader } from './hooks/useHeader.js';
 import { startLogin, completeLogin } from './login.js';
 import type { LoginSession } from './login.js';
+import { startCodexLogin } from './codex-login.js';
+import { importCodexCliLogin } from '@agentionai/marshall-engine';
+import type { CodexLoginSession } from './codex-login.js';
 import { runSlashCommand } from './commands.js';
 import { describeUpdate, currentVersion } from './update-check.js';
 import type { UpdateInfo } from './update-check.js';
@@ -98,6 +101,8 @@ interface AppInjectables {
   SessionCtor?: typeof Session;
   SetupCtor?: React.ComponentType<any>;
   startLoginCtor?: () => LoginSession;
+  startCodexLoginCtor?: () => Promise<CodexLoginSession>;
+  importCodexCliLoginCtor?: () => Promise<unknown | null>;
   completeLoginCtor?: (code: string, session: LoginSession) => Promise<void>;
   readClipboardImageCtor?: typeof readClipboardImage;
 }
@@ -120,6 +125,8 @@ export function App({
   SessionCtor = Session,
   SetupCtor = Setup,
   startLoginCtor = startLogin,
+  startCodexLoginCtor = startCodexLogin,
+  importCodexCliLoginCtor = importCodexCliLogin,
   completeLoginCtor = completeLogin,
   readClipboardImageCtor = readClipboardImage,
 }: AppProps & AppInjectables) {
@@ -475,6 +482,8 @@ export function App({
             });
         },
         startLogin: startLoginCtor,
+        startCodexLogin: startCodexLoginCtor,
+        importCodexCliLogin: importCodexCliLoginCtor,
         onSafetyLevelChange: (level) => {
           setSafetyLevelState(level);
           // The whole judge config, not just its profile — `kind` and
@@ -656,13 +665,12 @@ export function App({
 
       {wizard}
 
-      {/* Typing under an approval queues a prompt rather than answering it, so
-          on a terminal too short to hold both the panel wins and the input goes.
-          Esc still interrupts, and the approval keys still work. */}
+      {/* Preserve the draft under a modal, but only the modal owns keyboard input. */}
       {!booting && accepting && !wizardActive && (!modal || panel.showPrompt) && (
         <InputPrompt
           kind={mode.type === 'login-pending' ? 'login' : steering ? 'steering' : 'task'}
           value={input}
+          focus={!modal}
           ghost={ghost}
           onPaste={pasteBuffer.capture}
           onChange={setInput}

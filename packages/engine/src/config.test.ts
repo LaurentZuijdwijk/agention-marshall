@@ -1,8 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import {
   resolveModel,
   resolveApiKey,
+  resolveAuth,
   cheapModelFor,
   PROVIDER_DEFAULTS,
   CHEAP_MODELS,
@@ -172,4 +176,90 @@ test('cheapModelFor returns undefined for local providers (no cheap tier exists)
   assert.equal(CHEAP_MODELS.ollama, undefined);
   assert.equal(cheapModelFor('ollama'), undefined);
   assert.equal(cheapModelFor('llamacpp'), undefined);
+});
+
+// ---------------------------------------------------------------------------
+// resolveAuth — OAuth logins
+// ---------------------------------------------------------------------------
+
+/** A scratch HOME plus a cleared env key, so these read the credential file
+ *  this test wrote rather than the developer's own login or shell. */
+function withLogin(creds: unknown | null, envKey: string, body: () => void): void {
+  const home = mkdtempSync(join(tmpdir(), 'marshall-auth-'));
+  const previousHome = process.env.HOME;
+  const previousEnv = process.env[envKey];
+  process.env.HOME = home;
+  delete process.env[envKey];
+  if (creds) {
+    mkdirSync(join(home, '.marshall'), { recursive: true });
+    writeFileSync(join(home, '.marshall', 'credentials.json'), JSON.stringify(creds));
+  }
+  try {
+    body();
+  } finally {
+    if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
+    if (previousEnv === undefined) delete process.env[envKey]; else process.env[envKey] = previousEnv;
+  }
+}
+
+const CODEX_LOGIN = {
+  codex: { accessToken: 'oauth-token', refreshToken: 'r', expiresAt: Date.now() + 3_600_000, accountId: 'acct_3' },
+};
+
+test('a Codex login authenticates the codex provider, carrying its account id', () => {
+  withLogin(CODEX_LOGIN, 'OPENAI_API_KEY', () => {
+    assert.deepEqual(resolveAuth({ provider: 'codex' }), {
+      key: 'oauth-token', authType: 'oauth', accountId: 'acct_3',
+    });
+  });
+});
+
+test('an expired Codex token still builds an agent — the SDK refreshes it per request', () => {
+  withLogin({ codex: { accessToken: 'stale', refreshToken: 'r', expiresAt: Date.now() - 1 } }, 'OPENAI_API_KEY', () => {
+    assert.equal(resolveAuth({ provider: 'codex' }).authType, 'oauth');
+  });
+});
+
+test('OPENAI_API_KEY does not authenticate codex', () => {
+  // Different product surface: a platform key is not accepted by the ChatGPT
+  // backend, so falling back to it would only produce a confusing 401.
+  withLogin(null, 'OPENAI_API_KEY', () => {
+    process.env.OPENAI_API_KEY = 'sk-env';
+    assert.throws(() => resolveAuth({ provider: 'codex' }), /login codex/);
+  });
+});
+
+test('codex needs no key for the openai provider to keep working', () => {
+  withLogin(CODEX_LOGIN, 'OPENAI_API_KEY', () => {
+    process.env.OPENAI_API_KEY = 'sk-env';
+    assert.deepEqual(resolveAuth({ provider: 'openai' }), { key: 'sk-env', authType: 'apiKey' });
+  });
+});
+
+test('a Codex login does not authenticate any other provider', () => {
+  withLogin(CODEX_LOGIN, 'MISTRAL_API_KEY', () => {
+    assert.throws(() => resolveAuth({ provider: 'mistral' }), /No API key found for mistral/);
+  });
+});
+
+test('no Codex credentials names both ways in', () => {
+  withLogin(null, 'OPENAI_API_KEY', () => {
+    assert.throws(() => resolveAuth({ provider: 'codex' }), /\/login codex.*codex login/s);
+  });
+});
+
+test('the legacy flat credential file still signs in to Claude', () => {
+  withLogin({ accessToken: 'claude-oauth', refreshToken: 'r', expiresAt: Date.now() + 3_600_000 },
+    'ANTHROPIC_API_KEY', () => {
+      assert.deepEqual(resolveAuth({ provider: 'claude' }), { key: 'claude-oauth', authType: 'oauth' });
+    });
+});
+
+test('every provider has a default model, including codex', () => {
+  // A missing entry here is a runtime crash in `resolveModel`, and the type
+  // only catches it while the Provider union and the table stay in step.
+  for (const provider of Object.keys(PROVIDER_DEFAULTS) as Array<keyof typeof PROVIDER_DEFAULTS>) {
+    assert.ok(PROVIDER_DEFAULTS[provider].model, `${provider} has no default model`);
+  }
+  assert.equal(PROVIDER_DEFAULTS.codex.envKey, null, 'codex is OAuth-only — there is no env key for it');
 });

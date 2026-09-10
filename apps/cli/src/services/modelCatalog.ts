@@ -6,6 +6,7 @@
 
 import {
   parseLlamaCppModels, applyLlamaCppProps, parseOllamaModels, parseOpenRouterModels, listOpenRouterModels,
+  listCodexModels,
 } from '@agentionai/marshall-engine';
 import type { Provider, ModelInfo } from '@agentionai/marshall-engine';
 
@@ -21,6 +22,7 @@ export const PROVIDERS: Array<{ value: Provider; hint: string }> = [
   { value: 'ollama',     hint: 'no key needed'      },
   { value: 'claude',     hint: 'ANTHROPIC_API_KEY' },
   { value: 'openai',     hint: 'OPENAI_API_KEY'    },
+  { value: 'codex',      hint: 'ChatGPT subscription — /login codex' },
   { value: 'gemini',     hint: 'GEMINI_API_KEY'     },
   { value: 'mistral',    hint: 'MISTRAL_API_KEY'    },
   { value: 'cerebras',   hint: 'CEREBRAS_API_KEY'   },
@@ -30,7 +32,11 @@ export const PROVIDERS: Array<{ value: Provider; hint: string }> = [
 /** The shortlist shown when live discovery fails or the provider has none. */
 export const MODEL_PRESETS: Record<Provider, string[]> = {
   claude:     ['claude-sonnet-4-6', 'claude-opus-4-6', 'claude-haiku-4-5-20251001'],
-  openai:     ['gpt-5.6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra'],
+  // Platform ids. The `gpt-5.6-luna`-style names that used to sit here are
+  // Codex-only — the platform API rejects them outright — so they moved to
+  // `codex` below, where they work.
+  openai:     ['gpt-5.6', 'gpt-5.6-mini', 'gpt-4.1', 'gpt-4o'],
+  codex:      ['gpt-5.6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.5', 'gpt-6-astra'],
   gemini:     ['gemini-2.0-flash', 'gemini-1.5-pro'],
   mistral:    ['mistral-large-latest', 'mistral-small-latest', 'codestral-latest'],
   ollama:     ['llama3.2', 'codellama', 'qwen2.5', 'deepseek-r1'],
@@ -190,6 +196,17 @@ export async function discoverModels(
     return fetched.length > 0
       ? { models: fetched, note: [`${fetched.length} text models from openrouter.ai`] }
       : fallback(provider, 'openrouter.ai');
+  }
+
+  // Codex authenticates with a stored OAuth login rather than a key, and its
+  // catalogue is plan-gated — what this account may select is not something a
+  // preset list can know. Hence its own branch: `HOSTED_CATALOGUES` is keyed on
+  // "URL plus a bearer key", which this is not.
+  if (provider === 'codex') {
+    const fetched = await listCodexModels();
+    return fetched.length > 0
+      ? { models: fetched, note: [`${fetched.length} models for your ChatGPT plan`] }
+      : { models: MODEL_PRESETS.codex.map(id => ({ id })), note: ['not signed in — run /login codex'] };
   }
 
   if (HOSTED_CATALOGUES[provider]) {

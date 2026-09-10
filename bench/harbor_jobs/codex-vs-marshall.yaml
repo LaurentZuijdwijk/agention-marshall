@@ -1,0 +1,35 @@
+# Codex CLI vs marshall's codex provider, same model, same tasks, same account.
+#
+# Two agents in ONE job config on purpose: repeating `-a`/`-m` on the CLI does
+# not pair them positionally — it applies the last `--agent` to every `--model`,
+# which silently benchmarks one agent twice under two labels.
+#
+# Both sides drive gpt-5.6-luna on the same ChatGPT Plus login:
+#   - codex reads ~/.codex/auth.json          (CODEX_FORCE_AUTH_JSON=1)
+#   - marshall reads ~/.marshall/credentials.json, adopted from that same
+#     auth.json via importCodexCliLogin(); the adapter uploads it per trial.
+job_name: codex-vs-marshall-luna
+jobs_dir: bench/harbor_jobs/runs
+n_attempts: 1
+n_concurrent_trials: 2
+
+datasets:
+  - path: /tmp/terminal-bench
+    task_names:
+      - fix-git
+      - openssl-selfsigned-cert
+
+# CODEX_FORCE_AUTH_JSON is exported in the shell rather than set here on
+# purpose. Harbor treats every value in an agent `env:` block as a secret and
+# redacts it from the written results by plain substring replacement — with the
+# value "1" that rewrites every "1" in the file, including inside numbers, and
+# the trial's result.json comes out as invalid JSON ("timeout_multiplier":
+# [REDACTED].0). Observed 2026-09-10. Agents resolve env from os.environ as a
+# fallback (BaseAgent._env_sources), so the shell is an equivalent input with no
+# redaction pass over it.
+agents:
+  - name: codex
+    model_name: openai/gpt-5.6-luna
+
+  - import_path: harbor_agent.marshall_agent:MarshallAgent
+    model_name: codex/gpt-5.6-luna

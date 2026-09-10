@@ -1,3 +1,4 @@
+import type { CodexUsageLimits, CodexRateLimitWindow } from '@agentionai/agents';
 import type { TokenUsage } from '@agentionai/agents/core';
 import { resolveModel } from './config.js';
 import type { AgentProfile, Role, SwarmRole } from './config.js';
@@ -44,6 +45,19 @@ export interface TokenCount {
    */
   reasoningTokens?: number;
   /**
+   * Prompt tokens the provider served from its cache, and wrote to it — each a
+   * subset of `inputTokens`, never an addition to them. Summing input and cache
+   * would double-count every reused token.
+   *
+   * `0` and absent mean different things and are kept apart on purpose: `0` is
+   * the provider stating nothing hit the cache, absent is the provider saying
+   * nothing about caching at all. Only the first licenses the conclusion that a
+   * prompt was recomputed — which is the whole point of measuring it, since a
+   * large context and an expensive one are not the same thing (see bench/README).
+   */
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  /**
    * USD the provider itself billed for this reading (OpenRouter reports this
    * per call). Preferred over a price-table lookup when present, since it
    * reflects the account's actual rate — BYOK discounts, promos, whatever
@@ -68,12 +82,58 @@ export interface RoleUsage extends UsageTotals {
   model: string;
 }
 
+/**
+ * One rolling allowance window, as a subscription-billed provider reports it.
+ *
+ * Dates are ISO strings rather than `Date`: this crosses the client boundary as
+ * an output event and is written verbatim into headless mode's `MARSHALL_USAGE`
+ * line, and a `Date` survives neither trip intact.
+ */
+export interface QuotaWindow {
+  /** Share of the window's allowance already consumed, 0–100. */
+  usedPercent: number;
+  /** Window length in minutes — 300 for the 5-hour window, 10080 for the weekly. */
+  windowMinutes?: number;
+  /** ISO timestamp the window rolls over and the allowance comes back. */
+  resetAt?: string;
+}
+
+/**
+ * What a subscription bought, where the provider bills allowance instead of
+ * dollars — the only "cost" figure a ChatGPT-backed Codex run has, since
+ * `costUsd` is undefined there by design and always will be.
+ *
+ * Unlike every other figure here this describes the *account*, not the turn: it
+ * is a level, not a total, so it is never summed and never reset between turns.
+ * Reported only by providers that send it (codex today), absent everywhere else.
+ */
+export interface UsageQuota {
+  /** Short rolling window, 5 hours on the plans seen so far. */
+  primary?: QuotaWindow;
+  /** Long rolling window, 7 days on those same plans. */
+  secondary?: QuotaWindow;
+  /** Subscription tier billed, e.g. `plus`. */
+  planType?: string;
+  /** Limit tier in force for the request, e.g. `premium`. */
+  activeLimit?: string;
+  /** Pay-as-you-go balance, which takes over once both windows are spent. */
+  credits?: { balance?: number; hasCredits?: boolean; unlimited?: boolean };
+  /** ISO timestamp these values were received; they only refresh on a real call. */
+  at?: string;
+}
+
 export interface UsageReport {
   /** The turn in progress, or the one that just finished. */
   turn: UsageTotals;
   session: UsageTotals;
   /** Session spend per role and model, dearest first. */
   byRole: RoleUsage[];
+  /**
+   * Subscription allowance, where the provider reports it. Sits beside the
+   * totals rather than in them: it is the account's level, not this session's
+   * spend, so a fresh session still opens with whatever earlier ones consumed.
+   */
+  quota?: UsageQuota;
 }
 
 /**
@@ -103,6 +163,13 @@ function total(entries: Entry[]): UsageTotals {
   let inputTokens = 0;
   let outputTokens = 0;
   let reasoningTokens = 0;
+  let cacheReadTokens = 0;
+  let cacheWriteTokens = 0;
+  // Tracked separately from the sums: a total of 0 is meaningful when some
+  // entry reported it and meaningless when none did, and `0 > 0` cannot tell
+  // those apart the way `reasoningTokens` gets away with doing.
+  let readReported = false;
+  let writeReported = false;
   let costUsd = 0;
   let priced = 0;
 
@@ -110,25 +177,38 @@ function total(entries: Entry[]): UsageTotals {
     inputTokens += entry.inputTokens;
     outputTokens += entry.outputTokens;
     reasoningTokens += entry.reasoningTokens ?? 0;
+    if (entry.cacheReadTokens !== undefined) {
+      cacheReadTokens += entry.cacheReadTokens;
+      readReported = true;
+    }
+    if (entry.cacheWriteTokens !== undefined) {
+      cacheWriteTokens += entry.cacheWriteTokens;
+      writeReported = true;
+    }
     if (entry.costUsd === undefined) continue;
     costUsd += entry.costUsd;
     priced++;
   }
 
   const thinking = reasoningTokens > 0 ? { reasoningTokens } : {};
+  const cache = {
+    ...(readReported ? { cacheReadTokens } : {}),
+    ...(writeReported ? { cacheWriteTokens } : {}),
+  };
 
   // Nothing priced means no cost figure at all. A "$0.0000" for a provider we
   // simply have no catalogue for reads as free, which is the one thing it is not.
-  if (priced === 0) return { inputTokens, outputTokens, ...thinking };
+  if (priced === 0) return { inputTokens, outputTokens, ...thinking, ...cache };
   // A floor of exactly zero says "at least nothing", which is every total ever.
   // It happens whenever the only prices we have are the free local ones — a
   // hosted deep tier and a llama.cpp fast tier, before the catalogue lands —
   // and "$0+" next to a hosted model's token count reads as almost free.
-  if (costUsd === 0 && priced < entries.length) return { inputTokens, outputTokens, ...thinking };
+  if (costUsd === 0 && priced < entries.length) return { inputTokens, outputTokens, ...thinking, ...cache };
   return {
     inputTokens,
     outputTokens,
     ...thinking,
+    ...cache,
     costUsd,
     ...(priced < entries.length ? { costPartial: true } : {}),
   };
@@ -190,6 +270,11 @@ export function createUsageTally(prices: () => PriceBook | undefined = () => und
         inputTokens: usage.inputTokens,
         outputTokens: usage.outputTokens,
         ...(usage.reasoningTokens ? { reasoningTokens: usage.reasoningTokens } : {}),
+        // `!== undefined` rather than truthy, unlike reasoningTokens above: a
+        // reported zero is the provider telling us the prompt was recomputed,
+        // which is not the same as it never mentioning caching.
+        ...(usage.cacheReadTokens !== undefined ? { cacheReadTokens: usage.cacheReadTokens } : {}),
+        ...(usage.cacheWriteTokens !== undefined ? { cacheWriteTokens: usage.cacheWriteTokens } : {}),
         ...(costUsd !== undefined ? { costUsd } : {}),
         turn,
       });
@@ -203,6 +288,44 @@ export function createUsageTally(prices: () => PriceBook | undefined = () => und
         byRole: groupByRole(all),
       };
     },
+  };
+}
+
+// ── what a subscription has left ──────────────────────────────────────────────
+
+/**
+ * The freshest quota reading an agent holds, where its provider reports one.
+ *
+ * Read structurally rather than through a type guard: `lastUsageLimits` is
+ * declared on `CodexAgent` alone, and the session holds every agent as the base
+ * type. Narrowing by class would make the engine import a concrete agent, which
+ * it otherwise never does — providers are reached through `BaseAgent` precisely
+ * so that adding one touches no shared code.
+ *
+ * Returns `undefined` on every provider that bills in dollars, which is all of
+ * them but codex.
+ */
+export function quotaOf(agent: unknown): UsageQuota | undefined {
+  const limits = (agent as { lastUsageLimits?: CodexUsageLimits }).lastUsageLimits;
+  if (!limits) return undefined;
+  const window = (w: CodexRateLimitWindow | undefined): QuotaWindow | undefined => w && {
+    usedPercent: w.usedPercent,
+    ...(w.windowMinutes !== undefined ? { windowMinutes: w.windowMinutes } : {}),
+    // `resetAfterSeconds` is deliberately dropped: it is only true at the
+    // instant it was received, and this reading outlives that instant — it is
+    // not refreshed until the next API call. `resetAt` says the same thing in a
+    // form that stays true.
+    ...(w.resetAt ? { resetAt: w.resetAt.toISOString() } : {}),
+  };
+  const primary = window(limits.primary);
+  const secondary = window(limits.secondary);
+  return {
+    ...(primary ? { primary } : {}),
+    ...(secondary ? { secondary } : {}),
+    ...(limits.planType ? { planType: limits.planType } : {}),
+    ...(limits.activeLimit ? { activeLimit: limits.activeLimit } : {}),
+    ...(limits.credits ? { credits: limits.credits } : {}),
+    ...(limits.at ? { at: limits.at.toISOString() } : {}),
   };
 }
 

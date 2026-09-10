@@ -114,22 +114,39 @@ function resolveFastProfile(
   if (!model) return undefined;
 
   const sameProvider = fastProvider === provider;
+  // `saved` describes whatever provider the fast tier was last pointed at —
+  // only trust its endpoint fields while that is still `fastProvider`.
+  const savedMatches = saved?.provider === undefined || saved.provider === fastProvider;
+  const savedName = savedMatches ? saved?.name : undefined;
+  const savedHost = flags.fastHost ?? (savedMatches ? saved?.host : undefined);
+
+  // Nothing names an endpoint of its own and the provider is the deep tier's,
+  // so the two tiers *are* one endpoint and the whole identity comes across —
+  // name, host and key together. All three or none: inheriting the host alone
+  // aims the fast tier at a credentialed server without the credential, which
+  // is a 401 on every fast call.
+  const inheritsEndpoint = sameProvider && savedName === undefined && savedHost === undefined;
+
+  const name = savedName ?? (inheritsEndpoint ? deep.name : undefined);
+  const entry = providerCredentials(config.providers, { provider: fastProvider, name });
+  const host = savedHost ?? (inheritsEndpoint ? deep.host : entry.host);
+  const sameEndpoint = inheritsEndpoint || (sameProvider && host === deep.host && name === deep.name);
 
   return {
     provider: fastProvider,
     model,
-    // Only inherit the key when the tiers share a provider — a local fast tier
-    // must not be handed a hosted provider's credentials. Either way, a saved
-    // model selection no longer carries its own key inline (see
-    // `withModelSelection`), so both branches fall back to the stored
-    // provider entry the same way `host` does below.
-    apiKey: sameProvider
-      ? (flags.apiKey ?? deep.apiKey)
-      : (saved?.apiKey ?? providerCredentials(config.providers, { provider: fastProvider, name: saved?.name }).apiKey),
-    host: flags.fastHost
-      ?? saved?.host
-      ?? providerCredentials(config.providers, { provider: fastProvider, name: saved?.name }).host
-      ?? (sameProvider ? deep.host : undefined),
+    ...(name ? { name } : {}),
+    // `flags.apiKey` ahead of `saved`: it is what the user typed on this run,
+    // and a legacy config that still carries an inline key (pre
+    // `withModelSelection`) must not outrank it. Withheld unless the tiers
+    // share an endpoint, for the same reason the host is. `entry` is the
+    // record stored for exactly this endpoint, so its key only applies while
+    // the host is still the one it was stored against.
+    apiKey: (sameEndpoint ? flags.apiKey : undefined)
+      ?? (savedMatches ? saved?.apiKey : undefined)
+      ?? (sameEndpoint ? deep.apiKey : undefined)
+      ?? (host === entry.host ? entry.apiKey : undefined),
+    host,
     reasoningEffort: saved?.reasoningEffort,
   };
 }

@@ -183,3 +183,25 @@ test('a failing invocation reports the error through onEnd', async () => {
   await call(tool, 'x');
   assert.deepEqual(ends, [{ error: 'no key' }]);
 });
+
+test('delegated execution receives and propagates cancellation', async () => {
+  const controller = new AbortController();
+  let started!: () => void;
+  const ready = new Promise<void>(resolve => { started = resolve; });
+  const tool = agentTool({
+    name: 'probe', description: 'probe',
+    spawn: async () => ({
+      execute: async (_instructions, options) => {
+        assert.equal(options?.signal, controller.signal);
+        started();
+        return new Promise<string>((_resolve, reject) => {
+          options!.signal!.addEventListener('abort', () => reject(new DOMException('cancelled', 'AbortError')), { once: true });
+        });
+      },
+    }),
+  });
+  const pending = tool.execute('a', 'b', { instructions: 'work' }, 'id', undefined, undefined, { signal: controller.signal });
+  await ready;
+  controller.abort();
+  await assert.rejects(pending, { name: 'AbortError' });
+});

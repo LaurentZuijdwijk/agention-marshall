@@ -436,16 +436,18 @@ export class ConfigService {
           continue;
         }
         let ok = true;
+        let changed = false;
         for (const [scope, { what, next }] of results) {
           if (JSON.stringify(next) === JSON.stringify(files[scope])) continue;
           try {
             await this.writeFileAtomic(paths[scope], next, scope === 'global');
+            changed = true;
           } catch (err) {
             ok = false;
             this.onError(`could not save ${what}: ${err instanceof Error ? err.message : String(err)}`);
           }
         }
-        if (ok) this.invalidate();
+        if (ok || changed) this.invalidate();
         return ok;
       }
     });
@@ -458,7 +460,7 @@ export class ConfigService {
     // reported inside the loop and resolved as `false`.
     this.queue = task.then(() => {}, () => {});
     return task.then(
-      () => true,
+      (ok) => ok,
       (err: unknown) => {
         this.onError(err instanceof Error ? err.message : String(err));
         return false;

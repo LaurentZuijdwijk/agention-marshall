@@ -17,7 +17,9 @@ import type { Approvals } from './hooks/useApprovals.js';
 import type { PreferencesController } from './hooks/usePreferences.js';
 import type { Transcript } from './hooks/useTranscript.js';
 import type { Message } from './view/message.js';
+import { G } from './view/theme.js';
 import type { LoginSession } from './login.js';
+import type { CodexLoginSession } from './codex-login.js';
 import type { SetMode } from './mode.js';
 import { resolveSlashCommand, HELP, SAFETY_LEVEL_WORDS, SAFETY_LEVEL_LABELS } from './slashCommands.js';
 import type { SafetyLevelWord } from './slashCommands.js';
@@ -79,6 +81,12 @@ export interface CommandDeps {
   activeProfile: AgentProfile;
   quit(): void;
   startLogin(): LoginSession;
+  /** The ChatGPT sign-in. Async because the callback listener has to be bound
+   *  before the browser is sent anywhere, and binding can fail (port in use). */
+  startCodexLogin(): Promise<CodexLoginSession>;
+  /** Adopt a credential `codex login` already wrote, or `null` if there is
+   *  none. Tried before the browser flow — see the `'login'` case. */
+  importCodexCliLogin(): Promise<unknown | null>;
   /** Persist the server list after `/mcp remove` — the add path saves from the
    *  App, which is where the wizard's result lands. */
   onMcpChanged?(): void;
@@ -609,6 +617,33 @@ export function runSlashCommand(input: string, deps: CommandDeps): void {
 
     case 'login':
       if (refuseWhileBusy(session, transcript)) return;
+      // OpenAI redirects to a loopback address this process is listening on, so
+      // there is nothing for the user to paste and no `login-pending` mode to
+      // enter — the prompt stays usable while the browser round trip happens.
+      if (command.provider === 'codex') {
+        const signedIn = (how: string) => transcript.push('info',
+          `${G.ok} signed in to ChatGPT ${how} — the codex provider now runs on your subscription`);
+        // An existing `codex login` first. The credential is already on this
+        // machine and already valid, so sending someone through a browser to
+        // mint a second one is a round trip for nothing.
+        deps.importCodexCliLogin().then(imported => {
+          if (imported) {
+            signedIn('from your existing `codex login`');
+            return;
+          }
+          return deps.startCodexLogin().then(login => {
+            transcript.push('info',
+              `Opening browser…\n\nIf it doesn't open, visit:\n${login.authUrl}\n\nWaiting for the browser to come back.`);
+            return login.completed.then(
+              () => signedIn('in your browser'),
+              (err: unknown) => transcript.push('error', err instanceof Error ? err.message : String(err)),
+            );
+          });
+        }).catch((err: unknown) => {
+          transcript.push('error', err instanceof Error ? err.message : String(err));
+        });
+        return;
+      }
       try {
         const login = deps.startLogin();
         transcript.push('info',

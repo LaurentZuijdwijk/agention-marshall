@@ -16,7 +16,7 @@ export interface StreamChunk {
 export type AgentInput = string | MessageContent[];
 
 interface AcceptsContent {
-  execute(input: AgentInput): Promise<string>;
+  execute(input: AgentInput, options?: { signal?: AbortSignal }): Promise<string>;
 }
 
 /**
@@ -29,7 +29,7 @@ interface AcceptsContent {
  * independently.
  */
 interface StreamingAgent {
-  executeStream(input: AgentInput): AsyncGenerator<StreamChunk>;
+  executeStream(input: AgentInput, options?: { signal?: AbortSignal }): AsyncGenerator<StreamChunk>;
 }
 
 function canStream(
@@ -54,15 +54,16 @@ export async function runAgent(
   agent: BaseAgent<string, string>,
   input: AgentInput,
   onChunk: (chunk: StreamChunk) => void,
+  signal?: AbortSignal,
 ): Promise<string> {
-  if (!canStream(agent)) return (agent as unknown as AcceptsContent).execute(input);
+  if (!canStream(agent)) return (agent as unknown as AcceptsContent).execute(input, { signal });
 
   let answer = '';
   const startTurn = () => { answer = ''; };
   agent.on(AgentEvent.TOOL_USE, startTurn);
 
   try {
-    for await (const chunk of agent.executeStream(input)) {
+    for await (const chunk of agent.executeStream(input, { signal })) {
       if (chunk.type === 'text') answer += chunk.content;
       onChunk(chunk);
     }

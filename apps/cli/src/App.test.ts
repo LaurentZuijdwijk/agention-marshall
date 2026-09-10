@@ -795,3 +795,76 @@ describe('the startup update check', () => {
     }
   });
 });
+
+describe('modal keyboard focus', () => {
+  for (const key of [KEY.enter, 'y']) {
+    it(`keeps the draft untouched when approving with ${JSON.stringify(key)}`, async () => {
+      mockBusy = false;
+      const sent: string[] = [];
+      mockRun = async text => { sent.push(text); };
+      const stdin = fakeStdin();
+      const instance = renderTui(React.createElement(App, {
+        workspaceRoot: mkTemp(), agentProfile: { provider: 'llamacpp', model: 'test' }, SessionCtor: MockSession as any,
+      }), { stdout: fakeStdout(chunk => { capturedOutput += chunk; }, 100, 40), stdin });
+      try {
+        await waitFor(() => capturedOutput.includes('type a task'));
+        stdin.push('unfinished draft');
+        await waitFor(() => capturedOutput.includes('unfinished draft'));
+        mockBusy = true;
+        engineClient!.onOutput({ type: 'thinking' });
+        let decision: string | undefined;
+        const approval = (engineClient as any).requestApproval({ toolName: 'run_shell', description: 'Run pwd', detail: 'pwd', input: { command: 'pwd' } })
+          .then((value: string) => { decision = value; });
+        await waitFor(() => capturedOutput.includes('approval required'));
+        await new Promise(resolve => setTimeout(resolve, 50));
+        stdin.push(key);
+        await waitFor(() => decision !== undefined);
+        await approval;
+        assert.equal(decision, 'approve');
+        assert.ok(!capturedOutput.includes('queued prompt'), 'approving must not submit the draft');
+        mockBusy = false;
+        engineClient!.onOutput({ type: 'response', text: 'original task finished' });
+        await waitFor(() => capturedOutput.includes('original task finished'));
+        await new Promise(resolve => setTimeout(resolve, 50));
+        assert.deepEqual(sent, []);
+        stdin.push(KEY.enter);
+        await waitFor(() => sent.length === 1);
+        assert.deepEqual(sent, ['unfinished draft'], 'hotkeys must not be inserted in the draft either');
+      } finally {
+        instance.unmount();
+        mockBusy = false;
+        mockRun = null;
+      }
+    });
+  }
+});
+
+describe('image recovery keyboard focus', () => {
+  it('retries the rejected task without also submitting the draft', async () => {
+    mockBusy = false;
+    const sent: string[] = [];
+    mockRun = async text => { sent.push(text); };
+    const stdin = fakeStdin();
+    const instance = renderTui(React.createElement(App, {
+      workspaceRoot: mkTemp(), agentProfile: { provider: 'llamacpp', model: 'test' }, SessionCtor: MockSession as any,
+    }), { stdout: fakeStdout(chunk => { capturedOutput += chunk; }, 100, 40), stdin });
+    try {
+      await waitFor(() => capturedOutput.includes('type a task'));
+      stdin.push('unfinished draft');
+      await waitFor(() => capturedOutput.includes('unfinished draft'));
+      engineClient!.onOutput({ type: 'image-rejected', message: 'no vision', task: 'original task' });
+      await waitFor(() => capturedOutput.includes('Remove the image and retry'));
+      await new Promise(resolve => setTimeout(resolve, 50));
+      stdin.push(KEY.enter);
+      await waitFor(() => sent.length === 1);
+      assert.deepEqual(sent, ['original task']);
+      assert.ok(!capturedOutput.includes('queued prompt'));
+      engineClient!.onOutput({ type: 'response', text: 'retry finished' });
+      await waitFor(() => capturedOutput.includes('retry finished'));
+      await new Promise(resolve => setTimeout(resolve, 50));
+      stdin.push(KEY.enter);
+      await waitFor(() => sent.length === 2);
+      assert.deepEqual(sent, ['original task', 'unfinished draft']);
+    } finally { instance.unmount(); mockRun = null; }
+  });
+});

@@ -1,8 +1,8 @@
 import { Tool } from '@agentionai/agents/core';
 import type { ToolInputSchema } from '@agentionai/agents/core';
 import { readFile, readdir, mkdir } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
-import { join, relative, basename } from 'node:path';
+import { existsSync, lstatSync } from 'node:fs';
+import { join, dirname, resolve, relative, basename } from 'node:path';
 import { atomicWrite } from '../primitives/atomic-write.js';
 import { cappedRead, DEFAULT_MAX_FILE_BYTES } from '../primitives/capped-read.js';
 import { resolveInWorkspace } from '../primitives/resolve.js';
@@ -31,8 +31,32 @@ export function createScratchTools(config: ToolConfig): Tool<string>[] {
   // private lock and serialise against nothing, which is the case it exists for.
   const logLock = config.fileLock ?? createKeyedLock();
 
+  // Scratch tools bypass approval, so even a symlink to another workspace
+  // directory is outside their authority. Check ancestors before mkdir too.
+  function checkedPath(path: string): string {
+    config.signal?.throwIfAborted();
+    const root = resolve(workspaceRoot);
+    const target = resolve(path);
+    for (let at = target; at !== root; at = dirname(at)) {
+      // Every scratch path is built from `workspaceRoot`, so the walk always
+      // reaches it — but stop at the filesystem root rather than spin if a
+      // future caller passes something from elsewhere.
+      if (dirname(at) === at) break;
+      try {
+        if (lstatSync(at).isSymbolicLink()) throw new Error('Scratch paths must not contain symlinks.');
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+      }
+    }
+    // Relative, not absolute: `resolveInWorkspace` resolves against the *real*
+    // root, and an absolute path built from a `workspaceRoot` that is itself
+    // reached through a symlink would never land inside it — every scratch
+    // call would fail as an escape. The walk above already cleared the path.
+    return resolveInWorkspace(workspaceRoot, relative(root, target));
+  }
+
   async function ensureDirs() {
-    await mkdir(notesDir, { recursive: true });
+    await mkdir(checkedPath(notesDir), { recursive: true });
   }
 
   const note_write = new Tool<string>({
@@ -54,7 +78,7 @@ export function createScratchTools(config: ToolConfig): Tool<string>[] {
         await ensureDirs();
         // Sanitise: strip path separators so the name stays inside notesDir
         const safeName = String(name).replace(/[/\\]/g, '_').replace(/\.\.+/g, '_');
-        const filePath = join(notesDir, `${safeName}.md`);
+        const filePath = checkedPath(join(notesDir, `${safeName}.md`));
         await atomicWrite(filePath, String(content));
         return `Note "${safeName}" saved to .marshall/notes/`;
       } catch (err) {
@@ -77,7 +101,7 @@ export function createScratchTools(config: ToolConfig): Tool<string>[] {
       try {
         // Use resolveInWorkspace so the name can't escape scratchRoot
         const safeName = String(name).replace(/[/\\]/g, '_').replace(/\.\.+/g, '_');
-        const filePath = join(notesDir, `${safeName}.md`);
+        const filePath = checkedPath(join(notesDir, `${safeName}.md`));
         if (!existsSync(filePath)) return `Note "${safeName}" not found. Use note_list to see available notes.`;
         return await cappedRead(filePath, maxFileBytes);
       } catch (err) {
@@ -97,7 +121,7 @@ export function createScratchTools(config: ToolConfig): Tool<string>[] {
     execute: async () => {
       try {
         await ensureDirs();
-        const entries = await readdir(notesDir, { withFileTypes: true });
+        const entries = await readdir(checkedPath(notesDir), { withFileTypes: true });
         const notes = entries.filter(e => e.isFile() && e.name.endsWith('.md'));
         if (notes.length === 0) return '(no notes yet)';
         return notes.map(e => basename(e.name, '.md')).join('\n');
@@ -127,10 +151,11 @@ export function createScratchTools(config: ToolConfig): Tool<string>[] {
         // Serialise the read-modify-write: atomicWrite alone cannot prevent two
         // concurrent appenders from both reading the same old log contents.
         await logLock(sessionLog, async () => {
-          const existing = existsSync(sessionLog)
-            ? await readFile(sessionLog, 'utf8')
+          const logPath = checkedPath(sessionLog);
+          const existing = existsSync(logPath)
+            ? await readFile(logPath, 'utf8')
             : '';
-          await atomicWrite(sessionLog, existing + entry);
+          await atomicWrite(logPath, existing + entry);
         });
         return `Logged at ${timestamp}`;
       } catch (err) {
@@ -151,8 +176,9 @@ export function createScratchTools(config: ToolConfig): Tool<string>[] {
     } satisfies ToolInputSchema,
     execute: async ({ tail }) => {
       try {
-        if (!existsSync(sessionLog)) return '(no session log yet)';
-        const content = await cappedRead(sessionLog, maxFileBytes);
+        const logPath = checkedPath(sessionLog);
+        if (!existsSync(logPath)) return '(no session log yet)';
+        const content = await cappedRead(logPath, maxFileBytes);
         if (!tail) return content;
         const lines = content.split('\n');
         return lines.slice(-Number(tail)).join('\n');

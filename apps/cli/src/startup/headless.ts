@@ -54,7 +54,14 @@ function makeClient(onError: () => void): ClientInterface {
           // (bench/harbor_agent/marshall_agent.py) reads this back out of the
           // teed transcript to report tokens/cost into Harbor's AgentContext.
           if (event.final) {
-            process.stdout.write(`\nMARSHALL_USAGE ${JSON.stringify({ turn: event.turn, session: event.session })}\n`);
+            process.stdout.write(`\nMARSHALL_USAGE ${JSON.stringify({
+              turn: event.turn,
+              session: event.session,
+              // Present only on a subscription-billed provider, where it is the
+              // nearest thing to a cost figure that exists — `costUsd` is
+              // undefined there by design.
+              ...(event.quota ? { quota: event.quota } : {}),
+            })}\n`);
           }
           break;
         default:

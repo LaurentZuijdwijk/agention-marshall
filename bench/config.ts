@@ -46,6 +46,13 @@ export const MODELS = {
   // preset with no ctx-size runs a long agentic task into the context
   // exhaustion diagnosed on 2026-08-27 rather than measuring anything.
   qwen38flash: 'qwen4exp/Qwen3.8-Flash-Next-ROCmFP4-FAST-imat',
+  // Signal 3.8 27B (terse lm_head tune, blend30 head on the Q8_0 body) and the untouched Q8_0 it
+  // was spliced onto. Both router presets carry identical flags (32k ctx, adaptive draft-mtp n<=4),
+  // so a difference between the two rows is the head and nothing else. See
+  // /scratch/qwen38-27b-project/style-tune/RUNBOOK.md. Pair these; do not compare Signal to the
+  // unsloth Q4_K_XL row above (different quant, different context, different draft settings).
+  signal: 'Snapper-27B',
+  qwen38q8: 'Qwen3.8-27B-Q8_0-base',
 } as const;
 
 /**
@@ -56,7 +63,7 @@ export const MODELS = {
  * bench/llama-journal.ts filters the journal by that port. Two quants would be
  * indistinguishable in the results and their numbers would silently merge.
  */
-export const INSTRUMENTED_MODEL: string = MODELS.ornith;
+export const INSTRUMENTED_MODEL: string = process.env.BENCH_INSTRUMENTED_MODEL ?? MODELS.ornith;   // e.g. BENCH_INSTRUMENTED_MODEL=Snapper-27B for a Signal run
 
 function llamacpp(model: string): AgentProfile {
   return { provider: 'llamacpp', model, host: LLAMACPP_HOST };
@@ -110,6 +117,8 @@ export const CONFIGURATIONS: BenchConfiguration[] = [
   // a different model is what separates those two.
   { name: 'tiel-solo', agent: llamacpp(MODELS.tiel) },
   { name: 'qwen38-solo', agent: llamacpp(MODELS.qwen38) },
+  { name: 'signal-solo', agent: llamacpp(MODELS.signal) },
+  { name: 'qwen38q8-solo', agent: llamacpp(MODELS.qwen38q8) },
   // The floor of the tool-surface experiment: one tool, and the model does
   // everything through the shell. Tool count is the only lever measurably
   // driving reasoning volume (17 -> 7 tools cut thinking per request 23%), so

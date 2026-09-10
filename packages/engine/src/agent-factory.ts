@@ -5,11 +5,27 @@ import type { BaseAgent } from '@agentionai/agents/core';
 import type { BuiltInTool } from '@agentionai/agents/core';
 import { OpenAICompatibleAgent } from '@agentionai/agents';
 import type { OpenAICompatibleConfig, OpenRouterConfig } from '@agentionai/agents';
+import type { CodexModel, CodexReasoningEffort } from '@agentionai/agents/openai';
 import { resolveAuth, resolveModel, resolveMaxTokens, isOpenAiReasoningModel, PROVIDER_DEFAULTS } from './config.js';
 import type { AgentProfile } from './config.js';
+import { codexCredentials, toCodexCredentials, fromCodexCredentials } from './codex-oauth.js';
+import { saveCredentials } from './oauth-store.js';
 import type { AgentToolset } from './agent-jobs.js';
 
 const PROJECT_MEMORY_HEADER = '\n\n## Project memory (AGENTS.md)\n\n';
+
+/**
+ * Marshall's reasoning-effort scale as Codex accepts it.
+ *
+ * The two sets differ at the bottom: the platform API has `none` and `minimal`,
+ * the Codex models start at `low`. Both fold to `low` rather than being dropped
+ * — someone who asked for as little thinking as possible gets the least this
+ * backend offers, instead of silently getting the `medium` default.
+ */
+function codexEffort(effort: AgentProfile['reasoningEffort']): CodexReasoningEffort | undefined {
+  if (effort === undefined) return undefined;
+  return effort === 'none' || effort === 'minimal' ? 'low' : effort;
+}
 
 /** Generic named provider configured through an OpenAI-compatible endpoint. */
 class OpenAICompatibleAgentImpl extends OpenAICompatibleAgent {
@@ -302,10 +318,19 @@ export interface CreateAgentOptions {
    */
   promptCaching?: boolean;
   /**
-   * Sticky OpenRouter routing key, pinning every request from this agent to
-   * the same upstream instance — the precondition for `promptCaching` to
-   * actually hit rather than write a cache that never gets read. No effect
-   * without `promptCaching: true`; harmless on every other provider.
+   * Stable id for this session's requests, used by two providers for the same
+   * end — keeping a prompt cache warm — by different means.
+   *
+   * On OpenRouter it is a sticky routing key, pinning every request from this
+   * agent to the same upstream instance, which is the precondition for
+   * `promptCaching` to hit rather than write a cache nothing reads. No effect
+   * there without `promptCaching: true`.
+   *
+   * On codex it is sent as the `session_id` header, which is what the ChatGPT
+   * backend groups its prompt cache by; `prompt_cache_key`, the platform API's
+   * lever, does nothing on that backend. Needs no companion flag.
+   *
+   * Harmless on every other provider.
    */
   sessionId?: string;
   /**
@@ -367,7 +392,7 @@ export async function createAgent(
     sessionId,
     privateMode,
   } = options;
-  const { key: apiKey, authType } = resolveAuth(profile);
+  const { key: apiKey, authType, accountId } = resolveAuth(profile);
   const model = resolveModel(profile);
   const prompt = systemPrompt ?? SYSTEM_PROMPT;
   const description = buildAgentDescription(prompt, extraInstructions, projectMemory);
@@ -428,6 +453,7 @@ export async function createAgent(
         const { OpenAiAgent } = await import('@agentionai/agents/openai');
         return new OpenAiAgent(base, history);
       }
+      case 'codex': return await codexAgent();
       case 'gemini': {
         const { GeminiAgent } = await import('@agentionai/agents/gemini');
         return new GeminiAgent(base, history);
@@ -480,5 +506,46 @@ export async function createAgent(
         throw new Error(`Unknown provider: ${_}`);
       }
     }
+  }
+
+  /**
+   * A ChatGPT subscription rather than a platform key.
+   *
+   * `CodexAgent` from the SDK, not a hand-rolled OpenAI-compatible client: the
+   * Codex backend speaks the Responses API (not `/chat/completions`), requires
+   * `instructions` and `stream: true`, refuses `max_output_tokens`, reports
+   * errors as `{detail}`, and serves a model namespace disjoint from the
+   * platform's. `fromCredentials` wraps the token in a provider that refreshes
+   * it as it ages out, so an agent built once at startup keeps working past the
+   * ~1h life of an access token.
+   */
+  async function codexAgent(): Promise<BaseAgent<string, string>> {
+    const { CodexAgent } = await import('@agentionai/agents/openai');
+    const stored = codexCredentials();
+    // `resolveAuth` has already refused a profile with no login, so this is a
+    // type narrowing rather than a real branch.
+    if (!stored) throw new Error('Not signed in to ChatGPT. Run `/login codex`.');
+    // `apiKey` goes because the token provider supplies it per request;
+    // `maxTokens` because the backend rejects `max_output_tokens` outright;
+    // `reasoningEffort` because Codex accepts a different set of values.
+    const { apiKey: _dropKey, maxTokens: _dropCap, reasoningEffort: _dropEffort, ...rest } = base;
+    const effort = codexEffort(profile.reasoningEffort);
+    return CodexAgent.fromCredentials(toCodexCredentials(stored), {
+      ...rest,
+      ...(effort ? { reasoningEffort: effort } : {}),
+      // The prompt cache on this backend is grouped by `session_id`, and the
+      // header is omitted unless asked for: without it a tool loop replays the
+      // whole prefix uncached on every hop. Measured on terminal-bench fix-git
+      // (2026-09-10): 2% of input reused against the Codex CLI's 78-97%. The id
+      // is the session's own, so every hop of every turn lands in one group and
+      // the prefix stays warm across turns rather than only within one.
+      ...(sessionId ? { sessionId } : {}),
+      model: resolveModel(profile) as CodexModel,
+      tokenOptions: {
+        // The refresh token rotates, so the new one has to land on disk or the
+        // next process starts from a credential the server has already retired.
+        onRefresh: refreshed => { saveCredentials('codex', fromCodexCredentials(refreshed)); },
+      },
+    }, history);
   }
 }

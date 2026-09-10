@@ -1068,3 +1068,21 @@ test('edit_lines is shown to the approver as a diff, same as edit_file', async (
   assert.equal(seen[0].toolName, 'edit_lines');
   assert.match(seen[0].detail, /BETA/);
 });
+
+test('a targeted edit preserves external changes without authorizing a stale whole-file write', async () => {
+  const root = tempRoot();
+  const path = join(root, 'shared.txt');
+  writeFileSync(path, 'alpha\nbeta\n');
+  const tools = Object.fromEntries(createFileTools(makeConfig({ workspaceRoot: root })).map(t => [t.name, t]));
+  await tools.read_file.execute('a', 'b', { path: 'shared.txt' }, 'read');
+  writeFileSync(path, 'alpha\nbeta\nexternal addition\n');
+  const edit = await tools.edit_file.execute('a', 'b', {
+    path: 'shared.txt', edits: [{ oldString: 'alpha', newString: 'ALPHA' }],
+  }, 'edit');
+  assert.match(edit, /Successfully edited/);
+  const write = await tools.write_file.execute('a', 'b', { path: 'shared.txt', content: 'ALPHA\nbeta\n' }, 'write');
+  assert.match(write, /Error:/);
+  assert.equal(readFileSync(path, 'utf8'), 'ALPHA\nbeta\nexternal addition\n');
+  await tools.read_file.execute('a', 'b', { path: 'shared.txt' }, 'reread');
+  assert.match(await tools.write_file.execute('a', 'b', { path: 'shared.txt', content: 'reviewed\n' }, 'write-again'), /Wrote/);
+});

@@ -115,6 +115,18 @@ export interface ToolBeltDeps {
   mcp: McpRegistry;
   /** Where `ToolConfig.attachImages` lands a screenshot — see `forTurn`. */
   history: SessionHistory;
+  /**
+   * The session's id, handed to every agent built here.
+   *
+   * Shared rather than one per sub-agent, which measures strictly better on
+   * codex (2026-09-10): two different prefixes under one `session_id` cache
+   * independently — no thrash — while two agents with the *same* prefix under
+   * one id warm each other, so a fan-out of same-role sub-agents pays the
+   * prefill once instead of once each. A distinct id per agent gives up that
+   * sharing and buys nothing. Inert on OpenRouter, where the id only routes
+   * when `promptCaching` is also set, and on every other provider.
+   */
+  sessionId: string;
 }
 
 
@@ -669,6 +681,7 @@ export class ToolBelt {
       systemPrompt: buildSwarmPrompt(opts.toolset, named?.description),
       name: opts.id,
       privateMode: config.privateMode,
+      sessionId: this.deps.sessionId,
     });
     this.deps.events.attachSubAgentListeners(agent, tools, opts.id);
     for (const t of tools) {
@@ -733,6 +746,7 @@ export class ToolBelt {
         systemPrompt: opts.systemPrompt,
         name: opts.name,
         privateMode: this.deps.getConfig().privateMode,
+        sessionId: this.deps.sessionId,
         ...(opts.builtInTools ? { builtInTools: opts.builtInTools } : {}),
       });
       // Mirror the sub-agent's own reads to the transcript, tagged with the call

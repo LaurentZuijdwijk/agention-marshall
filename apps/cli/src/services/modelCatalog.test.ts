@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { filterOpenAIModels, discoverModels, MODEL_PRESETS, providerHasHost } from './modelCatalog.js';
+import { filterOpenAIModels, discoverModels, MODEL_PRESETS, PROVIDERS, providerHasHost } from './modelCatalog.js';
 import type { ModelInfo } from '@agentionai/marshall-engine';
 
 describe('filterOpenAIModels', () => {
@@ -29,10 +29,26 @@ describe('filterOpenAIModels', () => {
     ]);
   });
 
-  it('offers the default OpenAI models when discovery is unavailable', () => {
-    assert.deepEqual(MODEL_PRESETS.openai, [
-      'gpt-5.6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra',
-    ]);
+  it('offers platform models for openai, not the Codex-only ones', () => {
+    // The `gpt-5.6-luna`/`sol`/`terra` family is served only through a ChatGPT
+    // subscription: the platform API answers "model is not supported when
+    // using Codex with a ChatGPT account". Offering them here sent people to a
+    // model their key cannot drive.
+    assert.deepEqual(MODEL_PRESETS.openai, ['gpt-5.6', 'gpt-5.6-mini', 'gpt-4.1', 'gpt-4o']);
+    for (const id of MODEL_PRESETS.openai) {
+      assert.equal(MODEL_PRESETS.codex.includes(id), false, `${id} is in both catalogues`);
+    }
+  });
+
+  it('offers the Codex models for codex', () => {
+    assert.ok(MODEL_PRESETS.codex.includes('gpt-5.6-luna'), 'the provider default has to be offered');
+    assert.ok(MODEL_PRESETS.codex.length > 0);
+  });
+
+  it('gives every provider a preset list, so no picker can come up empty-handed', () => {
+    for (const { value } of PROVIDERS) {
+      assert.ok(MODEL_PRESETS[value] !== undefined, `${value} has no preset entry`);
+    }
   });
 });
 

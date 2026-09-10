@@ -273,3 +273,67 @@ describe('chosenProfile', () => {
     assert.strictEqual(profile?.apiKey, undefined);
   });
 });
+
+describe('fast endpoint identity', () => {
+  it('uses and preserves the fast endpoint rather than the deep endpoint credentials', () => {
+    const config: SavedConfig = {
+      providers: [
+        { provider: 'openai-compatible', name: 'deep', host: 'https://deep.example', apiKey: 'deep-key' },
+        { provider: 'openai-compatible', name: 'fast', host: 'https://fast.example', apiKey: 'fast-key' },
+      ],
+      models: {
+        deep: { provider: 'openai-compatible', name: 'deep', model: 'large' },
+        fast: { provider: 'openai-compatible', name: 'fast', model: 'small' },
+      },
+    };
+    const { fastProfile } = resolveProfiles(flags(), config);
+    assert.equal(fastProfile?.name, 'fast');
+    assert.equal(fastProfile?.host, 'https://fast.example');
+    assert.equal(fastProfile?.apiKey, 'fast-key');
+  });
+
+  it('inherits the deep endpoint whole when the saved fast tier names none of its own', () => {
+    // The saved fast tier states its provider (every `/model` save does) but
+    // no endpoint of its own. Taking the deep tier's host without its name and
+    // key aimed the fast tier at a credentialed server unauthenticated.
+    const { fastProfile } = resolveProfiles(flags(), {
+      providers: [{ provider: 'openai-compatible', name: 'server', host: 'http://server', apiKey: 'key' }],
+      models: {
+        deep: { provider: 'openai-compatible', name: 'server', model: 'large' },
+        fast: { provider: 'openai-compatible', model: 'small' },
+      },
+    });
+    assert.equal(fastProfile?.host, 'http://server');
+    assert.equal(fastProfile?.name, 'server');
+    assert.equal(fastProfile?.apiKey, 'key');
+  });
+
+  it('prefers --api-key over an inline key left in a legacy saved fast tier', () => {
+    const { fastProfile } = resolveProfiles(flags({ apiKey: 'cli-key' }), {
+      models: {
+        deep: { provider: 'openai', model: 'gpt-4o' },
+        fast: { provider: 'openai', model: 'gpt-4o-mini', apiKey: 'stale-inline-key' },
+      },
+    });
+    assert.equal(fastProfile?.apiKey, 'cli-key');
+  });
+
+  it('does not send --api-key to a fast tier pointed at another host', () => {
+    const { fastProfile } = resolveProfiles(
+      flags({ apiKey: 'deep-key', fastModel: 'small', fastHost: 'http://elsewhere' }),
+      { models: { deep: { provider: 'openai-compatible', model: 'large', host: 'http://server' } } },
+    );
+    assert.equal(fastProfile?.host, 'http://elsewhere');
+    assert.equal(fastProfile?.apiKey, undefined);
+  });
+
+  it('inherits a named deep endpoint when only --fast-model is supplied', () => {
+    const { fastProfile } = resolveProfiles(flags({ fastModel: 'small' }), {
+      providers: [{ provider: 'openai-compatible', name: 'server', host: 'http://server', apiKey: 'key' }],
+      models: { deep: { provider: 'openai-compatible', name: 'server', model: 'large' } },
+    });
+    assert.equal(fastProfile?.name, 'server');
+    assert.equal(fastProfile?.apiKey, 'key');
+    assert.equal(fastProfile?.host, 'http://server');
+  });
+});

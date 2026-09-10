@@ -18,6 +18,7 @@
 // fully specified, replace the split every caller already had to make in its
 // own head.
 
+import { createHash } from 'node:crypto';
 import { Tool } from '@agentionai/agents/core';
 import type { ToolInputSchema } from '@agentionai/agents/core';
 import { readFile } from 'node:fs/promises';
@@ -383,7 +384,8 @@ export function createReadGateTools(
    * it lands the caller has accounted for every line — `markSeen: true`, with
    * the read limit the only thing that can still leave it short of
    * `'complete'`. `edit_file` matched a unique substring and never saw the
-   * rest, so it records the new hash and leaves coverage exactly as it was: a
+   * rest, so it records the new hash and preserves coverage only if its base
+   * matched the previously read hash. Otherwise coverage is invalidated. A
    * ranged read followed by an edit is still a ranged read, and must not
    * unlock the wholesale overwrite the gate exists to refuse.
    */
@@ -438,6 +440,10 @@ export function createReadGateTools(
             }
             const coverage = readCoverage.get(resolved);
             if (coverage !== 'complete') {
+              if (coverage === undefined) {
+                return `Error: ${relative(workspaceRoot, resolved)} has not been completely read at its current version. `
+                  + 'Call read_file again before replacing it wholesale; an edit may have preserved unseen external changes.';
+              }
               return coverage === 'over-limit'
                 ? (
                   `Error: ${relative(workspaceRoot, resolved)} was only partially read because it exceeds the ` +
@@ -532,7 +538,8 @@ export function createReadGateTools(
           return overSizedEdits('edit_file', edits.length, payload, readCoverage.get(resolved));
         }
         return await withFileLock(resolved, async () => {
-          const original = await readFile(resolved, 'utf8');
+          const originalBytes = await readFile(resolved);
+          const original = originalBytes.toString('utf8');
 
           // No read requirement, deliberately: the oldString *is* the
           // evidence. It has to occur exactly once in the file as it stands,
@@ -554,6 +561,8 @@ export function createReadGateTools(
             return `Error: ${result.failures.map(f => describeFailure(f, String(path), edits.length)).join(' ')}`;
           }
 
+          const originalHash = createHash('sha256').update(originalBytes).digest('hex').slice(0, 16);
+          if (readFiles.get(resolved) !== originalHash) readCoverage.delete(resolved);
           await atomicWrite(resolved, result.content);
           // Deliberately no hash precondition here: edit_file re-reads and
           // matches unique strings, so two edits to different parts of one

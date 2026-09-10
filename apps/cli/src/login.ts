@@ -1,7 +1,10 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
+import {
+  readCredentials as readOAuthCredentials,
+  saveCredentials as saveOAuthCredentials,
+} from '@agentionai/marshall-engine';
 
 const CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
 const AUTH_URL = 'https://claude.ai/oauth/authorize';
@@ -29,9 +32,14 @@ function generatePKCE(): { verifier: string; challenge: string } {
 
 function openBrowser(url: string): void {
   const cmd = process.platform === 'darwin' ? 'open'
-    : process.platform === 'win32' ? 'start'
+    : process.platform === 'win32' ? 'rundll32'
     : 'xdg-open';
-  spawn(cmd, [url], { detached: true, stdio: 'ignore' }).unref();
+  const args = process.platform === 'win32' ? ['url.dll,FileProtocolHandler', url] : [url];
+  const child = spawn(cmd, args, { detached: true, stdio: 'ignore' });
+  // Opening the browser is best-effort: the URL is also printed for SSH and
+  // headless environments, where no opener may be installed.
+  child.once('error', () => {});
+  child.unref();
 }
 
 async function exchangeCode(code: string, verifier: string, state: string): Promise<MarshallCredentials> {
@@ -71,18 +79,11 @@ async function exchangeCode(code: string, verifier: string, state: string): Prom
 }
 
 export function saveCredentials(creds: MarshallCredentials): void {
-  const dir = join(process.env.HOME ?? '~', '.marshall');
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(CREDENTIALS_PATH, JSON.stringify(creds, null, 2), { mode: 0o600 });
+  saveOAuthCredentials('claude', creds);
 }
 
 export function readCredentials(): MarshallCredentials | null {
-  try {
-    if (!existsSync(CREDENTIALS_PATH)) return null;
-    return JSON.parse(readFileSync(CREDENTIALS_PATH, 'utf8')) as MarshallCredentials;
-  } catch {
-    return null;
-  }
+  return readOAuthCredentials('claude');
 }
 
 export async function refreshCredentials(creds: MarshallCredentials): Promise<MarshallCredentials> {

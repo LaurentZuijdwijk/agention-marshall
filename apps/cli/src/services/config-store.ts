@@ -1,6 +1,7 @@
 import { readFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { PROVIDER_DEFAULTS } from '@agentionai/marshall-engine';
 import type { AgentProfile, McpServerConfig, PluginConfig } from '@agentionai/marshall-engine';
 
 // ── the on-disk shape ─────────────────────────────────────────────────────────
@@ -490,6 +491,42 @@ function stripProjectSecrets(project: SavedConfig): { config: SavedConfig; found
   return { config, found: found.map(f => f.where) };
 }
 
+/** A project host may not redirect an endpoint's stored or ambient credential.
+ * Keep unauthenticated local endpoint declarations working, but restore the
+ * globally defined destination whenever the provider can authenticate. */
+function restrictProjectHosts(global: SavedConfig, project: SavedConfig): { config: SavedConfig; warnings: string[] } {
+  const warnings: string[] = [];
+  const legacy = [global.models?.deep, global.models?.fast, global];
+  const restrict = <T extends SavedProfile>(profile: T | undefined, where: string, identity: SavedProfile = profile ?? {}): T | undefined => {
+    if (!profile || profile.host === undefined) return profile;
+    const provider = identity.provider ?? global.models?.deep?.provider ?? global.provider ?? 'claude';
+    if (!provider) return profile;
+    const ref = { provider, name: identity.name };
+    const stored = findProvider(global.providers, ref);
+    const old = legacy.find(p => p?.provider === provider && p.name === identity.name);
+    const defaults = PROVIDER_DEFAULTS[provider as keyof typeof PROVIDER_DEFAULTS];
+    const credential = stored?.apiKey ?? old?.apiKey;
+    if (!credential && !defaults?.envKey) return profile;
+    const host = stored?.host ?? old?.host ?? (defaults && 'host' in defaults ? defaults.host : undefined);
+    if (profile.host === host) return profile;
+    warnings.push(`Ignoring ${where}.host: a project cannot redirect ${provider} credentials. Configure the endpoint globally via /model.`);
+    const { host: _ignored, ...rest } = profile;
+    return { ...rest, ...(host !== undefined ? { host } : {}) } as T;
+  };
+  return {
+    config: {
+      ...restrict(project, 'profile', { provider: project.provider ?? global.provider, name: project.name ?? global.name }),
+      ...(project.models ? { models: {
+        ...project.models,
+        ...(project.models.deep ? { deep: restrict(project.models.deep, 'models.deep') } : {}),
+        ...(project.models.fast ? { fast: restrict(project.models.fast, 'models.fast') } : {}),
+      } } : {}),
+      ...(project.providers ? { providers: project.providers.map((p, i) => restrict(p, `providers[${i}]`)!) } : {}),
+    },
+    warnings,
+  };
+}
+
 /**
  * Read at startup. Never throws — a corrupt file behaves like no file.
  *
@@ -503,8 +540,16 @@ export function loadConfig(workspaceRoot: string): SavedConfig {
   const global = readJsonConfig(globalConfigPath());
   const projectPath = configPath(workspaceRoot);
   if (!existsSync(projectPath)) return global;
-  const { config: project } = stripProjectSecrets(readJsonConfig(projectPath));
+  const stripped = stripProjectSecrets(readJsonConfig(projectPath));
+  const { config: project } = restrictProjectHosts(global, stripped.config);
   const merged = deepMerge(global, project);
+  // Flat legacy profiles are one endpoint too: changing provider/name must
+  // not inherit an inline key or destination from the previous selection.
+  if ((project.provider !== undefined && project.provider !== global.provider)
+    || (project.name !== undefined && project.name !== global.name)) {
+    delete merged.apiKey;
+    if (project.host === undefined) delete merged.host;
+  }
   const providers = mergeProviders(global.providers ?? [], project.providers ?? []);
   const models = mergeModels(global.models, project.models);
   return {
@@ -524,9 +569,10 @@ export function loadConfig(workspaceRoot: string): SavedConfig {
 export function projectSecretWarnings(workspaceRoot: string): string[] {
   const path = configPath(workspaceRoot);
   if (!existsSync(path)) return [];
-  const { found } = stripProjectSecrets(readJsonConfig(path));
-  if (found.length === 0) return [];
-  return [`${path} contains an apiKey (${found.join(', ')}) — ignoring it, because that file `
+  const { found, config } = stripProjectSecrets(readJsonConfig(path));
+  const { warnings } = restrictProjectHosts(readJsonConfig(globalConfigPath()), config);
+  if (found.length === 0) return warnings;
+  return [...warnings, `${path} contains an apiKey (${found.join(', ')}) — ignoring it, because that file `
     + 'is meant to be committed. Put the key in the global config via /model, or in a '
     + 'gitignored .env as the provider\'s environment variable.'];
 }
@@ -759,9 +805,11 @@ export function providerKeyForHost(
   if (host !== undefined) {
     const byHost = candidates.find(entry => entry.host === host);
     if (byHost) return byHost.apiKey;
+    const defaults = PROVIDER_DEFAULTS[provider as keyof typeof PROVIDER_DEFAULTS];
+    if (!defaults || !('host' in defaults) || host !== defaults.host) return undefined;
   }
-  // No host to match on, or none matched: only the provider's own unnamed entry
-  // is safe to fall back to. Picking one of several named endpoints would be a
+  // Only an unspecified or default host can fall back to an unnamed entry.
+  // Picking one of several named endpoints would be a
   // guess, and the thing being guessed at is a credential.
   return candidates.find(entry => !entry.name)?.apiKey;
 }

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, existsSync, readFileSync, mkdirSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createScratchTools } from './scratch-tools.js';
@@ -155,4 +155,56 @@ test('two belts sharing the session lock do not lose each other’s entries', as
 
   const content = readFileSync(join(root, '.marshall', 'session.log'), 'utf8');
   for (let i = 0; i < 20; i++) assert.match(content, new RegExp(`entry-${i}`));
+});
+
+for (const target of ['outside', 'workspace']) {
+  test(`scratch writes reject a notes symlink into ${target}`, async () => {
+    const root = tempRoot();
+    const destination = target === 'outside' ? tempRoot() : join(root, 'docs');
+    mkdirSync(destination, { recursive: true });
+    writeFileSync(join(destination, 'plan.md'), 'keep me');
+    mkdirSync(join(root, '.marshall'));
+    symlinkSync(destination, join(root, '.marshall/notes'), 'dir');
+    const tools = makeTools(root);
+    assert.match(await tools.note_write.execute('a', 'b', { name: 'plan', content: 'overwrite' }, 'id'), /Error:.*symlink/);
+    assert.equal(readFileSync(join(destination, 'plan.md'), 'utf8'), 'keep me');
+    assert.match(await tools.note_read.execute('a', 'b', { name: 'plan' }, 'id'), /Error:.*symlink/);
+  });
+}
+
+test('scratch tools reject symlinked roots, individual notes, and logs', async () => {
+  const root = tempRoot();
+  const outside = tempRoot();
+  symlinkSync(outside, join(root, '.marshall'), 'dir');
+  const tools = makeTools(root);
+  assert.match(await tools.note_list.execute('a', 'b', {}, 'id'), /Error:.*symlink/);
+  assert.equal(existsSync(join(outside, 'notes')), false, 'must check before mkdir');
+  const other = tempRoot();
+  mkdirSync(join(other, '.marshall/notes'), { recursive: true });
+  const secret = join(outside, 'secret');
+  writeFileSync(secret, 'private');
+  symlinkSync(secret, join(other, '.marshall/notes/leak.md'));
+  symlinkSync(secret, join(other, '.marshall/session.log'));
+  const otherTools = makeTools(other);
+  assert.match(await otherTools.note_read.execute('a', 'b', { name: 'leak' }, 'id'), /Error:.*symlink/);
+  assert.match(await otherTools.log_read.execute('a', 'b', {}, 'id'), /Error:.*symlink/);
+  assert.match(await otherTools.log_append.execute('a', 'b', { message: 'overwrite' }, 'id'), /Error:.*symlink/);
+  assert.equal(readFileSync(secret, 'utf8'), 'private');
+});
+
+test('a workspace root reached through a symlink is still writable', async () => {
+  // The symlink walk clears the path *inside* the root; the root's own path is
+  // not the agent's doing. Resolving an absolute path against the realpath'd
+  // root failed every scratch call here as an escape.
+  const base = tempRoot();
+  const real = join(base, 'real-project');
+  mkdirSync(real);
+  const root = join(base, 'project');
+  symlinkSync(real, root, 'dir');
+  const tools = makeTools(root);
+  assert.match(await tools.note_write.execute('a', 'b', { name: 'plan', content: 'hi' }, 'id'), /saved/);
+  assert.equal(readFileSync(join(real, '.marshall/notes/plan.md'), 'utf8'), 'hi');
+  assert.match(await tools.note_list.execute('a', 'b', {}, 'id'), /plan/);
+  assert.match(await tools.log_append.execute('a', 'b', { message: 'entry' }, 'id'), /Logged at/);
+  assert.match(await tools.log_read.execute('a', 'b', {}, 'id'), /entry/);
 });

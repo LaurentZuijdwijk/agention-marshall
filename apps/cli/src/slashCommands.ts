@@ -1,6 +1,7 @@
 // ── slash command parsing (pure logic, testable) ────────────────────────────────
 
 import type { RuntimeMode, SettingsScope } from './services/settings.js';
+import type { OAuthProvider } from '@agentionai/marshall-engine';
 
 // `/runtime` rather than `/mode`: a command name that is a strict prefix of
 // another one ("/mode" of "/model") makes tab completion actively wrong — the
@@ -48,7 +49,9 @@ export type SlashCommandResult =
   | { type: 'model'; target: ModelTarget }
   | { type: 'cwd' }
   | { type: 'memory' }
-  | { type: 'login' }
+  /** Which account to sign in to. `claude` when unstated, which is what
+   *  `/login` meant before there was more than one. */
+  | { type: 'login'; provider: OAuthProvider }
   | { type: 'clear' }
   | { type: 'stream' }
   /** No `mode` means "show the current one". `scope` is where a change is saved. */
@@ -129,6 +132,7 @@ export const SUBCOMMANDS: Record<string, readonly SubcommandWord[]> = {
   '/plugins': [{ word: 'list' }, { word: 'add', operand: '<name>' }, { word: 'disable', operand: '<name>' }],
   '/team': [{ word: 'add' }, { word: 'remove', operand: '<name>' }],
   '/config': [{ word: 'repair' }],
+  '/login': [{ word: 'claude' }, { word: 'codex' }],
 };
 
 /**
@@ -182,7 +186,13 @@ export function resolveSlashCommand(input: string): SlashCommandResult {
     }
     case '/cwd':   return { type: 'cwd' };
     case '/memory': return { type: 'memory' };
-    case '/login': return { type: 'login' };
+    case '/login': {
+      const word = args.toLowerCase();
+      if (!word) return { type: 'login', provider: 'claude' };
+      return word === 'claude' || word === 'codex'
+        ? { type: 'login', provider: word }
+        : { type: 'usage', message: `usage: /login [claude|codex] — got "${args}"` };
+    }
     case '/clear': return { type: 'clear' };
     case '/stream': return { type: 'stream' };
     case '/runtime': {
@@ -293,6 +303,7 @@ export function resolveSlashCommand(input: string): SlashCommandResult {
 export const HELP = `commands:
   /help              — show this message
   /login             — authenticate with your Claude account
+  /login codex       — sign in with ChatGPT, to run the codex provider on your subscription
   /model             — pick both models (deep, then fast)
   /model deep        — change the model that writes code, plans and reviews
   /model fast        — change the model that reads files and summarises for it

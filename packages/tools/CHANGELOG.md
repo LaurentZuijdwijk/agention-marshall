@@ -1,5 +1,13 @@
 # @agentionai/marshall-tools
 
+## 0.9.3
+
+### Patch Changes
+
+- Keep approval and image-recovery selections from also submitting or changing the query draft. Preserve endpoint identity when resolving fast-tier credentials, prevent project host overrides from redirecting global or ambient credentials, and report failed configuration saves accurately while refreshing partially saved state.
+
+  Cancel SDK execution and delegated calls when a turn is interrupted, preventing abandoned work from issuing requests or altering subsequent history. Preserve external file changes across targeted edits by invalidating stale full-read coverage, and reject scratch paths containing symlinks before ungated filesystem access.
+
 ## 0.9.2
 
 ### Patch Changes
