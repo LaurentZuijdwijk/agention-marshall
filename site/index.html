@@ -400,6 +400,7 @@
   .card:hover { border-color: #080808; transform: translate(-2px, -2px); box-shadow: 8px 8px 0 #080808; }
 
   .card .glyph { font-size: 18px; margin-bottom: 10px; }
+  .card .metric { font-size: 30px; line-height: 1.2; font-weight: 700; }
   .card .thumb { display: block; width: calc(100% + 40px); height: auto; margin: -20px -20px 12px; border-bottom: 3px solid var(--border); }
   .card h4 { font-size: 15px; margin-bottom: 6px; }
   .card p { color: var(--muted); font-size: 13.5px; }
@@ -518,6 +519,7 @@
     <span class="logo"><a href="#main" aria-label="marshall home">marshall</a></span>
     <a class="sections" href="#team">the team</a>
     <a class="sections" href="#local">open weights</a>
+    <a class="sections" href="#benchmarks">benchmarks</a>
     <a class="sections" href="#safety">safety</a>
     <a class="sections" href="#providers">providers</a>
     <a class="sections" href="docs.html">docs</a>
@@ -652,6 +654,40 @@
   </div>
 </section>
 
+<!-- ── benchmarks ───────────────────────────────────────────────────── -->
+<section id="benchmarks">
+  <div class="wrap">
+    <h2>measured</h2>
+    <h3>Same work. <span class="grad">Less overhead.</span></h3>
+    <p class="lede">
+      We ran the same models on the same tasks and graded the result with code,
+      not an LLM judge. Small samples, published with the task and the caveats —
+      but the direction is promising.
+    </p>
+    <div class="grid">
+      <div class="card">
+        <div class="glyph metric" style="color:var(--ok)" aria-hidden="true">63%</div>
+        <h4>fewer input tokens than Codex</h4>
+        <p>Marshall and Codex both passed 2/2 Terminal-Bench tasks with the same GPT-5.6 Luna model and account. Marshall reported 119k input tokens to Codex's 319k.</p>
+      </div>
+      <div class="card">
+        <div class="glyph metric" style="color:var(--code)" aria-hidden="true">62%</div>
+        <h4>fewer tool calls than pi</h4>
+        <p>On a 28-file migration with 122 verifier tests, Marshall averaged 5.7 calls to pi's 14.8 on GPT-5.6 Luna. Every reported trial passed: 3/3 and 4/4.</p>
+      </div>
+      <div class="card">
+        <div class="glyph metric" style="color:var(--tool)" aria-hidden="true">~90%</div>
+        <h4>cheaper cached OpenRouter turns</h4>
+        <p>In a three-turn live API check, prompt caching cut follow-up turns from $0.00955 to $0.00096 and $0.00098. Same 3,746-token prefix, now reused.</p>
+      </div>
+    </div>
+    <p class="lede" style="margin-top:22px;">
+      These are task-specific results, not a claim that Marshall always wins.
+      <a href="docs.html#benchmarks">See configurations, methodology and limitations.</a>
+    </p>
+  </div>
+</section>
+
 <!-- ── safety ───────────────────────────────────────────────────────── -->
 <section id="safety">
   <div class="wrap">
@@ -769,6 +805,10 @@
     <div class="note">
       <b>The model still has to call tools well.</b> Marshall gives every provider the same
       belt. Whether it uses it is on the weights.
+    </div>
+    <div class="note">
+      <b>Benchmarks are snapshots, not universal rankings.</b> Results depend on the task,
+      model, harness configuration and provider. We publish the trial counts and the losses too.
     </div>
     <div class="note">
       <b>One workspace, one terminal.</b> No editor plugin yet. The engine is headless —

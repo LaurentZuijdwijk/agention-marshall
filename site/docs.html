@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>marshall — documentation</title>
-<meta name="description" content="marshall CLI documentation: installation, configuration, privacy, models, commands, tools, MCP and troubleshooting.">
+<meta name="description" content="marshall CLI documentation: installation, configuration, privacy, models, commands, tools, benchmarks, MCP and troubleshooting.">
 <meta name="color-scheme" content="dark">
 <!-- Google tag (gtag.js) -->
 <script async src="https://www.googletagmanager.com/gtag/js?id=G-L248LRLBS9"></script>
@@ -21,7 +21,7 @@
 <body>
 <nav><div class="wrap nav"><span class="logo"><a href="index.html">marshall</a></span><a class="optional" href="index.html">home</a><a class="optional" href="index.html#commands">commands</a><span class="spacer"></span><a href="https://github.com/LaurentZuijdwijk/agention-marshall">github ↗</a></div></nav>
 <main class="wrap layout">
-<aside class="toc" aria-label="On this page"><strong>docs</strong><a href="#install">install</a><a href="#config">configuration</a><a href="#privacy">privacy</a><a href="#models">models & tiering</a><a href="#commands">commands</a><a href="#tools">tools & approvals</a><a href="#jobs">background jobs</a><a href="#mcp">MCP</a><a href="#plugins">plugins</a><a href="#team">named agents</a><a href="#memory">project memory</a><a href="#troubleshooting">troubleshooting</a></aside>
+<aside class="toc" aria-label="On this page"><strong>docs</strong><a href="#install">install</a><a href="#config">configuration</a><a href="#privacy">privacy</a><a href="#models">models & tiering</a><a href="#commands">commands</a><a href="#tools">tools & approvals</a><a href="#jobs">background jobs</a><a href="#mcp">MCP</a><a href="#plugins">plugins</a><a href="#team">named agents</a><a href="#memory">project memory</a><a href="#benchmarks">benchmarks</a><a href="#troubleshooting">troubleshooting</a></aside>
 <article>
 <h1>documentation</h1><p>marshall is a terminal coding agent. It plans, reads, edits and runs your project, while keeping you in control of every mutation.</p>
 <h2 id="install">install & first run</h2>
@@ -78,6 +78,20 @@ marshall</code></pre>
 <p><code>/team add</code> opens a wizard that defines a reusable agent: a name, a provider and model, an optional pinned toolset (<code>readonly</code>, <code>edit</code> or <code>full</code>) and a one-line description. <code>/team</code> lists what's configured; <code>/team remove &lt;name&gt;</code> forgets one. The coder can then spawn a named agent instead of a bare tier — a pinned toolset always wins over whatever the coder asks for, so a "tester" agent stays read-only no matter what it's told. Definitions are saved to the project config; credentials are resolved from the same global provider config <code>/model</code> uses, so nothing secret ends up in a committed file.</p>
 <h2 id="memory">project memory</h2>
 <p><code>AGENTS.md</code> contains durable instructions and project context. Use <code>/memory</code> to inspect the memory visible to the agent. Keep credentials out of it and out of committed project configuration.</p>
+<h2 id="benchmarks">benchmarks & evidence</h2>
+<p>These comparisons are snapshots of specific tasks and configurations, not a universal ranking. Each result used a deterministic verifier rather than an LLM judge. Times and model behaviour can drift by provider and date; the small trial counts below are shown so the claims are not mistaken for broad estimates.</p>
+<h3>Marshall and Codex on Terminal-Bench</h3>
+<p>On 10 September 2026, Codex CLI and Marshall ran <code>fix-git</code> and <code>openssl-selfsigned-cert</code> with the same <code>gpt-5.6-luna</code> model, the same ChatGPT Plus account and one attempt per task. Both passed 2/2. Marshall reported 119,224 input tokens, 88,064 cache tokens and 3,955 output tokens; Codex reported 318,778 input tokens, 294,144 cache tokens and 6,259 output tokens. That is 63% fewer reported input tokens for Marshall in this two-task run. Marshall's subscription route did not report a dollar cost, so no cost comparison is claimed.</p>
+<h3>Marshall and pi on a code migration</h3>
+<p>A 28-file JavaScript fixture required migrating a deprecated logger and passing all 122 tests. With GPT-5.6 Luna, Marshall's <code>luna-shell-edit</code> configuration passed 3/3 with 5.7 tool calls on average and a 32.4-second median. pi passed 4/4 with 14.8 calls and a 31.1-second median. Marshall therefore used 62% fewer calls in this cell, but was not meaningfully faster. pi led the GLM-5.3 Flash cell: 7 calls and 77.7 seconds versus Marshall's 10 calls and 126.1 seconds.</p>
+<h3>Prompt caching through OpenRouter</h3>
+<p>In three consecutive live API turns with an identical 3,746-token prefix, the first cache-writing turn cost $0.00955. The two cache-reading turns cost $0.00096 and $0.00098 — about 90% less after the first turn for this session pattern. This measures a saving in Marshall's OpenRouter path, not an advantage over other harnesses.</p>
+<table><thead><tr><th>comparison</th><th>result</th><th>scope</th></tr></thead><tbody>
+<tr><td>Codex</td><td>same 2/2 pass rate; 63% fewer reported input tokens</td><td>2 Terminal-Bench tasks, 1 attempt each</td></tr>
+<tr><td>pi</td><td>62% fewer tool calls; all trials passed</td><td>one migration task, 3 Marshall and 4 pi trials</td></tr>
+<tr><td>OpenRouter caching</td><td>about 90% lower follow-up-turn cost</td><td>one live three-turn session</td></tr>
+</tbody></table>
+<p>Read the <a href="https://github.com/LaurentZuijdwijk/agention-marshall/tree/main/bench">benchmark fixtures and runner</a>, the <a href="https://github.com/LaurentZuijdwijk/agention-marshall/blob/main/bench/harbor_jobs/codex-vs-marshall.yaml">Codex comparison configuration</a>, and the <a href="https://github.com/LaurentZuijdwijk/agention-marshall/blob/main/docs/competitive-findings.md">dated competitive findings</a>. The benchmark suite records pass rate, time, token usage, cost and tool calls where each harness exposes them.</p>
 <h2 id="troubleshooting">troubleshooting</h2>
 <h3>Context window full</h3><p>Start a fresh task or use <code>/clear</code>. Reduce unnecessary context and use the fast tier for file-reading work.</p>
 <h3>Local server unreachable</h3><p>Check that llama.cpp or Ollama is running, its host and port are correct, and the selected model is loaded.</p>
