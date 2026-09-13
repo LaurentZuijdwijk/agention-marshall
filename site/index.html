@@ -157,7 +157,22 @@
     cursor: pointer;
     transition: border-color .2s;
   }
-  .install:hover { border-color: #2c3547; }
+  .install:hover { border-color: var(--accent); }
+  .hero-copy .install {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #081419;
+    font-size: 15px;
+    font-weight: 600;
+    min-height: 60px;
+    box-shadow: 0 4px 24px rgba(121,220,232,.12);
+  }
+  .hero-copy .install:hover { background: #a0e9f1; }
+  .hero-copy .install .prompt,
+  .hero-copy .install .copy { color: #183d44; }
+  .hero-copy .install .copy { border-color: rgba(8,20,25,.25); }
+  .hero-copy .install[data-copied="1"] .copy { color: #075238; }
+  .hero-copy .btn.ghost { border-color: transparent; color: var(--muted); }
   .install .prompt { color: var(--accent); }
   .install .cmd { padding: 12px 0; }
   .install .copy {
@@ -231,6 +246,20 @@
   .term-body .w   { color: var(--warn); }
   .term-body .c   { color: var(--code); }
   .term-body .sel { color: var(--accent); font-weight: 700; }
+  .session-control {
+    margin-left: auto; flex: none; padding: 4px 8px;
+    font: inherit; color: var(--accent); background: transparent;
+    border: 1px solid var(--border); border-radius: 4px; cursor: pointer;
+  }
+  .session-control:hover { border-color: var(--accent); }
+  .term-body.is-playing > div {
+    animation: session-line .3s ease-out both;
+    animation-delay: var(--line-delay);
+  }
+  @keyframes session-line {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
   .caret {
     display: inline-block; width: 8px; height: 15px;
     background: var(--brand-to);
@@ -372,6 +401,8 @@
     .wrap { padding: 0 20px; }
     section { padding-top: 56px; }
     .install { max-width: 100%; min-width: 0; }
+    .hero-copy .install { width: 100%; font-size: 13px; }
+    .hero-copy .install .cmd { flex: 1; }
     .install .cmd { overflow-wrap: anywhere; min-width: 0; }
     .install .copy { min-width: 50px; padding: 12px 6px; }
     .term-body { overflow-wrap: anywhere; }
@@ -429,6 +460,7 @@
       <div class="term-bar">
         <span class="dot r" aria-hidden="true"></span><span class="dot y" aria-hidden="true"></span><span class="dot g" aria-hidden="true"></span>
         <span class="title">marshall · ~/projects/storefront</span>
+        <button class="session-control" type="button" hidden>Show full session</button>
       </div>
       <div class="term-body"><div><span class="u">❯</span> Add validation to checkout and cover it with tests.</div><div> </div><div><span class="a">◆ planner</span>  Map the form, validation rules and existing tests.</div><div><span class="m">  model</span>       DeepSeek · hosted</div><div> </div><div><span class="t">● coder</span>    Add validation and test the edge cases.</div><div><span class="m">  model</span>       Qwen · local / llama.cpp</div><div><span class="c">  edit_file</span>   src/checkout.ts · tests/checkout.test.ts</div><div><span class="c">  run_shell</span>   npm test</div><div> </div><div><span class="ok">✓ reviewer</span> Check the diff against the original request.</div><div><span class="ok">✓</span> Tests passed. Ready for your review.</div></div>    </div>
   </div>
@@ -705,6 +737,53 @@
 </footer>
 
 <script>
+// Reveal the example once on entry; keep the full transcript without JS or motion.
+(() => {
+  const body = document.querySelector('.term-body');
+  const control = document.querySelector('.session-control');
+  const motion = matchMedia('(prefers-reduced-motion: reduce)');
+  let timer;
+  let observer;
+  const finish = () => {
+    clearTimeout(timer);
+    body.classList.remove('is-playing');
+    control.textContent = 'Replay session';
+  };
+  const play = () => {
+    finish();
+    if (motion.matches) return;
+    void body.offsetWidth;
+    body.classList.add('is-playing');
+    control.textContent = 'Show full session';
+    timer = setTimeout(finish, 9500);
+  };
+  [...body.children].forEach((line, i) => {
+    line.style.setProperty('--line-delay', `${i * 750}ms`);
+  });
+  control.addEventListener('click', () => {
+    observer?.disconnect();
+    if (body.classList.contains('is-playing')) finish();
+    else play();
+  });
+  const configure = () => {
+    observer?.disconnect();
+    finish();
+    control.hidden = motion.matches;
+    if (motion.matches) return;
+    if ('IntersectionObserver' in window) {
+      observer = new IntersectionObserver(entries => {
+        if (entries.some(entry => entry.isIntersecting)) {
+          observer.disconnect();
+          play();
+        }
+      }, { threshold: .25 });
+      observer.observe(body);
+    } else play();
+  };
+  motion.addEventListener('change', configure);
+  configure();
+})();
+
 // ── copy-to-clipboard on the install commands ─────────────────────────────
 document.querySelectorAll('.install[data-copy]').forEach(btn => {
   const label = btn.querySelector('.copy');
