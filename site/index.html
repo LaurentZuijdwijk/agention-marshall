@@ -41,27 +41,24 @@
     /* — brand + terminal palette, straight from apps/cli/src/theme.ts — */
     --brand-from: #8B5CF6;
     --brand-to:   #22D3EE;
-    --accent: #A78BFA;
+    --accent: #79dce8;
     --user:   #5EEAD4;
     --tool:   #F472B6;
     --code:   #7DD3FC;
     --ok:     #34D399;
     --warn:   #FBBF24;
     --error:  #F87171;
-    --text:   #080808;
-    --bg:     #f7f7f2;
-    --bg-2:   #ffffff;
-    --border: #080808;
+    --text:   #edf2f7;
+    --bg:     #0b0d10;
+    --bg-2:   #12161c;
+    --border: #29313d;
 
-    /* theme.ts uses #6B7280 / #4B5563 for muted + faint. A terminal renders
-       those on a user-chosen background; here they'd land at 4.0:1 and 2.6:1
-       on --bg, under WCAG AA. Lifted just enough to clear 4.5:1 while still
-       reading as "chrome, not content". */
-    --muted:  #444444;
-    --faint:  #666666;
+    /* Muted text stays legible on both dark surfaces. */
+    --muted:  #9ba8b8;
+    --faint:  #9ba8b8;
 
     --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-    --nav-h: 52px;
+    --nav-h: 64px;
   }
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -76,16 +73,6 @@
     overflow-x: hidden;
   }
 
-  /* subtle CRT-ish vignette, kept very quiet */
-  body::before {
-    content: "";
-    position: fixed; inset: 0;
-    pointer-events: none;
-    background:
-      radial-gradient(1200px 500px at 50% -10%, rgba(139,92,246,.10), transparent 60%),
-      radial-gradient(900px 500px at 85% 110%, rgba(34,211,238,.07), transparent 60%);
-    z-index: 0;
-  }
   main { position: relative; z-index: 1; }
 
   .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
@@ -116,26 +103,22 @@
   }
 
   /* ── gradient text ─────────────────────────────────────────── */
-  .grad {
-    background: linear-gradient(90deg, var(--brand-from), var(--brand-to));
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
-  }
+  .grad { color: var(--accent); }
+  a { color: var(--accent); text-underline-offset: 4px; }
 
   /* ── nav ───────────────────────────────────────────────────── */
   nav {
     position: fixed; top: 0; left: 0; right: 0; z-index: 10;
     backdrop-filter: blur(10px);
-    background: rgba(247,247,242,.88);
-    border-bottom: 3px solid var(--border);
+    background: rgba(11,13,16,.94);
+    border-bottom: 1px solid var(--border);
   }
   nav .wrap {
     display: flex; align-items: center; gap: 18px;
     height: var(--nav-h);
   }
   nav .logo { font-weight: 700; letter-spacing: .5px; }
-  nav .logo a { color: inherit; text-decoration: none; }
+  nav .logo a { color: var(--accent); text-decoration: none; }
   nav a { color: var(--muted); text-decoration: none; font-size: 13px; white-space: nowrap; }
   nav a:hover { color: var(--text); }
   nav .spacer { flex: 1; }
@@ -155,135 +138,21 @@
   }
 
   /* ── hero ──────────────────────────────────────────────────── */
-  header.hero {
-    position: relative;
-    isolation: isolate;
-    padding: 92px 0 44px;
-    color: #080808;
-    background: #f5ff4d;
-    overflow: hidden;
+  header.hero { padding: 132px 0 64px; border-bottom: 1px solid var(--border); }
+  .eyebrow { color: var(--accent); font-size: 12px; letter-spacing: .12em; text-transform: uppercase; }
+  .hero-headline { margin-top: 22px; max-width: 850px; font: 600 clamp(40px, 6.8vw, 76px)/1.05 Arial, Helvetica, sans-serif; letter-spacing: -.045em; }
+  .hero-headline span { color: var(--accent); }
+  .hero-copy .tagline { max-width: 650px; font-family: Arial, Helvetica, sans-serif; line-height: 1.6; }
+  .hero-meta { margin-top: 18px; font-size: 12px; color: var(--muted); }
+  .product-caption { display: flex; justify-content: space-between; gap: 16px; margin-top: 48px; color: var(--muted); font-size: 12px; }
+  .product-caption b { color: var(--text); font-weight: 500; }
+  @media (max-width: 640px) {
+    header.hero { padding: 108px 0 40px; }
+    .product-caption { flex-direction: column; gap: 4px; }
   }
-  header.hero::before,
-  header.hero::after {
-    content: "";
-    position: absolute;
-    z-index: -1;
-    transform: rotate(-31deg);
-    pointer-events: none;
-  }
-  @keyframes hero-ribbons {
-    0%, 100% { transform: translate3d(0, 0, 0) rotate(-31deg); }
-    50% { transform: translate3d(-24px, 12px, 0) rotate(-27deg); }
-  }
-  @keyframes hero-orbit {
-    0%, 100% { transform: translate3d(0, 0, 0) rotate(-31deg) scale(1); }
-    50% { transform: translate3d(18px, -16px, 0) rotate(-24deg) scale(1.06); }
-  }
-  header.hero::before {
-    width: 62vw; height: 190px;
-    top: 54px; right: -14vw;
-    background: #ff6b35;
-    box-shadow: -250px 100px 0 #11aee8, -480px 10px 0 #27c978;
-    animation: hero-ribbons 14s ease-in-out infinite;
-  }
-  header.hero::after {
-    width: 210px; height: 210px;
-    top: 245px; left: -55px;
-    border-radius: 50%;
-    background: #bdb4ff;
-    box-shadow: 150px 100px 0 #ffbfb8;
-    animation: hero-orbit 18s ease-in-out infinite;
-  }
-  header.hero .wrap { position: relative; z-index: 1; }
-  @media (max-width: 640px) { header.hero { padding: 80px 0 28px; } }
-  #hero-logo { color: #080808; }
-  .hero-copy .hero-headline { margin-top: 18px; max-width: 12em; font: 700 clamp(32px, 5vw, 62px)/.95 Arial, Helvetica, sans-serif; letter-spacing: -.05em; }
-  .hero-copy .tagline { color: #080808; max-width: 30em; font-family: Arial, Helvetica, sans-serif; font-weight: 500; }
-  .hero-copy .tagline b { color: #080808; }
-  .hero .callout { border: 3px solid #080808; border-radius: 0; background: #fff; color: #080808; box-shadow: 7px 7px 0 #080808; }
-  .hero .callout p { color: #222; }
-  .hero .install { border: 3px solid #080808; border-radius: 0; background: #080808; color: #fff; }
-  .hero .install .prompt, .hero .install .copy { color: #f5ff4d; }
-  .hero .btn.ghost { border: 3px solid #080808; border-radius: 0; color: #080808; }
-  .hero .btn.ghost:hover { border-color: #080808; background: #fff; color: #080808; }
-  .hero .term { border: 3px solid #080808; border-radius: 0; box-shadow: 10px 10px 0 #080808; }
-  .hero .term-bar { border-bottom: 3px solid #080808; color: #222; background: #fff; }
-  .hero .term-body { background: #10131a; color: #e5e7eb; }
-  .hero .ascii-rule { color: #080808 !important; }
-
-  @media (max-width: 640px) { header.hero { padding: 80px 0 24px; } }
-
-  .hero-split {
-    display: grid;
-    grid-template-columns: minmax(0, 1.4fr) minmax(220px, .9fr);
-    gap: 28px 36px;
-    align-items: start;
-  }
-  .hero-split .callouts {
-    grid-template-columns: 1fr;
-    margin-top: 4px;
-  }
-  @media (max-width: 880px) {
-    .hero-split { grid-template-columns: 1fr; }
-    .hero-split .callouts {
-      grid-template-columns: repeat(3, 1fr);
-      margin-top: 0;
-    }
-  }
-
-  /* The CLI's block-letter wordmark (apps/cli/src/Banner.tsx), painted with
-     the same banded gradient, reveal wipe and white shimmer sweep. */
-  .ascii-logo {
-    font-size: clamp(4px, 1.2vw, 11px);
-    line-height: 1.15;
-    letter-spacing: 0;
-    white-space: pre;
-    user-select: none;
-  }
-  .ascii-rule {
-    font-size: clamp(4px, 1.2vw, 11px);
-    line-height: 1;
-    white-space: pre;
-    user-select: none;
-    margin-top: 6px;
-  }
-
-  .tagline {
-    margin-top: 18px;
-    font-size: clamp(16px, 2.6vw, 21px);
-    color: var(--muted);
-    max-width: 36em;
-  }
-  .tagline b { color: var(--text); font-weight: 600; }
-
-  .cta { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 34px; align-items: center; }
-
-  .callouts {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 12px;
-    margin-top: 36px;
-  }
-  .callout {
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    background: var(--bg-2);
-    padding: 14px 16px;
-  }
-  .callout h4 { font-size: 13.5px; margin-bottom: 4px; }
-  .callout p { color: var(--muted); font-size: 12.5px; line-height: 1.5; }
-  @media (max-width: 640px) { .callouts { grid-template-columns: 1fr; } }
-
-  /* ── copyable command ──────────────────────────────────────── */
-  .install {
-    display: inline-flex; align-items: center; gap: 10px;
-    border: 1px solid var(--border);
-    background: var(--bg-2);
-    border-radius: 8px;
-    padding: 0 8px 0 18px;
-    color: var(--user);
-    font-family: var(--mono);
-    font-size: 14px;
+  .tagline { margin-top: 24px; font-size: clamp(17px, 2.6vw, 21px); color: var(--muted); }
+  .cta { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 32px; align-items: center; }
+  .install { display: inline-flex; align-items: center; gap: 10px; border: 1px solid var(--border); background: var(--bg-2); border-radius: 8px; padding: 0 8px 0 18px; color: var(--user); font-family: var(--mono); font-size: 14px;
     text-align: left;
     cursor: pointer;
     transition: border-color .2s;
@@ -313,7 +182,7 @@
     font-weight: 600;
     text-decoration: none;
     color: #08110f;
-    background: linear-gradient(90deg, var(--brand-from), var(--brand-to));
+    background: var(--accent);
   }
   .btn.ghost {
     background: transparent;
@@ -324,11 +193,11 @@
 
   /* ── terminal ──────────────────────────────────────────────── */
   .term {
-    margin: 56px 0 20px;
+    margin: 14px 0 0;
     border: 1px solid var(--border);
     border-radius: 12px;
     background: var(--bg-2);
-    box-shadow: 0 30px 80px -30px rgba(139,92,246,.25), 0 10px 40px rgba(0,0,0,.5);
+    box-shadow: 0 24px 64px rgba(0,0,0,.2);
     overflow: hidden;
   }
   .term-bar {
@@ -345,7 +214,7 @@
     padding: 18px 20px 22px;
     font-size: 13.5px;
     line-height: 1.75;
-    min-height: 460px;
+    min-height: 0;
     white-space: pre-wrap;
   }
   /* Narrow viewports wrap the longer tool lines. Hang the continuation so it
@@ -371,7 +240,7 @@
   @keyframes blink { 50% { opacity: 0; } }
   @media (max-width: 640px) {
     .term { margin-top: 36px; }
-    .term-body { font-size: 11.5px; padding: 14px 14px 18px; min-height: 300px; }
+    .term-body { font-size: 11.5px; padding: 14px 14px 18px; min-height: 0; }
   }
 
   /* ── sections ──────────────────────────────────────────────── */
@@ -383,25 +252,25 @@
     color: var(--faint);
     margin-bottom: 8px;
   }
-  h3 { font-size: clamp(22px, 3.4vw, 30px); font-weight: 700; margin-bottom: 14px; }
+  h3 { font-family: Arial, Helvetica, sans-serif; letter-spacing: -.025em; font-size: clamp(22px, 3.4vw, 30px); font-weight: 700; margin-bottom: 14px; }
   .lede { color: var(--muted); max-width: 640px; margin-bottom: 36px; }
   .lede b { color: var(--text); font-weight: 600; }
   .lede code, .card code, .note code { color: var(--code); }
 
   .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
   .card {
-    border: 3px solid var(--border);
-    border-radius: 0;
+    border: 1px solid var(--border);
+    border-radius: 8px;
     background: var(--bg-2);
     padding: 20px;
-    box-shadow: 5px 5px 0 #080808;
+    box-shadow: none;
     transition: border-color .2s, transform .2s, box-shadow .2s;
   }
-  .card:hover { border-color: #080808; transform: translate(-2px, -2px); box-shadow: 8px 8px 0 #080808; }
+  .card:hover { border-color: #455365; }
 
   .card .glyph { font-size: 18px; margin-bottom: 10px; }
-  .card .metric { font-size: 30px; line-height: 1.2; font-weight: 700; }
-  .card .thumb { display: block; width: calc(100% + 40px); height: auto; margin: -20px -20px 12px; border-bottom: 3px solid var(--border); }
+  .card .metric { font-family: Arial, Helvetica, sans-serif; letter-spacing: -.04em; font-size: 48px; line-height: 1.2; font-weight: 700; }
+  .card .thumb { display: block; width: calc(100% + 40px); height: auto; margin: -20px -20px 12px; border-bottom: 1px solid var(--border); }
   .card h4 { font-size: 15px; margin-bottom: 6px; }
   .card p { color: var(--muted); font-size: 13.5px; }
   .card a { color: var(--accent); text-decoration: none; }
@@ -414,11 +283,11 @@
     gap: 14px;
   }
   .stage {
-    border: 3px solid var(--border);
-    border-radius: 0;
+    border: 1px solid var(--border);
+    border-radius: 8px;
     padding: 18px;
     background: var(--bg-2);
-    box-shadow: 5px 5px 0 #080808;
+    box-shadow: none;
   }
   .stage .n { color: var(--faint); font-size: 12px; }
   .stage h4 { margin: 4px 0 6px; }
@@ -430,8 +299,8 @@
   /* ── providers ─────────────────────────────────────────────── */
   .providers { display: flex; flex-wrap: wrap; gap: 10px; }
   .chip {
-    border: 2px solid var(--border);
-    border-radius: 0;
+    border: 1px solid var(--border);
+    border-radius: 8px;
     padding: 8px 16px;
     background: var(--bg-2);
     color: var(--muted);
@@ -441,7 +310,7 @@
   .chip .faint { color: var(--faint); }
 
   /* ── commands table ────────────────────────────────────────── */
-  .cmds { border: 3px solid var(--border); border-radius: 0; overflow: hidden; background: var(--bg-2); box-shadow: 7px 7px 0 #080808; }
+  .cmds { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--bg-2); box-shadow: none; }
   .cmds .row {
     display: grid;
     grid-template-columns: 190px 1fr;
@@ -461,9 +330,9 @@
 
   /* ── honest-limits note ────────────────────────────────────── */
   .note {
-    border: 3px solid var(--border);
-    border-left: 10px solid #ff6b35;
-    border-radius: 0;
+    border: 1px solid var(--border);
+    border-left: 2px solid var(--accent);
+    border-radius: 8px;
     background: var(--bg-2);
     padding: 20px 22px;
     color: var(--muted);
@@ -476,12 +345,10 @@
   .big-cta {
     margin: 90px 0 40px;
     text-align: center;
-    border: 3px solid var(--border);
+    border: 1px solid var(--border);
     border-radius: 14px;
     padding: 56px 24px;
-    background:
-      radial-gradient(500px 200px at 50% 0%, rgba(139,92,246,.12), transparent 70%),
-      var(--bg-2);
+    background: var(--bg-2);
   }
   .big-cta h3 { margin-bottom: 10px; }
   .big-cta .install { margin-top: 20px; }
@@ -498,7 +365,18 @@
   footer a:hover { color: var(--text); }
   footer .spacer { flex: 1; }
 
-  ::selection { background: rgba(139,92,246,.35); }
+  ::selection { background: rgba(121,220,232,.25); }
+
+  @media (max-width: 760px) { nav .sections { display: none; } }
+  @media (max-width: 640px) {
+    .wrap { padding: 0 20px; }
+    section { padding-top: 56px; }
+    .install { max-width: 100%; min-width: 0; }
+    .install .cmd { overflow-wrap: anywhere; min-width: 0; }
+    .install .copy { min-width: 50px; padding: 12px 6px; }
+    .term-body { overflow-wrap: anywhere; }
+    .grid { grid-template-columns: minmax(0, 1fr); }
+  }
 
   @media (prefers-reduced-motion: reduce) {
     html { scroll-behavior: auto; }
@@ -522,7 +400,7 @@
     <a class="sections" href="#benchmarks">benchmarks</a>
     <a class="sections" href="#safety">safety</a>
     <a class="sections" href="#providers">providers</a>
-    <a class="sections" href="docs.html">docs</a>
+    <a href="docs.html">docs</a>
     <span class="spacer"></span>
     <a class="gh" href="https://github.com/LaurentZuijdwijk/agention-marshall">github ↗</a>
   </div>
@@ -533,51 +411,62 @@
 <!-- ── hero ─────────────────────────────────────────────────────────── -->
 <header class="hero">
   <div class="wrap">
-    <h1 class="sr-only">marshall — make your models work together</h1>
-    <div class="hero-split">
-      <div class="hero-copy">
-        <div id="hero-logo" aria-hidden="true"></div>
-        <p class="hero-headline">Turn ideas into working code.</p>
-        <p class="tagline">
-          Weave <b>DeepSeek</b>, <b>Qwen</b> and <b>Kimi</b> into one coding team.
-          Local with hosted, or all on your own box — each agent
-          gets a name, a model, and a brief.
-        </p>
-        <div class="cta">
-          <button class="install" type="button" data-copy="curl -fsSL https://marshall.agention.ai/install.sh | sh" aria-label="Copy install command">
-            <span class="cmd"><span class="prompt" aria-hidden="true">❯ </span>curl -fsSL marshall.agention.ai/install.sh | sh</span>
-            <span class="copy" aria-hidden="true">copy</span>
-          </button>
-          <a class="btn ghost" href="#start">or npm</a>
-        </div>
+    <div class="hero-copy">
+      <p class="eyebrow">Open-source coding agent · your terminal</p>
+      <h1 class="hero-headline">Your models.<br><span>One coding team.</span></h1>
+      <p class="tagline">Plan, build and review with the models you choose. Marshall brings local and hosted models into one workflow — with you in control of what runs.</p>
+      <div class="cta">
+        <button class="install" type="button" data-copy="curl -fsSL https://marshall.agention.ai/install.sh | sh" aria-label="Copy install command">
+          <span class="cmd"><span class="prompt" aria-hidden="true">❯ </span>curl -fsSL marshall.agention.ai/install.sh | sh</span>
+          <span class="copy" aria-hidden="true">copy</span>
+        </button>
+        <a class="btn ghost" href="docs.html">Read the docs ↗</a>
       </div>
-      <div class="callouts">
-        <div class="callout">
-          <h4>A team, not one model</h4>
-          <p>Name an agent, pin a model, give it a job. Planner, coder, tester — or whoever you invent.</p>
-        </div>
-        <div class="callout">
-          <h4>Local is first-class</h4>
-          <p>llama.cpp and Ollama sit at the top of setup. It sees what's loaded, the context, the quant.</p>
-        </div>
-        <div class="callout">
-          <h4>You stay in the loop</h4>
-          <p>Approve writes, go hands-off, or let a fast model judge each tool call. Your call.</p>
-        </div>
-      </div>
+      <p class="hero-meta">Local-first. Model-flexible. Approval-gated. <a href="#start">Install with npm instead.</a></p>
     </div>
-
-    <!-- Decorative: a scripted replay of a real session, not live output.
-         Hidden from assistive tech — the prose above already says all of it. -->
-    <div class="term" id="term" aria-hidden="true">
+    <div class="product-caption"><b>From a task to a reviewed change.</b><span>Illustrative session · not live output</span></div>
+    <div class="term" role="region" aria-label="Example Marshall workflow">
       <div class="term-bar">
-        <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
-        <span class="title">marshall · ~/projects/storefront · llamacpp @ 192.168.1.248:8080</span>
+        <span class="dot r" aria-hidden="true"></span><span class="dot y" aria-hidden="true"></span><span class="dot g" aria-hidden="true"></span>
+        <span class="title">marshall · ~/projects/storefront</span>
       </div>
-      <div class="term-body" id="term-body"></div>
-    </div>
+      <div class="term-body"><div><span class="u">❯</span> Add validation to checkout and cover it with tests.</div><div> </div><div><span class="a">◆ planner</span>  Map the form, validation rules and existing tests.</div><div><span class="m">  model</span>       DeepSeek · hosted</div><div> </div><div><span class="t">● coder</span>    Add validation and test the edge cases.</div><div><span class="m">  model</span>       Qwen · local / llama.cpp</div><div><span class="c">  edit_file</span>   src/checkout.ts · tests/checkout.test.ts</div><div><span class="c">  run_shell</span>   npm test</div><div> </div><div><span class="ok">✓ reviewer</span> Check the diff against the original request.</div><div><span class="ok">✓</span> Tests passed. Ready for your review.</div></div>    </div>
   </div>
 </header>
+
+<!-- ── benchmarks ───────────────────────────────────────────────────── -->
+<section id="benchmarks">
+  <div class="wrap">
+    <h2>measured</h2>
+    <h3>Same work. <span class="grad">Less overhead.</span></h3>
+    <p class="lede">
+      We ran the same models on the same tasks and graded the result with code,
+      not an LLM judge. Small samples, published with the task and the caveats —
+      but the direction is promising.
+    </p>
+    <div class="grid">
+      <div class="card">
+        <div class="glyph metric" style="color:var(--accent)">63%</div>
+        <h4>fewer input tokens than Codex</h4>
+        <p>Marshall and Codex both passed 2/2 Terminal-Bench tasks with the same GPT-5.6 Luna model and account. Marshall reported 119k input tokens to Codex's 319k.</p>
+      </div>
+      <div class="card">
+        <div class="glyph metric" style="color:var(--accent)">62%</div>
+        <h4>fewer tool calls than pi</h4>
+        <p>On a 28-file migration with 122 verifier tests, Marshall averaged 5.7 calls to pi's 14.8 on GPT-5.6 Luna. Every reported trial passed: 3/3 and 4/4.</p>
+      </div>
+      <div class="card">
+        <div class="glyph metric" style="color:var(--accent)">~90%</div>
+        <h4>cheaper cached OpenRouter turns</h4>
+        <p>In a three-turn live API check, prompt caching cut follow-up turns from $0.00955 to $0.00096 and $0.00098. Same 3,746-token prefix, now reused.</p>
+      </div>
+    </div>
+    <p class="lede" style="margin-top:22px;">
+      These are task-specific results, not a claim that Marshall always wins.
+      <a href="docs.html#benchmarks">See configurations, methodology and limitations.</a>
+    </p>
+  </div>
+</section>
 
 <!-- ── the team ─────────────────────────────────────────────────────── -->
 <section id="team">
@@ -651,40 +540,6 @@
         <p>A five-tier pagoda on a floating island, 81,000 voxel cubes, day-to-night lighting and a working camera rig — also Qwen 3.8 27B through Marshall, no cloud model involved. <a href="/pagoda/" class="pagoda-link">Explore it</a>.</p>
       </div>
     </div>
-  </div>
-</section>
-
-<!-- ── benchmarks ───────────────────────────────────────────────────── -->
-<section id="benchmarks">
-  <div class="wrap">
-    <h2>measured</h2>
-    <h3>Same work. <span class="grad">Less overhead.</span></h3>
-    <p class="lede">
-      We ran the same models on the same tasks and graded the result with code,
-      not an LLM judge. Small samples, published with the task and the caveats —
-      but the direction is promising.
-    </p>
-    <div class="grid">
-      <div class="card">
-        <div class="glyph metric" style="color:var(--ok)" aria-hidden="true">63%</div>
-        <h4>fewer input tokens than Codex</h4>
-        <p>Marshall and Codex both passed 2/2 Terminal-Bench tasks with the same GPT-5.6 Luna model and account. Marshall reported 119k input tokens to Codex's 319k.</p>
-      </div>
-      <div class="card">
-        <div class="glyph metric" style="color:var(--code)" aria-hidden="true">62%</div>
-        <h4>fewer tool calls than pi</h4>
-        <p>On a 28-file migration with 122 verifier tests, Marshall averaged 5.7 calls to pi's 14.8 on GPT-5.6 Luna. Every reported trial passed: 3/3 and 4/4.</p>
-      </div>
-      <div class="card">
-        <div class="glyph metric" style="color:var(--tool)" aria-hidden="true">~90%</div>
-        <h4>cheaper cached OpenRouter turns</h4>
-        <p>In a three-turn live API check, prompt caching cut follow-up turns from $0.00955 to $0.00096 and $0.00098. Same 3,746-token prefix, now reused.</p>
-      </div>
-    </div>
-    <p class="lede" style="margin-top:22px;">
-      These are task-specific results, not a claim that Marshall always wins.
-      <a href="docs.html#benchmarks">See configurations, methodology and limitations.</a>
-    </p>
   </div>
 </section>
 
@@ -903,362 +758,6 @@ document.querySelectorAll('a.pagoda-link').forEach(a => {
     gtag('event', 'pagoda_card_click', { link_text: a.textContent.trim() || 'thumbnail' });
   });
 });
-</script>
-
-<script>
-// ── wordmark ──────────────────────────────────────────────────────────────
-// The exact banner from apps/cli/src/Banner.tsx: block-letter logo painted
-// with the brand gradient in 18 bands, revealed left→right with a white
-// shimmer riding the edge, plus the gradient rule that grows underneath.
-(function () {
-  const host = document.getElementById('hero-logo');
-  if (!host) return;
-
-  const LOGO = [
-    '███╗   ███╗ █████╗ ██████╗ ███████╗██╗  ██╗ █████╗ ██╗     ██╗     ',
-    '████╗ ████║██╔══██╗██╔══██╗██╔════╝██║  ██║██╔══██╗██║     ██║     ',
-    '██╔████╔██║███████║██████╔╝███████╗███████║███████║██║     ██║     ',
-    '██║╚██╔╝██║██╔══██║██╔══██╗╚════██║██╔══██║██╔══██║██║     ██║     ',
-    '██║ ╚═╝ ██║██║  ██║██║  ██║███████║██║  ██║██║  ██║███████╗███████╗',
-    '╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚══════╝',
-  ];
-  const BANDS = 18;
-  const FROM = [0x8B, 0x5C, 0xF6];  // #8B5CF6
-  const TO   = [0x22, 0xD3, 0xEE];  // #22D3EE
-  const mix = (a, b, t) =>
-    `rgb(${a.map((x, i) => Math.round(x + (b[i] - x) * Math.max(0, Math.min(1, t)))).join(',')})`;
-  const brand = t => mix(FROM, TO, t);
-
-  const width = LOGO[0].length;
-  const band = Math.ceil(width / BANDS);
-
-  const pre = document.createElement('div');
-  pre.className = 'ascii-logo';
-  const rule = document.createElement('div');
-  rule.className = 'ascii-rule';
-  host.appendChild(pre);
-  host.appendChild(rule);
-
-  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-
-  function paint(reveal, sweep) {
-    const shown = Math.round(reveal * width);
-    const glowRadius = width * 0.18;
-    pre.innerHTML = '';
-    rule.innerHTML = '';
-
-    for (const row of LOGO) {
-      const line = document.createElement('div');
-      for (let b = 0; b < Math.ceil(width / band); b++) {
-        const start = b * band;
-        const seg = row.slice(start, start + band);
-        const visible = Math.max(0, Math.min(seg.length, shown - start));
-        const masked = seg.slice(0, visible) + ' '.repeat(seg.length - visible);
-        const centre = start + seg.length / 2;
-        let color = brand(centre / width);
-        const dist = Math.abs(centre - sweep);
-        if (dist < glowRadius) color = blend(color, dist, glowRadius);
-        const span = document.createElement('span');
-        span.style.color = color;
-        span.textContent = masked;
-        line.appendChild(span);
-      }
-      pre.appendChild(line);
-    }
-
-    // gradient rule, growing with the reveal
-    const drawn = Math.round(reveal * width);
-    const rline = document.createElement('div');
-    for (let b = 0; b < Math.ceil(width / band); b++) {
-      const start = b * band;
-      const len = Math.min(band, width - start);
-      const visible = Math.max(0, Math.min(len, drawn - start));
-      const span = document.createElement('span');
-      span.style.color = brand((start + len / 2) / width);
-      span.textContent = '━'.repeat(visible) + ' '.repeat(len - visible);
-      rline.appendChild(span);
-    }
-    rule.appendChild(rline);
-  }
-
-  // blend a css rgb() string toward white by 1 - dist/radius
-  function blend(rgbStr, dist, radius) {
-    const m = rgbStr.match(/\d+/g).map(Number);
-    const t = 1 - dist / radius;
-    return mix(m, [255, 255, 255], t);
-  }
-
-  if (reduced) { paint(1, -width); return; }
-
-  // reveal wipe (0→1 over ~900ms), then one shimmer sweep across, then still
-  const DURATION = 900;
-  const t0 = performance.now();
-  function frame(now) {
-    const t = Math.min(1, (now - t0) / DURATION);
-    const eased = 1 - Math.pow(1 - t, 3);
-    paint(eased, eased * width);
-    if (t < 1) { requestAnimationFrame(frame); return; }
-    // shimmer pass
-    const s0 = performance.now();
-    const SWEEP = 1400;
-    function shimmer(now2) {
-      const s = (now2 - s0) / SWEEP;
-      if (s >= 1) { paint(1, -width); return; }
-      paint(1, s * width * 1.4 - width * 0.2);
-      requestAnimationFrame(shimmer);
-    }
-    requestAnimationFrame(shimmer);
-  }
-
-  const io = new IntersectionObserver((entries) => {
-    if (entries[0].isIntersecting) { io.disconnect(); requestAnimationFrame(frame); }
-  }, { threshold: 0.1 });
-  io.observe(host);
-})();
-</script>
-
-<script>
-// ── scripted terminal demo ──────────────────────────────────────────────
-// Replays a realistic session in a loop: /model picker (llama.cpp →
-// Qwen3.6-27B), then the task, tool calls, and a streamed answer.
-(function () {
-  const body = document.getElementById('term-body');
-  if (!body) return;
-
-  const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
-  const line = (html) => { const d = document.createElement('div'); d.innerHTML = html; body.appendChild(d); };
-  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-
-  const SCRIPT = {
-    providers: [
-      ['openrouter', 'OPENROUTER_API_KEY'],
-      ['llamacpp',   'optional API key'],
-      ['ollama',     'no key needed'],
-      ['claude',     'ANTHROPIC_API_KEY'],
-      ['openai',     'OPENAI_API_KEY'],
-    ],
-    providerPick: 1,
-    models: [
-      { id: 'Qwen3.6-35B-A3B',   ctx: ' 32k', loaded: false },
-      { id: 'Qwen3.6-27B',       ctx: '128k', loaded: true  },
-      { id: 'DeepSeek-V4-Flash', ctx: '128k', loaded: true  },
-      { id: 'Kimi-K2.5',         ctx: '256k', loaded: false },
-    ],
-    modelPick: 1,
-    modelDetail: '27B  ·  Q6_K  ·  16.8 GB  ·  128k context  ·  loaded',
-    host: 'http://192.168.1.248:8080',
-    tiers: [
-      'deep · Qwen3.6-27B · Q6_K · 128k · loaded',
-    ],
-    prompt: 'build a wishlist feature for the storefront, then have tester check it',
-    plan: [
-      '1. read src/pages/ProductPage.tsx',
-      '2. add a wishlist store + toggle button',
-      '3. persist to localStorage, sync on load',
-      '4. spawn tester agent to verify',
-    ],
-    tools: [
-      ['read_file',   'src/pages/ProductPage.tsx', null],
-      ['write_file',  'src/store/wishlist.ts', '+54 lines'],
-      ['edit_file',   'src/pages/ProductPage.tsx', '±18 lines', ' <span class="c">◆ judge: safe</span>'],
-      ['spawn_agent', 'tester · verify the new wishlist flow', null, ' <span class="a">◈ spawned</span>'],
-      ['run_shell',   'npm test -- wishlist', '9 passed'],
-    ],
-    agent: '<span class="a">◆ tester</span> <span class="f">· done, 5 checks, 0 issues</span>',
-    usage: '  usage · ↑9 640  ↓1 180  · 11.6s',
-    answer: 'Done. Storefront now has a wishlist: a toggle on every product card, ' +
-      'persisted to localStorage and synced on load. tester confirmed 5/5 checks, ' +
-      'and the suite passes, 9/9.',
-  };
-
-  const toolLine = ([name, arg, note, label]) =>
-    `<span class="t">● ${esc(name)}</span>  <span class="m">${esc(arg)}</span>` +
-    (label ?? (name === 'read_file' ? '' : ' <span class="ok">✓ approved</span>')) +
-    (note ? ` <span class="f">· ${esc(note)}</span>` : '');
-
-  function providerRow(i, cursor) {
-    const [name, hint] = SCRIPT.providers[i];
-    const active = i === cursor;
-    const mark = active ? '<span class="sel">❯ </span>' : '<span class="f">  </span>';
-    const n = active
-      ? `<span class="sel">${esc(name.padEnd(20))}</span>`
-      : `<span class="m">${esc(name.padEnd(20))}</span>`;
-    return `${mark}${n}<span class="f">${esc(hint)}</span>`;
-  }
-
-  function modelRow(i, cursor) {
-    const m = SCRIPT.models[i];
-    const active = i === cursor;
-    const mark = active ? '<span class="sel">❯ </span>' : '<span class="f">  </span>';
-    const glyph = m.loaded
-      ? '<span class="ok">● </span>'
-      : '<span class="f">○ </span>';
-    const name = active
-      ? `<span class="sel">${esc(m.id.padEnd(20))}</span>`
-      : `<span class="m">${esc(m.id.padEnd(20))}</span>`;
-    const ctx = m.loaded
-      ? `<span class="a">  ${esc(m.ctx)}</span>`
-      : `<span class="f">  ${esc(m.ctx)}</span>`;
-    return `${mark}${glyph}${name}${ctx}`;
-  }
-
-  function renderPickerDone() {
-    line('<span class="p">❯ </span><span class="u">/model</span>');
-    line('<span class="f">deep model  ·  pick from llamacpp</span>');
-    SCRIPT.models.forEach((_, i) => line(modelRow(i, SCRIPT.modelPick)));
-    line(`<span class="f">  ${esc(SCRIPT.modelDetail)}</span>`);
-    for (const t of SCRIPT.tiers) line(`<span class="f">${esc(t)}</span>`);
-  }
-
-  function renderTask() {
-    line(`<span class="p">❯ </span><span class="u">${esc(SCRIPT.prompt)}</span>`);
-    line('<span class="f">│ </span><span class="a">◆ planner</span> <span class="f">· 4 steps</span>');
-    for (const step of SCRIPT.plan) line(`<span class="f">│   ${esc(step)}</span>`);
-    for (const t of SCRIPT.tools) line(toolLine(t));
-    line(`<span class="f">│ </span>${SCRIPT.agent}`);
-    line(`<span class="f">${esc(SCRIPT.usage)}</span>`);
-    line(`<span class="a">◆ </span>${esc(SCRIPT.answer)}`);
-  }
-
-  function renderStatic() {
-    body.innerHTML = '';
-    renderPickerDone();
-    renderTask();
-  }
-
-  if (reduced) { renderStatic(); return; }
-
-  let onScreen = false;
-  let started = false;
-
-  const awake = () => onScreen && !document.hidden;
-  const wait = ms => new Promise(r => setTimeout(r, ms));
-  async function sleep(ms) {
-    await wait(ms);
-    while (!awake()) await wait(250);
-  }
-
-  async function type(el, text, cls, cps) {
-    const span = document.createElement('span');
-    if (cls) span.className = cls;
-    el.appendChild(span);
-    for (const ch of text) {
-      span.textContent += ch;
-      await sleep(1000 / cps);
-    }
-    return span;
-  }
-
-  function makePane() {
-    const pane = document.createElement('div');
-    pane.className = 'picker-pane';
-    body.appendChild(pane);
-    const clear = () => { pane.innerHTML = ''; };
-    const add = (html) => {
-      const d = document.createElement('div');
-      d.innerHTML = html;
-      pane.appendChild(d);
-      return d;
-    };
-    const addEmpty = () => {
-      const d = document.createElement('div');
-      pane.appendChild(d);
-      return d;
-    };
-    const remove = () => { pane.remove(); };
-    return { pane, clear, add, addEmpty, remove };
-  }
-
-  async function playPicker() {
-    let d = document.createElement('div');
-    d.innerHTML = '<span class="p">❯ </span>';
-    body.appendChild(d);
-    await type(d, '/model', 'u', 18);
-    await sleep(360);
-
-    const pane = makePane();
-
-    pane.add('<span class="f">deep model  ·  choose a provider</span>');
-    const providerEls = SCRIPT.providers.map(() => pane.addEmpty());
-    const paintProviders = (cursor) => {
-      providerEls.forEach((el, i) => { el.innerHTML = providerRow(i, cursor); });
-    };
-    paintProviders(0);
-    await sleep(380);
-    paintProviders(1);
-    await sleep(520);
-
-    pane.clear();
-    pane.add('<span class="f">llamacpp  ·  server URL</span>');
-    const hostLine = pane.addEmpty();
-    hostLine.innerHTML = '<span class="p">❯ </span>';
-    await type(hostLine, SCRIPT.host, 'u', 28);
-    await sleep(420);
-
-    pane.clear();
-    pane.add('<span class="f">search </span><span class="f">type to filter</span>');
-    const modelEls = SCRIPT.models.map(() => pane.addEmpty());
-    const paintModels = (cursor) => {
-      modelEls.forEach((el, i) => { el.innerHTML = modelRow(i, cursor); });
-    };
-    paintModels(0);
-    await sleep(380);
-    paintModels(1);
-    pane.add(`<span class="f">  ${esc(SCRIPT.modelDetail)}</span>`);
-    await sleep(640);
-
-    pane.remove();
-    for (const t of SCRIPT.tiers) line(`<span class="f">${esc(t)}</span>`);
-    await sleep(500);
-  }
-
-  async function run() {
-    for (;;) {
-      body.innerHTML = '';
-      await playPicker();
-
-      let d = document.createElement('div');
-      d.innerHTML = '<span class="p">❯ </span>';
-      body.appendChild(d);
-      await type(d, SCRIPT.prompt, 'u', 22);
-      await sleep(650);
-
-      line('<span class="f">│ </span><span class="a">◆ planner</span> <span class="f">· 4 steps</span>');
-      await sleep(450);
-      for (const step of SCRIPT.plan) line(`<span class="f">│   ${esc(step)}</span>`);
-      await sleep(650);
-
-      for (const t of SCRIPT.tools) {
-        line(toolLine(t));
-        await sleep(550);
-      }
-      await sleep(450);
-      line(`<span class="f">│ </span>${SCRIPT.agent}`);
-      line(`<span class="f">${esc(SCRIPT.usage)}</span>`);
-      await sleep(520);
-
-      d = document.createElement('div');
-      d.innerHTML = '<span class="a">◆ </span>';
-      body.appendChild(d);
-      await type(d, SCRIPT.answer, null, 48);
-
-      await sleep(900);
-      d = document.createElement('div');
-      d.innerHTML = '<span class="p">❯ </span>';
-      body.appendChild(d);
-      const caret = document.createElement('span');
-      caret.className = 'caret';
-      d.appendChild(caret);
-
-      await sleep(4600);
-    }
-  }
-
-  new IntersectionObserver((entries) => {
-    onScreen = entries[0].isIntersecting;
-    if (onScreen && !started) { started = true; run(); }
-  }, { threshold: 0.2 }).observe(body);
-})();
 </script>
 
 <script type="application/ld+json">
