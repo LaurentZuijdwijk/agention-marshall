@@ -42,21 +42,27 @@ export interface FixturePlugin {
  * by walking up from the importing file's own location, and the system
  * tmpdir has no path back to this monorepo's node_modules at all.
  */
-export async function writeFixturePlugin(opts: { name?: string; failHealth?: boolean } = {}): Promise<FixturePlugin> {
+export async function writeFixturePlugin(opts: { name?: string; failHealth?: boolean; healthIdentity?: string; collideOnce?: boolean } = {}): Promise<FixturePlugin> {
   const name = opts.name ?? 'fixture';
   const dir = mkdtempSync(join(process.cwd(), '.tmp-plugin-fixture-'));
   const port = await reserveFreePort();
 
   writeFileSync(join(dir, 'server.mjs'), `
-import { writeFileSync } from 'node:fs';
+import { writeFileSync, existsSync } from 'node:fs';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { createMcpExpressApp } from '@modelcontextprotocol/sdk/server/express.js';
 
+const collisionMarker = ${JSON.stringify(join(dir, 'collision.txt'))};
+if (${Boolean(opts.collideOnce)} && !existsSync(collisionMarker)) {
+  writeFileSync(collisionMarker, 'once');
+  console.error('listen EADDRINUSE');
+  process.exit(1);
+}
 writeFileSync(${JSON.stringify(join(dir, 'pid.txt'))}, String(process.pid));
 writeFileSync(${JSON.stringify(join(dir, 'token.txt'))}, process.env.FIXTURE_TOKEN ?? '');
 
-const port = ${port};
+const port = Number(process.argv[2]);
 const failHealth = ${opts.failHealth ? 'true' : 'false'};
 
 function buildServer() {
@@ -77,7 +83,7 @@ app.post('/mcp', async (req, res) => {
 });
 app.get('/health', (_req, res) => {
   if (failHealth) { res.writeHead(500).end(); return; }
-  res.writeHead(200, { 'content-type': 'application/json' }).end('{"ok":true}');
+  res.writeHead(200, { 'content-type': 'application/json' }).end(${JSON.stringify(JSON.stringify({ ok: true, plugin: opts.healthIdentity }))});
 });
 app.listen(port, '127.0.0.1');
 `);
@@ -87,8 +93,9 @@ export const marshallPlugin = {
   name: ${JSON.stringify(name)},
   defaultPort: ${port},
   resolveEntryPath: () => ${JSON.stringify(join(dir, 'server.mjs'))},
-  buildLaunch: ({ token }) => ({ args: [], env: { FIXTURE_TOKEN: token } }),
+  buildLaunch: ({ port, token }) => ({ args: [String(port)], env: { FIXTURE_TOKEN: token } }),
   healthPath: '/health',
+  healthIdentity: ${JSON.stringify(opts.healthIdentity)},
   mcpPath: '/mcp',
 };
 `);

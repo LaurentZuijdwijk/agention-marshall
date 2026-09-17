@@ -41,6 +41,32 @@ afterEach(() => {
   else process.env.XDG_CONFIG_HOME = originalXdg;
 });
 
+describe('plugin ports', () => {
+  it('round-trips port and token globally, ignoring project definitions', async () => {
+    const root = ws();
+    const service = new ConfigService(root);
+    const plugin = { name: 'browser', package: 'pkg', port: 9999, token: 'secret' };
+    await service.savePlugins([plugin]);
+    writeProject(root, { plugins: [{ ...plugin, port: 8888, token: 'leaked' }] });
+    assert.deepEqual(new ConfigService(root).snapshot().plugins, [plugin]);
+    assert.deepEqual(readGlobal().plugins, [plugin]);
+    assert.equal(statSync(globalConfigPath()).mode & 0o777, 0o600);
+  });
+
+  it('auto-start persists runtime fields without resurrecting removed plugins or changing selections', async () => {
+    const root = ws();
+    const service = new ConfigService(root);
+    writeGlobal({ plugins: [{ name: 'browser', package: 'pkg', token: 'secret', enabled: false }], plugin: { disable: ['other'] } });
+    await service.savePluginRuntime([
+      { name: 'browser', package: 'pkg', token: 'secret', port: 9999, enabled: true },
+      { name: 'removed', package: 'pkg', token: 'old', port: 9998 },
+    ]);
+    assert.deepEqual(readGlobal().plugins, [{ name: 'browser', package: 'pkg', token: 'secret', enabled: false, port: 9999 }]);
+    assert.deepEqual(readGlobal().plugin, { disable: ['other'] });
+    assert.deepEqual(readProject(root), {});
+  });
+});
+
 describe('saveProfiles', () => {
   it('round-trips through the reader: model from the project file, credential from the global one', async () => {
     const root = ws();

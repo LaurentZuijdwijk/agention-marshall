@@ -1,5 +1,17 @@
 # @agentionai/marshall-cli
 
+## 0.25.2
+
+### Patch Changes
+
+- Automatically select a free loopback port when a managed plugin's preferred port is occupied, remembering the selected port globally for subsequent launches. Browser server reuse now requires a matching health identifier so legacy or unrelated listeners are left alone. Status, setup probes, downloads, and extension pairing instructions use the selected port; after a port change, update the extension popup's Advanced bridge URL and save to reconnect.
+- Display the saved pairing token on explicit `/plugins add` setup, including when the browser plugin is already configured, so fresh extensions can be paired without opening configuration files. Keep credentials out of ordinary plugin listings and failed-start messages. Clarify fallback setup guidance when no token is available.
+- Check the running browser server before showing guided setup links. When an older server is reused or the setup page is unreachable, explain how to restart it from its owning session and provide the manual download link instead.
+- Updated dependencies
+- Updated dependencies
+  - @agentionai/marshall-engine@0.25.1
+  - @agentionai/marshall-plugin-browser@0.3.2
+
 ## 0.25.1
 
 ### Patch Changes

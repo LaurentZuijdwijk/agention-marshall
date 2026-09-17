@@ -75,8 +75,8 @@ export function useSession(options: UseSessionOptions): SessionController {
   const [activeProfile, setActiveProfile] = useState<AgentProfile>(agentProfile);
   const [fastProfile, setFastProfile] = useState<AgentProfile | undefined>(initialFast);
 
-  const build = (deep: AgentProfile, fast: AgentProfile | undefined) =>
-    new SessionCtor({
+  const build = (deep: AgentProfile, fast: AgentProfile | undefined) => {
+    const session = new SessionCtor({
       agent: deep,
       models: { deep, fast },
       workspaceRoot, enableGitHub, enableWebSearch, maxTokens, light, swarm,
@@ -90,6 +90,12 @@ export function useSession(options: UseSessionOptions): SessionController {
       plannerAgent: plannerAgentProfile,
       reviewerAgent: reviewerAgentProfile,
     }, client);
+    void session.readyPlugins().then(() => {
+      const plugins = session.pluginConfigs();
+      if (plugins.length) return config.savePluginRuntime(plugins);
+    });
+    return session;
+  };
 
   // Lazily initialised by hand: `useRef(expr)` evaluates `expr` on *every* render
   // and throws all but the first away, so `new Session(...)` inline built a whole

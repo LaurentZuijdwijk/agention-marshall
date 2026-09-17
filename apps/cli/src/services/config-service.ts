@@ -327,6 +327,19 @@ export class ConfigService {
     return this.write('global', 'plugins', config => withPlugins(config, plugins));
   }
 
+  /** Auto-start updates only runtime fields of definitions still on disk.
+   *  Never resurrect deleted plugins or overwrite enable/disable selections. */
+  savePluginRuntime(plugins: PluginConfig[]): Promise<boolean> {
+    return this.write('global', 'plugin runtime', config => ({
+      ...config,
+      plugins: (config.plugins ?? []).map(saved => {
+        const live = plugins.find(p => p.name === saved.name && p.package === saved.package
+          && (!saved.token || saved.token === p.token));
+        return live ? { ...saved, port: live.port, token: live.token } : saved;
+      }),
+    }));
+  }
+
   /** Opt this checkout into a globally-defined plugin that is off by default —
    *  same split as `enableProjectMcpServer`. */
   enableProjectPlugin(name: string): Promise<boolean> {

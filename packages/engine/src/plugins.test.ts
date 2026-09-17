@@ -3,8 +3,9 @@
 // path (spawn → health poll → real MCP registration) is exercised for real.
 // See testing/fixture-plugin.ts for how the fixture itself is built.
 import { test } from 'node:test';
+import { createServer } from 'node:http';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { PluginRegistry } from './plugins.js';
@@ -21,6 +22,82 @@ function cleanup(dir: string): void {
 // take longer than a tight timeout produced exactly one flake during
 // development. Still an order of magnitude faster than the real defaults.
 const FAST = { startupTimeoutMs: 6000, startupPollIntervalMs: 50, healthTimeoutMs: 1000 };
+
+for (const legacy of [false, true]) {
+  test(`occupied port falls back without stopping the ${legacy ? 'legacy' : 'unrelated'} server and remembers the new port`, async (t) => {
+    const fixture = await writeFixture({ healthIdentity: 'fixture-v1' });
+    t.after(fixture.cleanup);
+    const occupied = createServer((_req, res) => {
+      res.writeHead(legacy ? 200 : 404, { 'content-type': 'application/json' });
+      res.end('{"ok":true}');
+    });
+    await new Promise<void>(resolve => occupied.listen(fixture.port, '127.0.0.1', resolve));
+    t.after(() => new Promise<void>(resolve => {
+      occupied.closeAllConnections();
+      occupied.close(() => resolve());
+    }));
+    const mcp = new McpRegistry();
+    const registry = new PluginRegistry([
+      { package: fixture.descriptorUrl, name: 'fixture', token: 'existing-token' },
+    ], { mcp, ...FAST });
+    t.after(() => registry.disposeAll());
+    t.after(() => mcp.disconnect());
+    const result = await registry.enable('fixture');
+    assert.equal(result.state.status, 'running', result.state.error);
+    assert.ok(result.state.port);
+    assert.notEqual(result.state.port, fixture.port);
+    assert.equal(result.generatedToken, undefined);
+    assert.equal(registry.configs()[0].port, result.state.port);
+    assert.equal(registry.configs()[0].token, 'existing-token');
+    assert.equal(mcp.state()[0].url, `http://127.0.0.1:${result.state.port}/mcp`);
+
+    // A new session must use the persisted port, not launch a second server.
+    const pid = readFileSync(join(fixture.dir, 'pid.txt'), 'utf8');
+    const secondMcp = new McpRegistry();
+    const second = new PluginRegistry(registry.configs(), { mcp: secondMcp, ...FAST });
+    t.after(() => second.disposeAll());
+    t.after(() => secondMcp.disconnect());
+    assert.equal((await second.enable('fixture')).state.port, result.state.port);
+    assert.equal(readFileSync(join(fixture.dir, 'pid.txt'), 'utf8'), pid);
+    await second.disable('fixture');
+    assert.equal((await fetch(`http://127.0.0.1:${result.state.port}/health`)).status, 200);
+    await registry.disable('fixture');
+    assert.equal((await fetch(`http://127.0.0.1:${fixture.port}/health`)).status, legacy ? 200 : 404);
+  });
+}
+
+test('a bind collision in the child retries on an ephemeral port', async (t) => {
+  const collisionFixture = await writeFixture({ collideOnce: true });
+  t.after(collisionFixture.cleanup);
+  const registry = new PluginRegistry([
+    { package: collisionFixture.descriptorUrl, name: 'fixture', token: 'tok' },
+  ], { mcp: new McpRegistry(), ...FAST });
+  t.after(() => registry.disposeAll());
+  const result = await registry.enable('fixture');
+  assert.equal(result.state.status, 'running', result.state.error);
+  // The marker proves attempt 1 really hit EADDRINUSE and died; `running` at a
+  // different port proves the retry spawned on the freshly selected one.
+  assert.ok(existsSync(join(collisionFixture.dir, 'collision.txt')));
+  assert.notEqual(result.state.port, collisionFixture.port);
+  assert.equal(registry.configs()[0].port, result.state.port);
+  assert.ok((await fetch(`http://127.0.0.1:${result.state.port}/health`)).ok,
+    'the retried child must be the one listening on the selected ephemeral port');
+});
+
+test('invalid configured ports fail before spawning', async (t) => {
+  const fixture = await writeFixture();
+  t.after(fixture.cleanup);
+  for (const port of [0, -1, 65536, 1.5, NaN]) {
+    const registry = new PluginRegistry([
+      { package: fixture.descriptorUrl, name: 'fixture', port },
+    ], { mcp: new McpRegistry(), ...FAST });
+    t.after(() => registry.disposeAll());
+    const result = await registry.enable('fixture');
+    assert.equal(result.state.status, 'error');
+    assert.match(result.state.error!, /port must be an integer/);
+    assert.equal(registry.configs()[0].token, undefined);
+  }
+});
 
 test('enable spawns the plugin, waits for health, and registers it as an MCP server', async (t) => {
   const { descriptorUrl, dir } = await writeFixture();

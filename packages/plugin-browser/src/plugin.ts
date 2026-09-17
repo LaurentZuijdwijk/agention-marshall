@@ -17,6 +17,7 @@ export interface MarshallServerPlugin {
   resolveEntryPath(): string;
   buildLaunch(opts: { port: number; token: string }): { args: string[]; env: Record<string, string> };
   healthPath: string;
+  healthIdentity?: string;
   mcpPath: string;
 }
 
@@ -29,6 +30,7 @@ export const marshallPlugin: MarshallServerPlugin = {
     env: { MARSHALL_BROWSER_TOKEN: token },
   }),
   healthPath: '/health',
+  healthIdentity: 'marshall-browser-v1',
   mcpPath: '/mcp',
 };
 
@@ -38,12 +40,13 @@ export function extensionSetupInstructions({ port = DEFAULT_PORT, paired = false
     'Website download: https://marshall.agention.ai/docs.html#browser-extension',
     `Direct ZIP download (bundled version): http://127.0.0.1:${port}/extension.zip — keep Marshall running.`,
     'Extract the ZIP into a permanent folder, open chrome://extensions (Edge: edge://extensions), enable Developer mode, then Load unpacked → the folder containing manifest.json.',
-    // A token is printed once, when it is generated. Re-enabling a plugin that
-    // already has one prints nothing, so telling that user to paste the token
-    // sends them looking for a value they were never shown.
+    // `paired` only means the server already has a token, not that this
+    // browser has it. Explain recovery for fresh or reset extensions without
+    // exposing the saved credential in public setup pages or project files.
     paired
-      ? `Pin the extension and open its popup — an extension paired earlier keeps its token, so there is nothing to paste. Advanced: bridge URL = ws://127.0.0.1:${port}/bridge`
+      ? `Pin the extension and open its popup — an extension paired earlier keeps its token. If this is a fresh install or the token field is empty, copy the browser entry's token from plugins in your global Marshall config (~/.config/marshall/config.json, or $XDG_CONFIG_HOME/marshall/config.json) into the popup. A saved server token does not mean this extension is paired. Keep the token private; never put it in project files. Advanced: bridge URL = ws://127.0.0.1:${port}/bridge`
       : `Pin the extension, open its popup, paste the pairing token, and click Save & connect. Advanced: bridge URL = ws://127.0.0.1:${port}/bridge`,
+    `Set Advanced: bridge URL to ws://127.0.0.1:${port}/bridge and click Save & connect, even if already paired — Marshall may have selected a different port because the previous one was occupied.`,
     'Already installed? No reinstall needed — check the popup says connected.',
   ].join('\n');
 }

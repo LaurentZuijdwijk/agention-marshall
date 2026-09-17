@@ -20,19 +20,23 @@ Inside the `marshall` CLI:
 /plugins add browser
 ```
 
-This spawns the server for you (reusing one already running at the default
-port, if there is one), health-checks it, registers it as an MCP server, and
-persists a pairing token in your global config — so it comes back up
-automatically on future launches too, with no re-pairing needed. The first
+This spawns the server for you (or reuses a compatible running instance),
+health-checks it, registers it as an MCP server, and persists its port and
+pairing token in your global config. It prefers the remembered port, or 8712
+on first launch; if occupied by an older or unrelated server, it automatically
+chooses a free loopback port without stopping that server. Future launches
+reuse the token and prefer the saved port. The first
 time, it prints the token and a link to a local guided setup page at
-`http://127.0.0.1:8712/setup`. Open it for a **Download extension ZIP** button
+`http://127.0.0.1:<selected-port>/setup`. Open it for a **Download extension ZIP** button
 and step-by-step Chrome/Edge installation instructions; no checkout or build
 is required. You can also [download from the website](https://marshall.agention.ai/docs.html#browser-extension)
 before starting Marshall. The website ZIP tracks the latest site deployment;
 the local ZIP matches your installed plugin. Keep Marshall running while pairing. Extract the ZIP into a
 permanent folder, then use **Load unpacked** on your browser's extensions page
 to select the folder containing `manifest.json`. Pin the extension, open its
-popup, paste the pairing token, and click **Save & connect**. `/plugins disable browser` stops it and unregisters
+popup, paste the pairing token, set **Advanced: bridge URL** to the URL printed
+by Marshall, and click **Save & connect**. If the port changes, update that URL
+and save again even if already paired; no extension reinstall is required. `/plugins disable browser` stops it and unregisters
 it. `/plugins` (or `/plugins list`) on its own lists what's configured.
 
 ### The manual way

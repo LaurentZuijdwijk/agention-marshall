@@ -157,6 +157,7 @@ const SavedPluginSchema = z.object({
   package: lenient(z.string()),
   name: lenient(z.string()),
   token: lenient(z.string()),
+  port: lenient(z.number().int().min(1).max(65535)),
   enabled: lenient(z.boolean()),
 });
 export type SavedPlugin = z.infer<typeof SavedPluginSchema>;
@@ -290,6 +291,9 @@ export function validateForWrite(config: SavedConfig, previous?: SavedConfig): s
   for (const plugin of config.plugins ?? []) {
     if (priorPlugins.includes(plugin)) continue;
     if (!plugin.package || !plugin.name) problems.push('plugins: every plugin needs a package and a name');
+    if (plugin.port !== undefined && (!Number.isInteger(plugin.port) || plugin.port < 1 || plugin.port > 65535)) {
+      problems.push('plugins: port must be an integer between 1 and 65535');
+    }
   }
   return problems.length > 0 ? problems.join('; ') : undefined;
 }
@@ -903,6 +907,7 @@ export function savedPlugins(config: SavedConfig): PluginConfig[] {
       package: p.package,
       name: p.name,
       ...(p.token ? { token: p.token } : {}),
+      ...(p.port !== undefined ? { port: p.port } : {}),
       ...(p.enabled === false ? { enabled: false } : {}),
     }));
 }

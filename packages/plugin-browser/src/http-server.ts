@@ -80,7 +80,7 @@ export async function startServer(options: StartOptions): Promise<RunningServer>
 
   app.get('/health', (_req: IncomingMessage, res: ServerResponse) => {
     res.setHeader('content-type', 'application/json');
-    res.end(JSON.stringify({ ok: true, extensionConnected: bridge.connected }));
+    res.end(JSON.stringify({ ok: true, plugin: 'marshall-browser-v1', extensionConnected: bridge.connected }));
   });
 
   const server = app.listen(options.port ?? 0, '127.0.0.1');

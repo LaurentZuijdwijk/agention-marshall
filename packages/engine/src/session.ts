@@ -1115,6 +1115,12 @@ export class Session {
 
   // ── plugins ────────────────────────────────────────────────────────────────
 
+  /** Settles after configured plugins finish auto-starting; clients may persist
+   *  selected ports/tokens only once this completes. */
+  async readyPlugins(): Promise<void> {
+    await this.pluginsReady;
+  }
+
   /** What `/plugin` renders. */
   pluginState(): PluginState[] {
     return this.plugins.state();

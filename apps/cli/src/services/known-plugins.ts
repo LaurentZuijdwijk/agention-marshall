@@ -28,7 +28,7 @@ export const KNOWN_PLUGINS: Record<string, string> = {
  * can report, not a startup crash of the whole CLI.
  */
 export interface ExtensionSetupInstructions {
-  (opts?: { paired?: boolean }): string;
+  (opts?: { paired?: boolean; port?: number }): string;
 }
 
 /**
@@ -49,15 +49,39 @@ export async function loadExtensionSetupInstructions(
   }
 }
 
+/** Probe the running server, not just the installed module: an older process
+ * may have been reused by the plugin registry. Never follow a local redirect
+ * or let optional setup help delay a command indefinitely. */
+export async function browserSetupAvailable(port = 8712, request: typeof fetch = fetch): Promise<boolean> {
+  try {
+    const response = await request(`http://127.0.0.1:${port}/setup`, {
+      method: 'HEAD', redirect: 'error', signal: AbortSignal.timeout(1500),
+    });
+    return response.ok && (response.headers.get('content-type') ?? '').includes('text/html');
+  } catch {
+    return false;
+  }
+}
+
 /**
  * The text to print after enabling the browser plugin. Delegates to the
  * plugin when it can answer; otherwise says so and names the way out —
  * upgrading the CLI (which carries a pinned, newer plugin) and re-adding the
  * plugin in a fresh process, since the running one keeps its old copy.
  */
-export function extensionSetupNotice(instructions: ExtensionSetupInstructions | null, opts: { paired: boolean }): string {
+export function extensionSetupNotice(instructions: ExtensionSetupInstructions | null, opts: { paired: boolean; port?: number; setupAvailable?: boolean }): string {
+  if (opts.setupAvailable === false) {
+    return [
+      'Browser plugin is running, but its server does not provide a reachable setup page.',
+      `Marshall may have reused an older server already listening on port ${opts.port ?? 8712}. Updating files does not restart that process.`,
+      'In the Marshall session that started it, run /plugins disable browser; for a standalone server, stop it in its original terminal.',
+      'Then restart your updated Marshall and run /plugins add browser. Disabling from another session will not stop a server it does not own.',
+      'Existing browser connections can continue working without the setup page.',
+      'Manual setup and extension download: https://marshall.agention.ai/docs.html#browser-extension',
+    ].join('\n');
+  }
   try {
-    const text = instructions?.({ paired: opts.paired });
+    const text = instructions?.({ paired: opts.paired, port: opts.port });
     if (typeof text === 'string' && text.trim()) return text;
   } catch {
     // Help text must not hide the running status or a newly generated token.

@@ -1,5 +1,11 @@
 # @agentionai/marshall-engine
 
+## 0.25.1
+
+### Patch Changes
+
+- Automatically select a free loopback port when a managed plugin's preferred port is occupied, remembering the selected port globally for subsequent launches. Browser server reuse now requires a matching health identifier so legacy or unrelated listeners are left alone. Status, setup probes, downloads, and extension pairing instructions use the selected port; after a port change, update the extension popup's Advanced bridge URL and save to reconnect.
+
 ## 0.25.0
 
 ### Minor Changes

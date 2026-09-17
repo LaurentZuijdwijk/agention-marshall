@@ -111,6 +111,7 @@ function setup(overrides: Partial<CommandDeps> & {
       return servers.find(s => s.name === name) ?? null;
     },
     pluginState: () => plugins,
+    pluginConfigs: () => plugins.map(p => ({ name: p.name, package: p.package, token: 'saved-token' })),
     addPlugin: async (config) => {
       calls.pluginAdded.push(config);
       return { state: { name: config.name, package: config.package, status: 'running' }, generatedToken: 'fresh-token' };
@@ -175,6 +176,7 @@ function setup(overrides: Partial<CommandDeps> & {
     importCodexCliLogin: async () => null,
     onMcpChanged: () => { calls.mcpChanged++; },
     onPluginsChanged: () => { calls.pluginsChanged++; },
+    browserSetupAvailable: async () => true,
     onSafetyLevelChange: (level) => { calls.safetyLevelReported.push(level); },
     onRuntimeModeChange: (mode, scope) => { calls.runtimeMode.push([mode, scope]); },
     ...overrides,
@@ -672,6 +674,7 @@ describe('/plugins', () => {
     const { deps, pushed } = setup({ plugins: [plugin()] });
     runSlashCommand('/plugins', deps);
     assert.match(pushed[0].content, /browser\s+running/);
+    assert.doesNotMatch(pushed[0].content, /saved-token|pairing token:/);
   });
 
   it('shows the reason a plugin failed instead of just "error"', () => {
@@ -689,12 +692,46 @@ describe('/plugins', () => {
     assert.deepEqual(calls.pluginEnabled, ['browser']);
     assert.match(pushed[0].content, /http:\/\/127\.0\.0\.1:8712\/setup/);
     assert.match(pushed[0].content, /No reinstall needed/);
-    // Re-enabling reuses the stored token and prints none, so the steps must not
-    // send the user looking for one to paste.
-    assert.doesNotMatch(pushed[0].content, /pairing token:/);
-    assert.doesNotMatch(pushed[0].content, /paste the pairing token/);
+    assert.match(pushed[0].content, /pairing token: saved-token/);
+    assert.match(pushed[0].content, /paste the pairing token/);
+    assert.doesNotMatch(pushed[0].content, /will not be shown again|nothing to paste/);
     assert.deepEqual(calls.pluginAdded, []);
     assert.equal(calls.pluginsChanged, 1);
+  });
+
+  it('does not invent a token when reusing a server without a saved credential', async () => {
+    const { deps, pushed } = setup({ plugins: [plugin()] });
+    deps.session!.pluginConfigs = () => [];
+    runSlashCommand('/plugins add browser', deps);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.doesNotMatch(pushed[0].content, /pairing token:|paste the pairing token/);
+  });
+
+  it('does not display another plugin\'s credential', async () => {
+    const { deps, pushed } = setup({ plugins: [plugin()] });
+    deps.session!.pluginConfigs = () => [
+      { name: 'other', package: plugin().package, token: 'other-token' },
+      { name: 'browser', package: 'other-package', token: 'wrong-package-token' },
+    ];
+    runSlashCommand('/plugins add browser', deps);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.doesNotMatch(pushed[0].content, /pairing token:|other-token|wrong-package-token/);
+  });
+
+  it('uses the selected port for status, setup probe, downloads and extension pairing', async () => {
+    const { deps, pushed } = setup({ plugins: [plugin({ port: 9999 })] });
+    let probed: number | undefined;
+    deps.browserSetupAvailable = async port => { probed = port; return true; };
+    runSlashCommand('/plugins add browser', deps);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(probed, 9999);
+    const text = pushed[0].content;
+    assert.match(text, /port 9999/);
+    assert.ok(text.includes('http://127.0.0.1:9999/setup'));
+    assert.ok(text.includes('http://127.0.0.1:9999/extension.zip'));
+    assert.ok(text.includes('ws://127.0.0.1:9999/bridge'));
+    assert.match(text, /Save & connect/);
+    assert.doesNotMatch(text, /8712/);
   });
 
   it('adding an unconfigured but known plugin looks it up and calls addPlugin', async () => {
@@ -710,14 +747,28 @@ describe('/plugins', () => {
     assert.match(pushed[0].content, /paste the pairing token/, 'a token was printed, so pasting it is the next step');
   });
 
+  it('explains how to restart a reused old server instead of offering broken links', async () => {
+    const { deps, pushed, calls } = setup({ browserSetupAvailable: async () => false });
+    runSlashCommand('/plugins add browser', deps);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(pushed[0].role, 'info');
+    assert.match(pushed[0].content, /older server/);
+    assert.match(pushed[0].content, /session that started it/);
+    assert.match(pushed[0].content, /pairing token: fresh-token/);
+    assert.doesNotMatch(pushed[0].content, /http:\/\/127\.0\.0\.1:8712\/(setup|extension\.zip)/);
+    assert.equal(calls.pluginsChanged, 1);
+    assert.deepEqual(calls.pluginDisabled, []);
+  });
+
   it('does not offer installation when the browser server failed to start', async () => {
     const { deps, pushed } = setup();
-    deps.session!.addPlugin = async () => ({ state: plugin({ status: 'error', error: 'startup failed' }) });
+    deps.session!.pluginConfigs = () => [{ name: 'browser', package: plugin().package, token: 'saved-token' }];
+    deps.session!.addPlugin = async () => ({ state: plugin({ status: 'error', error: 'startup failed' }), generatedToken: 'fresh-token' });
     runSlashCommand('/plugins add browser', deps);
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(pushed[0].role, 'error');
     assert.match(pushed[0].content, /startup failed/);
-    assert.doesNotMatch(pushed[0].content, /\/setup|extension\.zip/);
+    assert.doesNotMatch(pushed[0].content, /\/setup|extension\.zip|pairing token:|saved-token|fresh-token/);
   });
 
   it('adding an unknown name reports the known list instead of guessing', async () => {

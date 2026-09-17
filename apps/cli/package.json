@@ -1,6 +1,6 @@
 {
   "name": "@agentionai/marshall-cli",
-  "version": "0.25.1",
+  "version": "0.25.2",
   "type": "module",
   "bin": {
     "marshall": "./dist/index.js"
@@ -23,7 +23,7 @@
   },
   "dependencies": {
     "@agentionai/marshall-engine": "*",
-    "@agentionai/marshall-plugin-browser": "^0.3.1",
+    "@agentionai/marshall-plugin-browser": "^0.3.2",
     "@agentionai/marshall-tools": "*",
     "chalk": "^5.3.0",
     "dotenv": "^16.6.1",

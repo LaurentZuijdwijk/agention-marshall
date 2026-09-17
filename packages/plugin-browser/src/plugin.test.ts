@@ -17,11 +17,18 @@ test('setup instructions link the guide, ZIP and bridge on the chosen port', () 
   }
 });
 
-test('an already-paired extension is not told to paste a token it never saw', () => {
+test('a saved server token gives fresh extensions a private recovery path', () => {
   assert.match(extensionSetupInstructions(), /paste the pairing token/);
   const paired = extensionSetupInstructions({ paired: true });
   assert.doesNotMatch(paired, /paste the pairing token/);
   assert.match(paired, /keeps its token/);
+  assert.match(paired, /fresh install or the token field is empty/);
+  assert.match(paired, /browser entry's token from plugins/);
+  assert.ok(paired.includes('~/.config/marshall/config.json'));
+  assert.ok(paired.includes('$XDG_CONFIG_HOME/marshall/config.json'));
+  assert.match(paired, /does not mean this extension is paired/);
+  assert.match(paired, /never put it in project files/);
+  assert.doesNotMatch(paired, /nothing to paste/);
   assert.ok(paired.includes(`ws://127.0.0.1:${DEFAULT_PORT}/bridge`), 'the bridge URL still helps a manual re-pair');
 });
 

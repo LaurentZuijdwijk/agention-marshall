@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import type {
   AgentProfile, AgentJob, McpServerState, PluginConfig, PluginState, SafetyLevel, SafetyAgentConfig, UsageReport,
 } from '@agentionai/marshall-engine';
-import { KNOWN_PLUGINS, extensionSetupNotice, loadExtensionSetupInstructions } from './services/known-plugins.js';
+import { KNOWN_PLUGINS, browserSetupAvailable, extensionSetupNotice, loadExtensionSetupInstructions } from './services/known-plugins.js';
 import { formatUsageReport } from './format.js';
 import type { BackgroundJob } from '@agentionai/marshall-tools';
 import type { Approvals } from './hooks/useApprovals.js';
@@ -49,6 +49,7 @@ export interface CommandSession {
   removeMcpServer(name: string): Promise<boolean>;
   reconnectMcpServer(name: string): Promise<McpServerState | null>;
   pluginState(): PluginState[];
+  pluginConfigs(): PluginConfig[];
   addPlugin(config: PluginConfig): Promise<{ state: PluginState; generatedToken?: string }>;
   enablePlugin(name: string): Promise<{ state: PluginState; generatedToken?: string }>;
   disablePlugin(name: string): Promise<boolean>;
@@ -94,6 +95,8 @@ export interface CommandDeps {
    *  plugins (see resolveSlashCommand's `'plugins'` member), so this is the
    *  only path, unlike `onMcpChanged`. */
   onPluginsChanged?(): void;
+  /** Probe the running browser server independently of the installed package. */
+  browserSetupAvailable?(port?: number): Promise<boolean>;
   /** Persist the runtime mode, in the project config or globally. The App owns
    *  the write so this stays free of the filesystem. */
   onRuntimeModeChange?(mode: RuntimeMode, scope: SettingsScope): void;
@@ -165,18 +168,16 @@ function describeServer(server: McpServerState): string {
 }
 
 function describePlugin(plugin: PluginState): string {
-  const head = `${plugin.name}  ${plugin.status}  (${plugin.package})`;
+  const head = `${plugin.name}  ${plugin.status}  (${plugin.package})${plugin.port ? `  port ${plugin.port}` : ''}`;
   return plugin.error ? `${head}\n  ${plugin.error}` : head;
 }
 
-/** What a freshly-generated token means for the human — the one moment it's
- *  shown, since it's persisted from here on. Same text plugin-browser's own
- *  standalone CLI banner prints, for a CLI-managed enable. */
+/** Pairing credentials are shown only on explicit plugin setup, not listing. */
 function pairingInstructions(token: string): string {
   return [
     `pairing token: ${token}`,
-    'paste this into the plugin\'s extension/client options — it will not be shown again ' +
-      '(re-enabling later reuses the same token, so this is a one-time step).',
+    'Paste this into the plugin\'s extension/client options. Keep it private; ' +
+      'run /plugins add <name> again to display it again.',
   ].join('\n');
 }
 
@@ -447,13 +448,20 @@ export function runSlashCommand(input: string, deps: CommandDeps): void {
           }
           deps.onPluginsChanged?.();
           const lines = [describePlugin(result.state)];
+          const pairingToken = result.state.status === 'running'
+            ? result.generatedToken ?? session.pluginConfigs().find(config =>
+              config.name === result.state.name && config.package === result.state.package)?.token
+            : undefined;
           if (result.state.status === 'running' && result.state.package === KNOWN_PLUGINS.browser) {
             // Loaded lazily, so a plugin copy older than this CLI degrades to a
             // friendly upgrade notice instead of taking the CLI down at import.
             const instructions = await loadExtensionSetupInstructions();
-            lines.push('', extensionSetupNotice(instructions, { paired: !result.generatedToken }));
+            const setupAvailable = instructions
+              ? await (deps.browserSetupAvailable ?? browserSetupAvailable)(result.state.port)
+              : undefined;
+            lines.push('', extensionSetupNotice(instructions, { paired: !pairingToken, port: result.state.port, setupAvailable }));
           }
-          if (result.generatedToken) lines.push('', pairingInstructions(result.generatedToken));
+          if (pairingToken) lines.push('', pairingInstructions(pairingToken));
           transcript.push(result.state.status === 'running' ? 'info' : 'error', lines.join('\n'));
         })
         .catch((err: unknown) => transcript.push('error', err instanceof Error ? err.message : String(err)));

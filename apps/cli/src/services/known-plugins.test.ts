@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { extensionSetupNotice, loadExtensionSetupInstructions } from './known-plugins.js';
+import { browserSetupAvailable, extensionSetupNotice, loadExtensionSetupInstructions } from './known-plugins.js';
 import { manualInstallCommand } from '../update-check.js';
 
 describe('loadExtensionSetupInstructions', () => {
@@ -21,6 +21,29 @@ describe('loadExtensionSetupInstructions', () => {
 
   it('rejects a malformed export', async () => {
     assert.equal(await loadExtensionSetupInstructions(async () => ({ extensionSetupInstructions: 'not a function' })), null);
+  });
+});
+
+describe('browserSetupAvailable', () => {
+  it('checks the actual setup endpoint with a bounded, nonredirecting HEAD request', async () => {
+    assert.equal(await browserSetupAvailable(9999, async (url, options) => {
+      assert.equal(url, 'http://127.0.0.1:9999/setup');
+      assert.equal(options?.method, 'HEAD');
+      assert.equal(options?.redirect, 'error');
+      assert.ok(options?.signal);
+      return new Response(null, { headers: { 'content-type': 'text/html; charset=utf-8' } });
+    }), true);
+  });
+
+  it('rejects a legacy server without a setup route and non-HTML responses', async () => {
+    assert.equal(await browserSetupAvailable(9999, async () => new Response(null, { status: 404 })), false);
+    assert.equal(await browserSetupAvailable(9999, async () => new Response('{}', {
+      headers: { 'content-type': 'application/json' },
+    })), false);
+  });
+
+  it('degrades on connection failures and timeouts', async () => {
+    assert.equal(await browserSetupAvailable(9999, async () => { throw new Error('unreachable'); }), false);
   });
 });
 

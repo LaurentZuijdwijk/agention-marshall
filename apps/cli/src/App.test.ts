@@ -93,6 +93,8 @@ class MockSession {
   // The settings menu lists the live connections, not the config file.
   mcpServers(): unknown[] { return []; }
   mcpState(): unknown[] { return []; }
+  readyPlugins(): Promise<void> { return Promise.resolve(); }
+  pluginConfigs(): unknown[] { return []; }
   get messages() { return mockMessages; }
 }
 
@@ -121,6 +123,30 @@ describe('App component', () => {
     mockBusy = false;
     engineClient = null;
     setProfilesCalls = [];
+  });
+
+  it('persists the auto-started plugin port only after startup settles', async () => {
+    const root = mkTemp();
+    const config = new ConfigService(root);
+    const plugin = { name: 'browser', package: 'pkg', token: 'secret' };
+    await config.savePlugins([plugin]);
+    let finish!: () => void;
+    const ready = new Promise<void>(resolve => { finish = resolve; });
+    class AutoSession extends MockSession {
+      readyPlugins(): Promise<void> { return ready; }
+      pluginConfigs(): unknown[] { return [{ ...plugin, port: 9999 }]; }
+    }
+    const instance = renderTui(React.createElement(App, {
+      workspaceRoot: root, config,
+      agentProfile: { provider: 'llamacpp', model: 'test' },
+      SessionCtor: AutoSession as any,
+    }), { stdout: fakeStdout(() => {}) });
+    try {
+      assert.equal(config.snapshot().plugins[0].port, undefined);
+      finish();
+      await waitFor(() => config.snapshot().plugins[0].port === 9999);
+      assert.equal(config.snapshot().plugins[0].token, 'secret');
+    } finally { instance.unmount(); }
   });
 
   it('renders without error when model is provided', () => {

@@ -6,6 +6,8 @@ test('setup serves a credential-free install guide using the actual server port'
   const token = 'private-pairing-token-never-in-page';
   const server = await startServer({ port: 0, token });
   t.after(() => server.close());
+  const health = await fetch(`http://127.0.0.1:${server.port}/health`);
+  assert.deepEqual(await health.json(), { ok: true, plugin: 'marshall-browser-v1', extensionConnected: false });
   const response = await fetch(`http://127.0.0.1:${server.port}/setup`);
   assert.equal(response.status, 200);
   assert.equal(response.headers.get('content-type'), 'text/html; charset=utf-8');

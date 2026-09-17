@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { createServer } from 'node:net';
 import { createBackgroundJobs } from '@agentionai/marshall-tools';
 import type { BackgroundJob, BackgroundJobs } from '@agentionai/marshall-tools';
 import type { McpRegistry } from './mcp.js';
@@ -25,6 +26,8 @@ export interface PluginConfig {
    *  config — never a project-committable field, same rule as an MCP
    *  server's `headers`. */
   token?: string;
+  /** Last selected loopback port; preferred on subsequent launches. */
+  port?: number;
   /** Configured but not auto-enabled at session start when false. Default: true. */
   enabled?: boolean;
 }
@@ -35,6 +38,7 @@ export interface PluginState {
   name: string;
   package: string;
   status: PluginStatus;
+  port?: number;
   error?: string;
 }
 
@@ -51,6 +55,8 @@ export interface MarshallServerPlugin {
   resolveEntryPath(): string;
   buildLaunch(opts: { port: number; token: string }): { args: string[]; env: Record<string, string> };
   healthPath: string;
+  /** Require this `plugin` value in health JSON before reusing a server. */
+  healthIdentity?: string;
   mcpPath: string;
 }
 
@@ -115,7 +121,7 @@ export class PluginRegistry {
   async add(config: PluginConfig): Promise<{ state: PluginState; generatedToken?: string }> {
     const existing = this.records.get(config.name);
     this.records.set(config.name, {
-      config: { ...config, token: config.token ?? existing?.config.token },
+      config: { ...config, port: config.port ?? existing?.config.port, token: config.token ?? existing?.config.token },
       status: config.enabled === false ? 'disabled' : 'idle',
       jobId: existing?.jobId,
     });
@@ -152,8 +158,11 @@ export class PluginRegistry {
 
     try {
       const plugin = await loadPlugin(record.config.package);
-      const port = plugin.defaultPort;
-      const healthUrl = `http://127.0.0.1:${port}${plugin.healthPath}`;
+      let port = record.config.port ?? plugin.defaultPort;
+      if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        throw new Error('plugin port must be an integer between 1 and 65535');
+      }
+      const healthUrl = () => `http://127.0.0.1:${port}${plugin.healthPath}`;
       const healthTimeoutMs = this.deps.healthTimeoutMs ?? HEALTH_TIMEOUT_MS;
       const startupTimeoutMs = this.deps.startupTimeoutMs ?? STARTUP_TIMEOUT_MS;
       const startupPollIntervalMs = this.deps.startupPollIntervalMs ?? STARTUP_POLL_INTERVAL_MS;
@@ -166,30 +175,46 @@ export class PluginRegistry {
       // them none. Only the caller that actually launches the process can
       // be sure its token is the right one.
       let generatedToken: string | undefined;
-      const alreadyUp = await probeHealth(healthUrl, healthTimeoutMs);
+      const alreadyUp = await probeHealth(healthUrl(), healthTimeoutMs, plugin.healthIdentity);
       if (!alreadyUp) {
+        // An owned but unhealthy process must not be orphaned when moving ports.
+        if (record.jobId) this.jobs.kill(record.jobId);
+        record.jobId = undefined;
         const token = record.config.token ?? (generatedToken = generateToken());
         record.config = { ...record.config, token };
 
-        const { args, env } = plugin.buildLaunch({ port, token });
-        const command = ['node', quoteArg(plugin.resolveEntryPath()), ...args.map(quoteArg)].join(' ');
-        const job = this.jobs.start({
-          command,
-          cwd: process.cwd(),
-          timeoutMs: SESSION_LIFETIME_MS,
-          extraEnv: env,
-        });
-        record.jobId = job.id;
+        // Try the remembered/default port, or let the OS select a free one.
+        // The child binds separately, so retry only a confirmed bind collision
+        // if another process wins the short gap after our reservation closes.
+        for (let attempt = 0; attempt < 3; attempt++) {
+          port = await availablePort(attempt === 0 ? port : 0);
+          const { args, env } = plugin.buildLaunch({ port, token });
+          const command = ['node', quoteArg(plugin.resolveEntryPath()), ...args.map(quoteArg)].join(' ');
+          const job = this.jobs.start({
+            command,
+            cwd: process.cwd(),
+            timeoutMs: SESSION_LIFETIME_MS,
+            extraEnv: env,
+          });
+          record.jobId = job.id;
 
-        const healthy = await waitForHealth(healthUrl, startupTimeoutMs, startupPollIntervalMs, healthTimeoutMs);
-        if (!healthy) {
-          this.jobs.kill(job.id);
-          record.jobId = undefined;
-          record.status = 'error';
-          record.error = `${name} did not become healthy within ${(startupTimeoutMs / 1000).toFixed(0)}s`;
-          return { state: this.toState(record) };
+          const healthy = await waitForHealth(
+            healthUrl(), startupTimeoutMs, startupPollIntervalMs, healthTimeoutMs,
+            plugin.healthIdentity, () => this.jobs.get(job.id)?.status !== 'running',
+          );
+          if (!healthy) {
+            const collision = this.jobs.tail(job.id)?.stderr.includes('EADDRINUSE');
+            this.jobs.kill(job.id);
+            record.jobId = undefined;
+            if (collision && attempt < 2) continue;
+            record.status = 'error';
+            record.error = `${name} did not become healthy within ${(startupTimeoutMs / 1000).toFixed(0)}s`;
+            return { state: this.toState(record) };
+          }
+          break;
         }
       }
+      record.config = { ...record.config, port };
 
       // A few retries with backoff: `/health` answering doesn't guarantee the
       // full MCP handshake will too, a beat later, on a server whose HTTP
@@ -256,6 +281,7 @@ export class PluginRegistry {
       name: record.config.name,
       package: record.config.package,
       status: record.status,
+      ...(record.config.port !== undefined ? { port: record.config.port } : {}),
       ...(record.error ? { error: record.error } : {}),
     };
   }
@@ -312,10 +338,13 @@ function quoteArg(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-async function probeHealth(url: string, healthTimeoutMs: number): Promise<boolean> {
+async function probeHealth(url: string, healthTimeoutMs: number, identity?: string): Promise<boolean> {
   try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(healthTimeoutMs) });
-    return res.ok;
+    const res = await fetch(url, { redirect: 'error', signal: AbortSignal.timeout(healthTimeoutMs) });
+    if (!res.ok) { await res.body?.cancel(); return false; }
+    if (identity === undefined) { await res.body?.cancel(); return true; }
+    const body = await res.json() as { ok?: unknown; plugin?: unknown };
+    return body?.ok === true && body?.plugin === identity;
   } catch {
     return false;
   }
@@ -326,13 +355,34 @@ async function waitForHealth(
   timeoutMs: number,
   pollIntervalMs: number,
   healthTimeoutMs: number,
+  identity?: string,
+  exited: () => boolean = () => false,
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (await probeHealth(url, healthTimeoutMs)) return true;
+    if (exited()) return false;
+    if (await probeHealth(url, healthTimeoutMs, identity) && !exited()) return true;
     await sleep(pollIntervalMs);
   }
   return false;
+}
+
+/** Bind rather than scan: never send probes to arbitrary services on a port range. */
+async function availablePort(preferred: number): Promise<number> {
+  try {
+    return await new Promise<number>((resolve, reject) => {
+      const server = createServer();
+      server.once('error', reject);
+      server.listen(preferred, '127.0.0.1', () => {
+        const address = server.address();
+        const port = typeof address === 'object' && address ? address.port : 0;
+        server.close(err => err ? reject(err) : resolve(port));
+      });
+    });
+  } catch (err) {
+    if (preferred !== 0 && (err as NodeJS.ErrnoException).code === 'EADDRINUSE') return availablePort(0);
+    throw err;
+  }
 }
 
 function sleep(ms: number): Promise<void> {
