@@ -56,6 +56,14 @@ describe('ActivityStatus', () => {
     assert.match(text, /↓3,140 ~52\.4\/s/);
   });
 
+  it('marks live estimates and keeps their throughput visible', () => {
+    const text = metricRow({
+      state: 'generating',
+      metrics: { outputTokens: 1240, outputTokensApproximate: true, rates: { output: 62 } },
+    });
+    assert.match(text, /↓~1,240 ~62\.0\/s/);
+  });
+
   it('rates the prompt too when the provider reported a clean first-token time', () => {
     const text = metricRow({
       state: 'generating',

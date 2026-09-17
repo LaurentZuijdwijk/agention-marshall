@@ -1,4 +1,5 @@
 import { useMemo, useRef } from 'react';
+import { StreamingMetrics } from './streaming-metrics.js';
 import type { Dispatch, SetStateAction } from 'react';
 import { formatCost } from '@agentionai/marshall-engine';
 import type { ActivityMetrics } from '../view/ActivityStatus.js';
@@ -36,6 +37,7 @@ export interface UseTranscriptPortOptions {
 export function useTranscriptPort({
   transcript, approvals, questions, setSteering, prefs, setActivity, setMetrics, setMode,
 }: UseTranscriptPortOptions): TranscriptPort {
+  const streamingMetrics = useRef(new StreamingMetrics());
   const live = useRef({ transcript, approvals, questions, setSteering, prefs });
   live.current = { transcript, approvals, questions, setSteering, prefs };
 
@@ -43,11 +45,18 @@ export function useTranscriptPort({
   // a pure event → transcript mapping.
   return useMemo((): TranscriptPort => ({
     push: (role, content, extra) => live.current.transcript.push(role, content, extra),
+    // `append` returns nothing for a chunk it held back: re-rendering the whole
+    // app for a repaint that shows the same numbers is a cost a user who turned
+    // the stream off has already declined once.
     appendToken: (text) => {
       setActivity('generating');
+      const metrics = streamingMetrics.current.append(text);
+      if (metrics) setMetrics(metrics);
       if (live.current.prefs.read().stream) live.current.transcript.appendStream(text);
     },
     appendReasoning: (text) => {
+      const metrics = streamingMetrics.current.append(text);
+      if (metrics) setMetrics(metrics);
       if (live.current.prefs.read().showReasoning) live.current.transcript.appendReasoning(text);
     },
     takeStream: () => live.current.transcript.takeStream(),
@@ -58,13 +67,14 @@ export function useTranscriptPort({
     // — those are waiting on the user, and the turn can render underneath them.
     turnStarted: () => {
       setActivity('thinking');
+      streamingMetrics.current.reset();
       setMetrics({});
       setMode(prev => (prev.type === 'idle' ? { type: 'running' } : prev));
     },
     // The turn's rollup, not the session's: the row sits under the turn you are
     // watching. `/tokens` is where the session total lives.
-    reportUsage: ({ turn, durationMs, rates, ttftMs }) => {
-      setMetrics({
+    reportUsage: ({ turn, durationMs, rates, ttftMs, final }) => {
+      setMetrics(streamingMetrics.current.report({
         inputTokens: turn.inputTokens,
         outputTokens: turn.outputTokens,
         durationMs,
@@ -72,7 +82,7 @@ export function useTranscriptPort({
         rates,
         ttftMs,
         reasoningTokens: turn.reasoningTokens,
-      });
+      }, final));
     },
     turnEnded: (outcome) => {
       live.current.setSteering(outcome === 'interrupted');

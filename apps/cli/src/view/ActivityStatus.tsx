@@ -23,11 +23,13 @@ export type ActivityState = 'idle' | 'loading' | 'thinking' | 'generating' | 'co
 export interface ActivityMetrics {
   inputTokens?: number;
   outputTokens?: number;
+  /** Live text estimate (roughly four characters per token). */
+  outputTokensApproximate?: boolean;
   durationMs?: number;
   /** Pre-formatted, because whether a cost is even knowable is the engine's call. */
   cost?: string;
   /**
-   * Tokens per second, already measured and vetted by the engine.
+   * Tokens per second, from provider timing or a live text estimate.
    *
    * Rendered next to the count each belongs to rather than as its own segment,
    * because that is the only place the pairing is unambiguous: the rates are the
@@ -54,12 +56,10 @@ export interface ActivityMetrics {
 /**
  * The turn's spend, sub-agents included.
  *
- * Tokens are the provider's own numbers, sampled as the turn runs — so the row
- * fills in mid-turn rather than staying blank until the answer lands. Only the
- * rate is ours: output tokens over wall-clock, which counts the time spent in
- * tool calls and approvals as generation time. It reads low on a turn that sat
- * waiting for a human, and that is the honest reading of "how fast is this
- * going", which is the question the row answers.
+ * While streaming, approximate counts are marked ~ until provider usage lands.
+ * The live rate averages streamed text since its first chunk, including tool
+ * and approval waits; once a provider count lands it brings its own rate, and
+ * the final counts and rates are the provider's.
  */
 export function ActivityStatus({
   state, metrics, pending = 0, blocked = false, canSkipReasoning = false,
@@ -118,7 +118,7 @@ export function ActivityStatus({
   if (metrics && (metrics.inputTokens !== undefined || metrics.outputTokens !== undefined)) {
     const counts = (showRates: boolean) =>
       withRate('↑', metrics.inputTokens, metrics.rates?.input, showRates)
-        + `  ↓${formatTokens(metrics.outputTokens)}${thinking}`
+        + `  ↓${metrics.outputTokensApproximate ? '~' : ''}${formatTokens(metrics.outputTokens)}${thinking}`
         + (showRates && formatRate(metrics.rates?.output) ? ` ~${formatRate(metrics.rates?.output)}` : '');
     const duration = metrics.durationMs !== undefined ? formatDuration(metrics.durationMs) : undefined;
     const ttft = metrics.ttftMs !== undefined ? `${formatDuration(metrics.ttftMs)}→1st` : undefined;
