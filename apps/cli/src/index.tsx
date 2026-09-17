@@ -15,6 +15,7 @@ import { installHttpTrace } from './startup/http-trace.js';
 import { maybeRespawnForHeap } from './startup/heap-size.js';
 import { installResizeRedraw } from './view/resize.js';
 import { runHeadless } from './startup/headless.js';
+import { setTerminalTitle } from './startup/terminal-title.js';
 
 // Long sessions can exhaust Node's old-space heap, which is only raised by a
 // startup flag. Re-exec with --max-old-space-size when it isn't already set,
@@ -71,6 +72,9 @@ if (flags.message !== undefined) {
 
 installCrashLogging(workspaceRoot, flags.private);
 
+const restoreTitle = setTerminalTitle(workspaceRoot);
+process.once('exit', restoreTitle);
+
 // Started before render so the round trip overlaps with boot; the App shows the
 // result as a transcript row once the banner is done.
 const updateCheck = checkForUpdate();
@@ -108,6 +112,7 @@ inkInstance = render(
 );
 
 await inkInstance.waitUntilExit();
+restoreTitle();
 
 // Leave explicitly. An aborted LLM request or the update check can leave
 // a socket pending, and node would sit there indefinitely with the UI already
