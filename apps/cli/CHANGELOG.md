@@ -1,5 +1,15 @@
 # @agentionai/marshall-cli
 
+## 0.25.3
+
+### Patch Changes
+
+- Pin internal workspace dependencies to real semver ranges instead of `*`. A `*`
+  range carries no version floor, so npm resolved whatever `latest` happened to be
+  at install time — a CLI published a minute before the engine it needs installed
+  against the previous engine and crashed with `session.readyPlugins is not a
+function`. Real ranges also let changesets keep dependents in sync.
+
 ## 0.25.2
 
 ### Patch Changes
