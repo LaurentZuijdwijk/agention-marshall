@@ -1,5 +1,18 @@
 # @agentionai/marshall-cli
 
+## 0.25.1
+
+### Patch Changes
+
+- a16b8a0: Link a local guided extension installation page when enabling the browser plugin, with a ZIP download button, Chrome/Edge instructions, pairing help, and a website download link. Build the public extension ZIP during website deployment.
+
+  The CLI loads the plugin's setup instructions lazily and prints an upgrade notice instead of failing when the installed plugin predates the export; the CLI now pins `@agentionai/marshall-plugin-browser` to `^0.3.1` rather than `*`.
+
+- 38c4359: Show increasing approximate output token counts and throughput while streaming.
+- 5f3487e: Label interactive terminal tabs with Marshall and the workspace name, restoring the previous title on exit.
+- Updated dependencies [a16b8a0]
+  - @agentionai/marshall-plugin-browser@0.3.1
+
 ## 0.25.0
 
 ### Minor Changes

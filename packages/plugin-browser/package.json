@@ -1,6 +1,6 @@
 {
   "name": "@agentionai/marshall-plugin-browser",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "type": "module",
   "description": "Local MCP server that gives the Marshall coding agent browser control and screenshots, backed by a companion Chrome extension.",
   "bin": {
