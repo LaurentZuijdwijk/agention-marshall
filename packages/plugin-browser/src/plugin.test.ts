@@ -1,8 +1,29 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { sep } from 'node:path';
-import { marshallPlugin } from './plugin.js';
+import { marshallPlugin, extensionSetupInstructions } from './plugin.js';
 import { DEFAULT_PORT } from './constants.js';
+
+test('setup instructions link the guide, ZIP and bridge on the chosen port', () => {
+  for (const port of [DEFAULT_PORT, 9999]) {
+    const instructions = extensionSetupInstructions({ port });
+    assert.ok(instructions.includes(`http://127.0.0.1:${port}/setup`));
+    assert.ok(instructions.includes(`http://127.0.0.1:${port}/extension.zip`));
+    assert.ok(instructions.includes(`ws://127.0.0.1:${port}/bridge`));
+    assert.ok(instructions.includes('https://marshall.agention.ai/docs.html#browser-extension'));
+    assert.match(instructions, /manifest\.json/);
+    assert.match(instructions, /Save & connect/);
+    assert.match(instructions, /No reinstall needed/);
+  }
+});
+
+test('an already-paired extension is not told to paste a token it never saw', () => {
+  assert.match(extensionSetupInstructions(), /paste the pairing token/);
+  const paired = extensionSetupInstructions({ paired: true });
+  assert.doesNotMatch(paired, /paste the pairing token/);
+  assert.match(paired, /keeps its token/);
+  assert.ok(paired.includes(`ws://127.0.0.1:${DEFAULT_PORT}/bridge`), 'the bridge URL still helps a manual re-pair');
+});
 
 test('marshallPlugin exposes the shape PluginRegistry expects', () => {
   assert.equal(marshallPlugin.name, 'browser');

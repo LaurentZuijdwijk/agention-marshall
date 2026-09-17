@@ -14,6 +14,60 @@
  * the whole reason the fuller design distributes plugins as private npm
  * packages — is future work once that hook system exists.
  */
+import { manualInstallCommand } from '../update-check.js';
+
 export const KNOWN_PLUGINS: Record<string, string> = {
   browser: '@agentionai/marshall-plugin-browser/plugin',
 };
+
+/**
+ * The one function the CLI needs from the plugin: the guided-setup text shown
+ * after `/plugins add browser`. Mirrored structurally rather than imported
+ * statically (same pattern as the engine's `PluginRegistry`) so an installed
+ * copy that predates the export is a value problem `loadExtensionSetupInstructions`
+ * can report, not a startup crash of the whole CLI.
+ */
+export interface ExtensionSetupInstructions {
+  (opts?: { paired?: boolean }): string;
+}
+
+/**
+ * Load the plugin's guided-setup export lazily, at the moment `/plugins add`
+ * needs it. Returns null when the package is missing *or* predates the export —
+ * the caller decides what to show (see `extensionSetupNotice`). Never throws:
+ * a bad installed copy must not take the command, let alone the CLI, down.
+ */
+export async function loadExtensionSetupInstructions(
+  load: () => Promise<unknown> = () => import(KNOWN_PLUGINS.browser),
+): Promise<ExtensionSetupInstructions | null> {
+  try {
+    const mod = await load();
+    const fn = (mod as { extensionSetupInstructions?: unknown }).extensionSetupInstructions;
+    return typeof fn === 'function' ? (fn as ExtensionSetupInstructions) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The text to print after enabling the browser plugin. Delegates to the
+ * plugin when it can answer; otherwise says so and names the way out —
+ * upgrading the CLI (which carries a pinned, newer plugin) and re-adding the
+ * plugin in a fresh process, since the running one keeps its old copy.
+ */
+export function extensionSetupNotice(instructions: ExtensionSetupInstructions | null, opts: { paired: boolean }): string {
+  try {
+    const text = instructions?.({ paired: opts.paired });
+    if (typeof text === 'string' && text.trim()) return text;
+  } catch {
+    // Help text must not hide the running status or a newly generated token.
+  }
+  return [
+    'Browser plugin is running, but guided setup help is unavailable in this installed copy.',
+    'Existing browser connections can continue working; upgrading enables the latest setup help.',
+    `Upgrade: ${manualInstallCommand()}`,
+    'For a global npm installation, run the upgrade command in your shell. For a source checkout, pull the release, run npm install, then npm run build:all.',
+    'Restart marshall, then run /plugins add browser.',
+    'Manual setup steps: https://marshall.agention.ai/docs.html#browser-extension',
+  ].join('\n');
+}

@@ -24,8 +24,15 @@ This spawns the server for you (reusing one already running at the default
 port, if there is one), health-checks it, registers it as an MCP server, and
 persists a pairing token in your global config — so it comes back up
 automatically on future launches too, with no re-pairing needed. The first
-time, it prints the token; click the extension's toolbar icon and paste it
-into the popup (below) and you're done. `/plugins disable browser` stops it and unregisters
+time, it prints the token and a link to a local guided setup page at
+`http://127.0.0.1:8712/setup`. Open it for a **Download extension ZIP** button
+and step-by-step Chrome/Edge installation instructions; no checkout or build
+is required. You can also [download from the website](https://marshall.agention.ai/docs.html#browser-extension)
+before starting Marshall. The website ZIP tracks the latest site deployment;
+the local ZIP matches your installed plugin. Keep Marshall running while pairing. Extract the ZIP into a
+permanent folder, then use **Load unpacked** on your browser's extensions page
+to select the folder containing `manifest.json`. Pin the extension, open its
+popup, paste the pairing token, and click **Save & connect**. `/plugins disable browser` stops it and unregisters
 it. `/plugins` (or `/plugins list`) on its own lists what's configured.
 
 ### The manual way
@@ -49,8 +56,11 @@ marshall-plugin-browser is running.
    { "mcpServers": [{ "name": "browser", "url": "http://127.0.0.1:8712/mcp" }] }
    ```
 
-2. Load `marshall-browser-extension`'s `dist/` folder into Chrome
-   (`chrome://extensions` → Developer mode → Load unpacked), click its
+2. Open [the guided setup page](http://127.0.0.1:8712/setup) while the
+   server is running (use your server port if changed), download the ZIP,
+   and extract it into a permanent folder. Load
+   the extracted folder into Chrome (`chrome://extensions` → Developer mode
+   → Load unpacked), click its
    toolbar icon, and paste the pairing token into the popup.
 
 Restarting a manually-run server generates a new token; re-paste it into the
@@ -88,6 +98,9 @@ server returning image content blocks gets this, not just this one.
 
 Deliberately not in v1: multi-tab management, full-page screenshot
 stitching, an arbitrary-JS `eval` tool, and accessibility-tree reading.
+
+The ZIP is included in the published plugin package and contains no pairing
+token. You can download it again while the server is running.
 
 ## Development
 

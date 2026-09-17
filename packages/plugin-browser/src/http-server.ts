@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { Duplex } from 'node:stream';
@@ -5,6 +6,7 @@ import { createMcpExpressApp } from '@modelcontextprotocol/sdk/server/express.js
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { ExtensionBridge } from './bridge.js';
+import { extensionSetupPage } from './extension-setup.js';
 import { registerBrowserTools } from './tools.js';
 
 export interface StartOptions {
@@ -53,6 +55,27 @@ export async function startServer(options: StartOptions): Promise<RunningServer>
     res.on('close', () => { transport.close(); mcpServer.close(); });
     await mcpServer.connect(transport);
     await transport.handleRequest(req, res, req.body);
+  });
+
+  app.get('/setup', (_req: IncomingMessage, res: ServerResponse) => {
+    res.setHeader('content-type', 'text/html; charset=utf-8');
+    res.setHeader('cache-control', 'no-store');
+    res.setHeader('content-security-policy', "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
+    res.setHeader('x-content-type-options', 'nosniff');
+    res.end(extensionSetupPage(port));
+  });
+
+  // Public, static extension assets only: no pairing token is embedded in the ZIP.
+  app.get('/extension.zip', async (_req: IncomingMessage, res: ServerResponse) => {
+    try {
+      const zip = await readFile(new URL('../dist/marshall-browser-extension.zip', import.meta.url));
+      res.setHeader('content-type', 'application/zip');
+      res.setHeader('content-disposition', 'attachment; filename="marshall-browser-extension.zip"');
+      res.end(zip);
+    } catch {
+      res.statusCode = 404;
+      res.end('Extension ZIP is unavailable. Rebuild or reinstall the browser plugin.');
+    }
   });
 
   app.get('/health', (_req: IncomingMessage, res: ServerResponse) => {

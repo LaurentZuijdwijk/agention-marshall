@@ -23,7 +23,7 @@
   },
   "dependencies": {
     "@agentionai/marshall-engine": "*",
-    "@agentionai/marshall-plugin-browser": "*",
+    "@agentionai/marshall-plugin-browser": "^0.3.0",
     "@agentionai/marshall-tools": "*",
     "chalk": "^5.3.0",
     "dotenv": "^16.6.1",

@@ -6,9 +6,10 @@
     "packages/*"
   ],
   "scripts": {
-    "cli": "npm run build -w packages/tools -w packages/engine && node --import tsx/esm apps/cli/src/index.tsx",
-    "build": "npm run build -w packages/tools -w packages/engine",
+    "cli": "npm run build -w packages/tools -w packages/engine -w packages/plugin-browser && node --import tsx/esm apps/cli/src/index.tsx",
+    "build": "npm run build -w packages/tools -w packages/engine -w packages/plugin-browser",
     "build:all": "npm run build -w packages/tools -w packages/engine -w packages/plugin-browser -w apps/cli",
+    "build:site": "node packages/plugin-browser/scripts/package-extension.mjs && mkdir -p site/downloads && cp packages/plugin-browser/dist/marshall-browser-extension.zip site/downloads/ && cp install.sh site/install.sh",
     "pretest": "npm run build",
     "test": "npm run test --workspaces --if-present",
     "release": "npm test && npm run build:all && changeset publish",

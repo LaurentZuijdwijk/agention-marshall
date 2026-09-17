@@ -683,10 +683,16 @@ describe('/plugins', () => {
   });
 
   it('adding an already-configured plugin calls enablePlugin, not addPlugin', async () => {
-    const { deps, calls } = setup({ plugins: [plugin()] });
+    const { deps, calls, pushed } = setup({ plugins: [plugin()] });
     runSlashCommand('/plugins add browser', deps);
     await new Promise(resolve => setImmediate(resolve));
     assert.deepEqual(calls.pluginEnabled, ['browser']);
+    assert.match(pushed[0].content, /http:\/\/127\.0\.0\.1:8712\/setup/);
+    assert.match(pushed[0].content, /No reinstall needed/);
+    // Re-enabling reuses the stored token and prints none, so the steps must not
+    // send the user looking for one to paste.
+    assert.doesNotMatch(pushed[0].content, /pairing token:/);
+    assert.doesNotMatch(pushed[0].content, /paste the pairing token/);
     assert.deepEqual(calls.pluginAdded, []);
     assert.equal(calls.pluginsChanged, 1);
   });
@@ -698,6 +704,20 @@ describe('/plugins', () => {
     assert.deepEqual(calls.pluginAdded, [{ package: '@agentionai/marshall-plugin-browser/plugin', name: 'browser' }]);
     assert.equal(calls.pluginsChanged, 1);
     assert.match(pushed[0].content, /pairing token: fresh-token/);
+    assert.match(pushed[0].content, /http:\/\/127\.0\.0\.1:8712\/setup/);
+    assert.match(pushed[0].content, /http:\/\/127\.0\.0\.1:8712\/extension\.zip/);
+    assert.match(pushed[0].content, /Load unpacked/);
+    assert.match(pushed[0].content, /paste the pairing token/, 'a token was printed, so pasting it is the next step');
+  });
+
+  it('does not offer installation when the browser server failed to start', async () => {
+    const { deps, pushed } = setup();
+    deps.session!.addPlugin = async () => ({ state: plugin({ status: 'error', error: 'startup failed' }) });
+    runSlashCommand('/plugins add browser', deps);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(pushed[0].role, 'error');
+    assert.match(pushed[0].content, /startup failed/);
+    assert.doesNotMatch(pushed[0].content, /\/setup|extension\.zip/);
   });
 
   it('adding an unknown name reports the known list instead of guessing', async () => {

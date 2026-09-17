@@ -31,3 +31,19 @@ export const marshallPlugin: MarshallServerPlugin = {
   healthPath: '/health',
   mcpPath: '/mcp',
 };
+
+export function extensionSetupInstructions({ port = DEFAULT_PORT, paired = false } = {}): string {
+  return [
+    `Install the browser extension (guided setup): http://127.0.0.1:${port}/setup`,
+    'Website download: https://marshall.agention.ai/docs.html#browser-extension',
+    `Direct ZIP download (bundled version): http://127.0.0.1:${port}/extension.zip — keep Marshall running.`,
+    'Extract the ZIP into a permanent folder, open chrome://extensions (Edge: edge://extensions), enable Developer mode, then Load unpacked → the folder containing manifest.json.',
+    // A token is printed once, when it is generated. Re-enabling a plugin that
+    // already has one prints nothing, so telling that user to paste the token
+    // sends them looking for a value they were never shown.
+    paired
+      ? `Pin the extension and open its popup — an extension paired earlier keeps its token, so there is nothing to paste. Advanced: bridge URL = ws://127.0.0.1:${port}/bridge`
+      : `Pin the extension, open its popup, paste the pairing token, and click Save & connect. Advanced: bridge URL = ws://127.0.0.1:${port}/bridge`,
+    'Already installed? No reinstall needed — check the popup says connected.',
+  ].join('\n');
+}

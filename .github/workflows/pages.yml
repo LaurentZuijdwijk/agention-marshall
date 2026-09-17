@@ -24,8 +24,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Copy installer into site
-        run: cp install.sh site/install.sh
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # Same script a local preview runs, so site/ is never missing a file the
+      # pages only have once this job has run.
+      - name: Build the site's generated files
+        run: npm run build:site
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

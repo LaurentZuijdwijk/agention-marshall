@@ -23,8 +23,8 @@
     "access": "public"
   },
   "scripts": {
-    "build": "node -e \"fs.rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.build.json",
-    "prepack": "tsc -p tsconfig.build.json",
+    "build": "node -e \"fs.rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.build.json && node scripts/package-extension.mjs",
+    "prepack": "npm run build",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx/esm --test 'src/**/*.test.ts'",
     "start": "node --import tsx/esm src/index.ts"
@@ -38,6 +38,7 @@
   "devDependencies": {
     "@types/node": "^25.0.0",
     "@types/ws": "^8.18.1",
+    "fflate": "^0.8.3",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"
   }

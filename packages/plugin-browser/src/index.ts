@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { extensionSetupInstructions } from './plugin.js';
 import { pathToFileURL } from 'node:url';
 import { generateToken } from './token.js';
 import { startServer } from './http-server.js';
@@ -36,9 +37,9 @@ async function main(): Promise<void> {
       '',
       '1. Add this to .marshall/config.json\'s "mcpServers":',
       `     { "name": "browser", "url": "${server.url}" }`,
-      '2. Load the extension in Chrome (chrome://extensions, "Load unpacked",',
-      '   pick packages/browser-extension/dist), open its options page, and',
-      '   paste the pairing token above.',
+      '',
+      '2. Install and pair the browser extension:',
+      extensionSetupInstructions({ port: server.port }).replace(/^/gm, '   '),
       '',
       'Ctrl-C to stop.',
       '',

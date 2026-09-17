@@ -9,6 +9,10 @@ memory
 # build output
 dist/
 *.js.map
+# Generated into site/ by `npm run build:site` (the Pages deployment, or a
+# local preview that wants the same files the deployed pages link to)
+site/downloads/*.zip
+site/install.sh
 
 # agent scratch
 .marshall/

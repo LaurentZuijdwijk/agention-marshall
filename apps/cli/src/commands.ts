@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import type {
   AgentProfile, AgentJob, McpServerState, PluginConfig, PluginState, SafetyLevel, SafetyAgentConfig, UsageReport,
 } from '@agentionai/marshall-engine';
-import { KNOWN_PLUGINS } from './services/known-plugins.js';
+import { KNOWN_PLUGINS, extensionSetupNotice, loadExtensionSetupInstructions } from './services/known-plugins.js';
 import { formatUsageReport } from './format.js';
 import type { BackgroundJob } from '@agentionai/marshall-tools';
 import type { Approvals } from './hooks/useApprovals.js';
@@ -440,13 +440,19 @@ export function runSlashCommand(input: string, deps: CommandDeps): void {
           })();
 
       work2
-        .then(result => {
+        .then(async result => {
           if (result === null) {
             transcript.push('error', `no plugin named "${name}" — known: ${Object.keys(KNOWN_PLUGINS).join(', ')}`);
             return;
           }
           deps.onPluginsChanged?.();
           const lines = [describePlugin(result.state)];
+          if (result.state.status === 'running' && result.state.package === KNOWN_PLUGINS.browser) {
+            // Loaded lazily, so a plugin copy older than this CLI degrades to a
+            // friendly upgrade notice instead of taking the CLI down at import.
+            const instructions = await loadExtensionSetupInstructions();
+            lines.push('', extensionSetupNotice(instructions, { paired: !result.generatedToken }));
+          }
           if (result.generatedToken) lines.push('', pairingInstructions(result.generatedToken));
           transcript.push(result.state.status === 'running' ? 'info' : 'error', lines.join('\n'));
         })
