@@ -213,6 +213,19 @@ export interface ToolConfig {
    * silently.
    */
   attachImages?: (images: { data: string; mimeType: string }[]) => void;
+  /**
+   * Why an image must not be handed to `attachImages` this turn, or null when
+   * it may be. Separate from `attachImages` being absent: absent means the
+   * belt has nowhere to put an image, this means there is somewhere but the
+   * model behind it cannot read one.
+   *
+   * A getter rather than a flag because the answer changes mid-session — a
+   * local model with no vision weights loaded only reveals itself by
+   * rejecting a request, so the engine learns this at the first rejection
+   * and every screenshot after it degrades to text instead of wedging the
+   * conversation on an image the provider will never accept.
+   */
+  imagesUnsupported?: () => string | null;
 }
 
 /** Plain tool spec — used by withApproval so it doesn't need Tool internals */

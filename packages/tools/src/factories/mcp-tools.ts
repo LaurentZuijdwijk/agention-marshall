@@ -97,7 +97,7 @@ export function adaptMcpTools(
   config: ToolConfig,
   options: McpToolOptions,
 ): Tool<string>[] {
-  const { approval, signal, caller, taskContext, attachImages } = config;
+  const { approval, signal, caller, taskContext, attachImages, imagesUnsupported } = config;
   const timeoutMs = options.timeoutMs ?? DEFAULT_MCP_TIMEOUT_MS;
 
   return tools.map((tool) => {
@@ -119,7 +119,7 @@ export function adaptMcpTools(
         if (signal?.aborted) return 'Task interrupted — the tool was not called.';
         try {
           const result = await callWithTimeout(tool, prompt.name, input, timeoutMs, signal);
-          if (isMultimodalResult(result)) return renderMultimodalResult(result, attachImages);
+          if (isMultimodalResult(result)) return renderMultimodalResult(result, attachImages, imagesUnsupported);
           return stringifyResult(result);
         } catch (err) {
           // Never rethrow. The model can react to a described failure; it cannot
@@ -199,14 +199,15 @@ async function callWithTimeout(
  * belt's owner (the engine, via `History.addMessage`) can put them in front
  * of the model on the next turn.
  *
- * Never drops an image silently: one that fails validation, or a belt with
- * no `attachImages` at all (a sub-agent's belt, today), is named in the text
- * result instead, so the model knows a screenshot existed even when it
- * couldn't see it.
+ * Never drops an image silently: one that fails validation, a belt with no
+ * `attachImages` at all (a sub-agent's belt, today), or a model that cannot
+ * read one (`imagesUnsupported`) is named in the text result instead, so the
+ * model knows a screenshot existed even when it couldn't see it.
  */
 function renderMultimodalResult(
   result: McpMultimodalResult,
   attachImages: ((images: { data: string; mimeType: string }[]) => void) | undefined,
+  imagesUnsupported?: () => string | null,
 ): string {
   if (result.images.length === 0) return result.text;
 
@@ -226,11 +227,19 @@ function renderMultimodalResult(
   }
 
   const notes: string[] = [];
-  if (accepted.length > 0 && attachImages) {
+  // Asked only when there is something to attach, so a belt that would never
+  // use the answer does not pay for it.
+  const blocked = accepted.length > 0 ? imagesUnsupported?.() ?? null : null;
+  if (accepted.length > 0 && attachImages && !blocked) {
     attachImages(accepted);
     notes.push(`(${accepted.length} image${accepted.length === 1 ? '' : 's'} attached above)`);
   } else if (accepted.length > 0) {
-    notes.push(`(this tool returned ${accepted.length} image(s), but nothing here can display them)`);
+    // Naming the reason matters more here than in the other two branches: this
+    // is the one the model can act on, by describing what it needs from the
+    // page in text or asking the user to switch to a vision-capable model.
+    notes.push(blocked
+      ? `(this tool returned ${accepted.length} image(s), but they could not be shown to this model: ${blocked})`
+      : `(this tool returned ${accepted.length} image(s), but nothing here can display them)`);
   }
   for (const reason of rejected) notes.push(`(an image was dropped: ${reason})`);
 
