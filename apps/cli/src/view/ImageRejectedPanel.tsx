@@ -12,10 +12,13 @@ const OPTIONS: Array<{ label: string; hint: string; value: ImageRejectedChoice }
 ];
 
 /**
- * Shown when a provider rejects a turn specifically because of an attached
- * image — a local model with no vision support, most often. The raw provider
- * message is already in the transcript above this (see the `image-rejected`
- * case in useEngineClient.ts); this panel is only the two ways forward.
+ * Shown when a provider rejects a turn specifically because of an image — a
+ * local model with no vision support, most often. The raw provider message is
+ * already in the transcript above this (see the `image-rejected` case in
+ * useEngineClient.ts); this panel is only the two ways forward.
+ *
+ * "the image", not "the attached image": the image is as often a screenshot a
+ * tool returned as one the user attached, and the user did not attach that.
  */
 export function ImageRejectedPanel({ columns, onSelect, onCancel }: {
   columns: number;
@@ -36,7 +39,7 @@ export function ImageRejectedPanel({ columns, onSelect, onCancel }: {
 
   return (
     <Box flexDirection="column" borderStyle="round" borderColor={C.warn} paddingX={1} marginY={1}>
-      <Text color={C.warn} bold>{truncate(`${G.warn} this model could not read the attached image`, width)}</Text>
+      <Text color={C.warn} bold>{truncate(`${G.warn} this model could not read the image`, width)}</Text>
       <Box marginTop={1} flexDirection="column">
         {OPTIONS.map((opt, i) => {
           const active = i === cursor;

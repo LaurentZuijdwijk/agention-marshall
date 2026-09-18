@@ -47,6 +47,18 @@ const CANNOT_SEND_IMAGES: Partial<Record<Provider, string>> = {
   mistral: 'mistral accepts images only by URL, not as uploaded data',
 };
 
+/**
+ * Why this provider cannot carry an image at all, or null when it can.
+ *
+ * Split out of `checkAttachments` so the tool path can ask the same question:
+ * a screenshot from an MCP server never passes through `checkAttachments` —
+ * it reaches the model through `ToolConfig.attachImages` instead — and on
+ * ollama it would hit exactly the silent drop described above.
+ */
+export function providerCannotSendImages(provider: Provider): string | null {
+  return CANNOT_SEND_IMAGES[provider] ?? null;
+}
+
 /** The reason this task cannot be sent as-is, or null when it can. */
 export function checkAttachments(
   profile: AgentProfile,
@@ -54,7 +66,7 @@ export function checkAttachments(
 ): string | null {
   if (images.length === 0) return null;
 
-  const unsupported = CANNOT_SEND_IMAGES[profile.provider];
+  const unsupported = providerCannotSendImages(profile.provider);
   if (unsupported) {
     return `Cannot attach an image: ${unsupported}. Switch the deep model to another provider, or send the task without it.`;
   }

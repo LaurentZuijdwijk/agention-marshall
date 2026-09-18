@@ -3,7 +3,7 @@ import { readFile, readdir, rm, appendFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import {
-  History, AgentEvent, BaseAgent, isToolUseContent, isToolResultContent, isTextContent, toolResult, text,
+  History, AgentEvent, BaseAgent, isToolUseContent, isToolResultContent, isTextContent, isImageContent, toolResult, text,
 } from '@agentionai/agents/core';
 import type { ReducibleEntry } from '@agentionai/agents/core';
 import { toolResultMaskingPlugin } from '@agentionai/agents/history/plugins';
@@ -44,7 +44,7 @@ import {
 import { runAgent } from './streaming.js';
 import { formatTrace, traceMode } from './history-trace.js';
 import { SessionHistory } from './session-history.js';
-import { checkAttachments, buildInput } from './images.js';
+import { checkAttachments, buildInput, providerCannotSendImages } from './images.js';
 import type { ImageAttachment } from './images.js';
 import {
   describeAgentError, providerErrorDiagnostics, classifyProviderError,
@@ -273,6 +273,22 @@ export class Session {
   private readonly startedAtMs = Date.now();
   /** Local llama.cpp models are loaded by the first agent construction only. */
   private llamaModelLoaded = false;
+  /**
+   * Set once a provider has rejected a request for carrying an image.
+   *
+   * Vision support is not knowable up front for the locally-hosted providers
+   * (see CANNOT_SEND_IMAGES in images.ts — llama.cpp and OpenRouter are left
+   * out on purpose, because it depends on the model loaded, not the
+   * provider). The rejection itself is therefore the only reliable signal,
+   * and this is what remembers it: `ToolBelt` reads it through
+   * `ToolConfig.imagesUnsupported`, so the *next* screenshot an MCP server
+   * returns is described in text instead of attached and rejected again.
+   *
+   * Session-scoped rather than turn-scoped because the fact it records is:
+   * the loaded model does not change between turns. Cleared by `setProfiles`
+   * — a different model deserves to be asked again.
+   */
+  private visionRejected = false;
   private controller: AbortController | null = null;
   /** The agent driving the turn currently in flight, set alongside `controller`
    *  — not by `beginTurn` itself, since the agent doesn't exist yet at that
@@ -406,6 +422,7 @@ export class Session {
       maskingPlugin: this.maskingPlugin,
       mcp: this.mcp,
       history: this.history,
+      visionRejected: () => this.visionRejected,
     });
 
     this.logTierRouting();
@@ -425,6 +442,11 @@ export class Session {
    */
   setProfiles(deep: AgentProfile, fast?: AgentProfile): void {
     this.config = { ...this.config, agent: deep, models: { deep, ...(fast ? { fast } : {}) } };
+    // The one piece of learned state a switch has to forget: it was learned
+    // about the model being replaced. Leaving it set is what would make
+    // "change model" — the second option on the rejected-image panel — fail
+    // to fix the very thing the user picked it for.
+    this.visionRejected = false;
     this.toolBelt.rebuildRoleTools();
     // The plugin stays registered and keeps working; only the model behind it
     // changes. Rebuilt lazily so a switch costs nothing until history is big
@@ -762,6 +784,69 @@ export class Session {
     this.history.replaceEntries(entries.slice(0, -1));
     this.log('CONTEXT_ERROR_POPPED_LAST_MESSAGE');
     return true;
+  }
+
+  /**
+   * Whether anything currently in history carries an image.
+   *
+   * `run()`'s `images` parameter answers a narrower question — what the user
+   * attached to *this* turn — and using it alone is what let the reported
+   * llama.cpp failure through. A screenshot from an MCP server arrives by a
+   * different door: the belt's `attachImages` appends it as a synthetic user
+   * entry (see ToolBelt.forTurn), so `images` is empty for it, and it stays
+   * in history for every turn afterwards. Reading history covers both doors,
+   * and covers them on the later turns too — without that, a user who typed
+   * "continue" after a rejection got the same rejection with the same
+   * unhelpful classification, forever.
+   *
+   * Only asked on the error path, so walking every entry is not on the hot
+   * path for a turn that succeeds.
+   */
+  private historyHasImages(): boolean {
+    return this.history.rawEntries.some(entry => entry.content.some(isImageContent));
+  }
+
+  /**
+   * Take every image out of history, leaving a note where one was.
+   *
+   * `popLastHistoryMessage` already discards the rejected turn's tail, which
+   * is enough when the image was the last thing added — a user attachment, or
+   * the synthetic entry `attachImages` appends right after a tool_result. It
+   * is not enough for one that has since been buried: a rejection the user
+   * dismissed, or a second screenshot taken after the first went unnoticed.
+   * Those stay in history and poison every later request, which is the shape
+   * the original report hit.
+   *
+   * A stripped entry left with no content is replaced rather than dropped, so
+   * the model is told why the screenshot it asked for is not there instead of
+   * finding a hole where its tool result's "(1 image attached above)" points.
+   * Entries that keep other content — a user turn of text plus attachments —
+   * simply lose the image blocks.
+   */
+  private dropImageContent(): number {
+    // `rawEntries`, not `entries`, for the same reason as dropOrphanedToolResults.
+    const entries = this.history.rawEntries;
+    let removed = 0;
+
+    const stripped = entries.map(entry => {
+      const kept = entry.content.filter(block => {
+        if (!isImageContent(block)) return true;
+        removed++;
+        return false;
+      });
+      if (kept.length === entry.content.length) return entry;
+      return {
+        ...entry,
+        content: kept.length > 0
+          ? kept
+          : [text('[An image here was removed: this model cannot read images. Work from the text result instead, or ask the user to switch to a vision-capable model.]')],
+      };
+    });
+
+    if (removed === 0) return 0;
+    this.history.replaceEntries(stripped);
+    this.log(`IMAGES_DROPPED_FROM_HISTORY count=${removed}`);
+    return removed;
   }
 
   /**
@@ -1438,7 +1523,7 @@ export class Session {
       agent.on(AgentEvent.ERROR, (err: unknown) => {
         if (signal.aborted) return;
         const message = err instanceof Error ? err.message : String(err);
-        const verdict = classifyProviderError(err, message, images.length > 0);
+        const verdict = classifyProviderError(err, message, images.length > 0 || this.historyHasImages());
         // Connection errors join `compressible` here for the same reason:
         // the catch block below has its own recovery plan for both (retry,
         // or compress) and reports the error itself, exactly once, only once
@@ -1462,10 +1547,21 @@ export class Session {
         // client can offer "resend without the image" or "switch models",
         // neither of which a plain error message lets it do.
         if (verdict.kind === 'image-rejected') {
+          // The provider has now told us what no catalogue could (see
+          // `visionRejected`): this model cannot read an image. Recorded
+          // before anything else so that even if the user dismisses the panel
+          // below, the next screenshot is described in text rather than
+          // attached and rejected again.
+          this.visionRejected = true;
           // The rejected turn's user entry (the one carrying the image) is
           // still in history — leave it and a retry resends the same broken
           // request. Same cleanup the compressible path uses below.
           this.popLastHistoryMessage();
+          // And the same for any image the pop did not reach: one attached by
+          // a tool earlier in this turn, or left behind by a rejection the
+          // user dismissed. Popping the tail alone leaves those in place, and
+          // every request after this one carries them.
+          this.dropImageContent();
           this.repairDanglingToolCalls('the request carrying an image was rejected');
           this.client.onOutput({ type: 'image-rejected', message, task });
           this.log(`IMAGE_REJECTED ${diag} ${JSON.stringify(message)}`);
@@ -1507,7 +1603,7 @@ export class Session {
           break;
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          const verdict = classifyProviderError(err, message, images.length > 0);
+          const verdict = classifyProviderError(err, message, images.length > 0 || this.historyHasImages());
           this.log(
             `STREAM_ERROR ${diag} kind=${verdict.kind} shouldCompress=${verdict.compressible} ` +
             `because=${JSON.stringify(verdict.reason)} aborted=${signal.aborted} ` +

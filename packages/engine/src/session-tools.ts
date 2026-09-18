@@ -37,6 +37,7 @@ import { summariseAgentJob } from './agent-jobs.js';
 import type { AgentJobs, AgentToolset } from './agent-jobs.js';
 import { McpRegistry } from './mcp.js';
 import type { SessionHistory } from './session-history.js';
+import { providerCannotSendImages } from './images.js';
 import {
   resolveRoleProfile, resolveModel, contextToolEnabled, resolveSearchProfile, resolveTierProfile,
   resolveNamedAgent,
@@ -115,6 +116,12 @@ export interface ToolBeltDeps {
   mcp: McpRegistry;
   /** Where `ToolConfig.attachImages` lands a screenshot — see `forTurn`. */
   history: SessionHistory;
+  /**
+   * Whether a provider has already rejected this session for carrying an
+   * image. A getter, not a value: the session learns this mid-run, from the
+   * first rejection, and a belt built before that has to see the change.
+   */
+  visionRejected: () => boolean;
   /**
    * The session's id, handed to every agent built here.
    *
@@ -315,6 +322,26 @@ export class ToolBelt {
           'user',
           images.map(img => imageBase64(img.data, img.mimeType as ImageMimeType)),
         );
+      },
+      // Checked before the hatch above is used. Two reasons a screenshot must
+      // not be attached, both of which end with the model being worse off
+      // than if it had simply been told what the tool returned:
+      //
+      //  - the provider drops image blocks on the way out (ollama), so the
+      //    request succeeds and the model answers about an image it never
+      //    saw. The user-attachment path has refused this since images.ts was
+      //    written; this is the same refusal for the tool path, which had
+      //    been going straight past it.
+      //  - the provider rejected an image earlier in this session. Nothing
+      //    can be known about a local model's vision support up front, so
+      //    this is the only form that knowledge takes — see Session's
+      //    `visionRejected`.
+      imagesUnsupported: () => {
+        const unsupported = providerCannotSendImages(opts.coderProfile.provider);
+        if (unsupported) return unsupported;
+        return this.deps.visionRejected()
+          ? 'this model rejected an image earlier in the session'
+          : null;
       },
     };
 
