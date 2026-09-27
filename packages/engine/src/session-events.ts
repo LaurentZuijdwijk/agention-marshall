@@ -1,5 +1,5 @@
 import { AgentEvent, ToolResultEvent } from '@agentionai/agents/core';
-import type { BaseAgent, Tool } from '@agentionai/agents/core';
+import type { BaseAgent, Tool, ToolCallInfo } from '@agentionai/agents/core';
 import { resolveRoleProfile, isDelegated, resolveModel } from './config.js';
 import type { EngineConfig, Role } from './config.js';
 import type { ClientInterface } from './types.js';
@@ -85,42 +85,6 @@ export function assistantText(content: unknown[]): string {
     .trim();
 }
 
-/**
- * One tool call, in any provider's shape.
- *
- * Anthropic emits `{ type: 'tool_use', name, input }`; the chat-completions
- * providers emit `{ type: 'function', function: { name, arguments } }`; the
- * Responses API (`openai`, `codex`) emits `{ type: 'function_call', name,
- * arguments }`. Both of the latter carry the arguments as an unparsed JSON
- * string. Normalising here is what keeps both listeners below from carrying
- * the same branch twice.
- *
- * A shape this does not know is dropped silently — no tool row, no
- * TOOL_CALL log line, a bench count of zero — which is how the Responses
- * shape went unnoticed. Add a provider's shape here when adding the provider.
- */
-export function toolCallsIn(content: unknown[]): { name: string; input: unknown; raw: string }[] {
-  const calls: { name: string; input: unknown; raw: string }[] = [];
-  const parsed = (args: string): unknown => {
-    try { return JSON.parse(args); } catch { return args; }
-  };
-  for (const block of content) {
-    if (!block || typeof block !== 'object' || !('type' in block)) continue;
-    if (block.type === 'tool_use') {
-      const b = block as unknown as { name: string; input: unknown };
-      calls.push({ name: b.name, input: b.input, raw: JSON.stringify(b.input ?? {}) });
-    } else if (block.type === 'function' && 'function' in block) {
-      const b = block as unknown as { function: { name: string; arguments: string } };
-      calls.push({ name: b.function.name, input: parsed(b.function.arguments), raw: b.function.arguments });
-    } else if (block.type === 'function_call' && 'name' in block) {
-      const b = block as unknown as { name: string; arguments?: string };
-      const raw = b.arguments ?? '';
-      calls.push({ name: b.name, input: parsed(raw), raw });
-    }
-  }
-  return calls;
-}
-
 export interface SessionEvents {
   /**
    * Mirror the coder's tool activity to the client. Returns a detach function;
@@ -198,11 +162,14 @@ export function createSessionEvents(deps: {
       };
       for (const tool of tools) tool.on(ToolResultEvent.RESULT, onToolResult);
 
+      // TOOL_USE carries the provider's own payload, read here only for the
+      // narration riding along with the calls. The calls themselves come from
+      // TOOL_CALLS, which the library emits right after it in one shape for
+      // every provider — so the narration still lands above the calls it
+      // introduces, in the order the model wrote them.
       agent.on(AgentEvent.TOOL_USE, (content: unknown) => {
         if (signal.aborted) return;
         if (!Array.isArray(content)) return;
-        // Announced before the calls it introduces, so the transcript keeps the
-        // order the model wrote them in.
         const said = assistantText(content);
         if (said) client.onOutput({ type: 'assistant', text: said });
         // Narration between tool calls is the single largest component of a
@@ -211,7 +178,10 @@ export function createSessionEvents(deps: {
         // itself is the transcript's business, but its size is what a run's
         // cost is made of.
         log(`ASSISTANT_TEXT ${caller ?? 'coder'} ${said?.length ?? 0} chars`);
-        for (const call of toolCallsIn(content)) {
+      });
+      agent.on(AgentEvent.TOOL_CALLS, (calls: ToolCallInfo[]) => {
+        if (signal.aborted) return;
+        for (const call of calls) {
           client.onOutput({
             type: 'tool-call',
             toolName: call.name,
@@ -224,7 +194,7 @@ export function createSessionEvents(deps: {
           // at 200 characters cannot measure a batched edit payload that runs
           // to thousands. Logging the whole thing instead would put entire file
           // contents in the log for every write.
-          log(`TOOL_CALL ${caller ?? 'coder'} ${call.name} ${call.raw.length}ch ${call.raw.slice(0, 200)}`);
+          log(`TOOL_CALL ${caller ?? 'coder'} ${call.name} ${call.rawArguments.length}ch ${call.rawArguments.slice(0, 200)}`);
         }
       });
 
@@ -247,9 +217,8 @@ export function createSessionEvents(deps: {
         });
       }
 
-      agent.on(AgentEvent.TOOL_USE, (content: unknown) => {
-        if (!Array.isArray(content)) return;
-        for (const call of toolCallsIn(content)) {
+      agent.on(AgentEvent.TOOL_CALLS, (calls: ToolCallInfo[]) => {
+        for (const call of calls) {
           client.onOutput({ type: 'tool-call', toolName: call.name, input: call.input, parent });
         }
       });

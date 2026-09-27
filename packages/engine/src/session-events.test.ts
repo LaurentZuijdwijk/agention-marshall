@@ -1,6 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isFailure, toolCallsIn } from './session-events.js';
+import { EventEmitter } from 'node:events';
+import { AgentEvent } from '@agentionai/agents/core';
+import { createSessionEvents, isFailure } from './session-events.js';
+import type { EngineConfig } from './config.js';
+import type { OutputEvent } from './types.js';
 
 // The shapes below are copied from the tools that produce them, not invented:
 // shell-tool.ts builds `parts.join('\n\n')` ending in an `exit code:` line,
@@ -42,28 +46,25 @@ test('an approval denial and an interruption are not tool failures', () => {
   assert.equal(isFailure('Task interrupted by user'), false);
 });
 
-// One call in each provider's shape. The Responses one is what `openai` and
-// `codex` emit; before it was recognised, every tool call on those providers
-// was dropped — no tool rows in the transcript, and a bench run on Codex that
-// fixed a bug with a dozen shell commands reported zero tool calls.
-test('tool calls are read from every provider shape', () => {
-  const args = '{"command":"ls"}';
-  const content = [
-    { type: 'text', text: 'looking' },
-    { type: 'tool_use', id: 'a', name: 'run_shell', input: { command: 'ls' } },
-    { type: 'function', id: 'b', function: { name: 'run_shell', arguments: args } },
-    { type: 'function_call', call_id: 'c', name: 'run_shell', arguments: args },
-  ];
-  const calls = toolCallsIn(content);
-  assert.equal(calls.length, 3, 'the text block is not a call; each of the three shapes is');
-  for (const call of calls) {
-    assert.equal(call.name, 'run_shell');
-    assert.deepEqual(call.input, { command: 'ls' });
-  }
-  assert.equal(calls[2].raw, args);
-});
+// The calls come from TOOL_CALLS, which the library emits in one shape for
+// every provider; TOOL_USE is read only for the narration beside them. Before
+// this, the engine parsed TOOL_USE's per-provider payload itself and dropped
+// the shapes it did not know — every OpenAI and Codex call among them.
+test('tool calls are reported from TOOL_CALLS, after the narration TOOL_USE carries', () => {
+  const outputs: OutputEvent[] = [];
+  const lines: string[] = [];
+  const events = createSessionEvents({
+    client: { onOutput: event => { outputs.push(event); }, requestApproval: async () => 'approve' },
+    getConfig: () => ({}) as EngineConfig,
+    log: line => { lines.push(line); },
+  });
+  const agent = new EventEmitter();
+  events.attachToolListeners(agent as never, [], new AbortController().signal);
 
-test('unparseable arguments are kept as the raw string rather than dropping the call', () => {
-  const [call] = toolCallsIn([{ type: 'function_call', name: 'run_shell', arguments: '{not json' }]);
-  assert.equal(call.input, '{not json');
+  agent.emit(AgentEvent.TOOL_USE, [{ type: 'text', text: 'listing first' }, { type: 'tool_use', id: 'c1', name: 'run_shell', input: { command: 'ls' } }]);
+  agent.emit(AgentEvent.TOOL_CALLS, [{ id: 'c1', name: 'run_shell', input: { command: 'ls' }, rawArguments: '{"command":"ls"}' }]);
+
+  assert.deepEqual(outputs.map(o => o.type), ['assistant', 'tool-call']);
+  assert.deepEqual(outputs[1], { type: 'tool-call', toolName: 'run_shell', input: { command: 'ls' }, subagent: undefined });
+  assert.ok(lines.some(line => line.startsWith('TOOL_CALL coder run_shell 16ch {"command":"ls"}')));
 });
