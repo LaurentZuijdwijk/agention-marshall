@@ -1,6 +1,7 @@
 ---
 "@agentionai/marshall-cli": patch
 "@agentionai/marshall-engine": patch
+"@agentionai/marshall-tools": patch
 ---
 
 Read tool calls from `@agentionai/agents`' `TOOL_CALLS` event (1.17.0) instead of parsing each provider's `TOOL_USE` payload.
