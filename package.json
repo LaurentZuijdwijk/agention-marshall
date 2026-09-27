@@ -20,7 +20,7 @@
     "patch-package": "^8.0.1"
   },
   "dependencies": {
-    "@agentionai/agents": "1.15.0",
+    "@agentionai/agents": "1.16.0",
     "openai": "^7.13.0"
   }
 }
