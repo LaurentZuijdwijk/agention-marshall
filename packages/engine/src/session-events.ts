@@ -86,15 +86,24 @@ export function assistantText(content: unknown[]): string {
 }
 
 /**
- * One tool call, in either provider's shape.
+ * One tool call, in any provider's shape.
  *
  * Anthropic emits `{ type: 'tool_use', name, input }`; the chat-completions
- * providers emit `{ type: 'function', function: { name, arguments } }` with the
- * arguments as an unparsed JSON string. Normalising here is what keeps both
- * listeners below from carrying the same branch twice.
+ * providers emit `{ type: 'function', function: { name, arguments } }`; the
+ * Responses API (`openai`, `codex`) emits `{ type: 'function_call', name,
+ * arguments }`. Both of the latter carry the arguments as an unparsed JSON
+ * string. Normalising here is what keeps both listeners below from carrying
+ * the same branch twice.
+ *
+ * A shape this does not know is dropped silently — no tool row, no
+ * TOOL_CALL log line, a bench count of zero — which is how the Responses
+ * shape went unnoticed. Add a provider's shape here when adding the provider.
  */
-function toolCallsIn(content: unknown[]): { name: string; input: unknown; raw: string }[] {
+export function toolCallsIn(content: unknown[]): { name: string; input: unknown; raw: string }[] {
   const calls: { name: string; input: unknown; raw: string }[] = [];
+  const parsed = (args: string): unknown => {
+    try { return JSON.parse(args); } catch { return args; }
+  };
   for (const block of content) {
     if (!block || typeof block !== 'object' || !('type' in block)) continue;
     if (block.type === 'tool_use') {
@@ -102,9 +111,11 @@ function toolCallsIn(content: unknown[]): { name: string; input: unknown; raw: s
       calls.push({ name: b.name, input: b.input, raw: JSON.stringify(b.input ?? {}) });
     } else if (block.type === 'function' && 'function' in block) {
       const b = block as unknown as { function: { name: string; arguments: string } };
-      let input: unknown;
-      try { input = JSON.parse(b.function.arguments); } catch { input = b.function.arguments; }
-      calls.push({ name: b.function.name, input, raw: b.function.arguments });
+      calls.push({ name: b.function.name, input: parsed(b.function.arguments), raw: b.function.arguments });
+    } else if (block.type === 'function_call' && 'name' in block) {
+      const b = block as unknown as { name: string; arguments?: string };
+      const raw = b.arguments ?? '';
+      calls.push({ name: b.name, input: parsed(raw), raw });
     }
   }
   return calls;
