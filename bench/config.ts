@@ -396,6 +396,11 @@ export const CONFIGURATIONS: BenchConfiguration[] = [
   // On the migration, 83% of input spend is accumulated context re-sent every
   // turn, so this row is the direct test of whether masking reclaims that or
   // merely trades it for retrievals.
+  // Marshall on the Codex backend (ChatGPT login, ~/.marshall/credentials.json),
+  // the row EXTERNAL_HARNESSES's `codex-luna` is compared with: same model,
+  // same backend, same account. Never compare it with the OpenRouter rows —
+  // the provider differs, and so do caching and routing.
+  { name: 'luna-codex', agent: { provider: 'codex', model: 'gpt-5.6-luna' } },
   { name: 'luna-nomask', agent: { provider: 'openrouter', model: 'openai/gpt-5.6-luna' }, noMasking: true },
   {
     name: 'luna-shell-edit',
@@ -469,6 +474,12 @@ export const EXTERNAL_HARNESSES: import('./external-harness.js').ExternalHarness
   { name: 'pi-qwen38flash', harness: 'pi', model: 'qwen/qwen3.8-flash' },
   { name: 'opencode-qwen38flash', harness: 'opencode', model: 'qwen/qwen3.8-flash' },
   { name: 'pi-luna', harness: 'pi', model: 'openai/gpt-5.6-luna' },
+  // The Codex CLI on its own ChatGPT login (~/.codex/auth.json), not
+  // OpenRouter, so it needs no OPENROUTER_API_KEY. Paired with the marshall
+  // `luna-codex` row above.
+  { name: 'codex-luna', harness: 'codex', model: 'gpt-5.6-luna', provider: 'codex' },
+  // oh-my-pi, the pi fork, through the same OpenRouter key as pi-luna.
+  { name: 'omp-luna', harness: 'omp', model: 'openai/gpt-5.6-luna' },
   { name: 'pi-glm', harness: 'pi', model: 'z-ai/glm-5.3-flash' },
 ];
 

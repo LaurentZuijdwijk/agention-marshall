@@ -31,10 +31,11 @@ Worth being honest about, not just aspirational:
 - **The per-request instrumentation is local-only.** Everything under "Per-request measurements"
   below comes from llama-server's own logs, so it exists for llamacpp configs and for nothing else.
   A remote provider reports a prompt's size but never how much of it it had to compute.
-- **External-harness token counts are partial.** `pi` reports real usage (see below).
-  `opencode run` has no working structured-output mode we found — `--format json` produced no
-  stdout in testing — so its token counts are unavailable (shown as `-`) and its tool-call count is
-  a heuristic (counting `$ ` / `✱`/`✗` prefixed lines in its terminal transcript), not a precise one.
+- **External-harness token counts come from each CLI's own report.** `pi --mode json` (and
+  `omp`, the oh-my-pi fork, which streams the same events),
+  `opencode run --format json` (opencode 1.17+; earlier versions printed nothing in that mode) and
+  `codex exec --json` all stream per-request usage, summed the same way (cache reads and writes
+  count as input). `codex` rows run on a ChatGPT login and have no per-token cost.
 - **Single machine, single point in time.** Model behavior on OpenRouter drifts — the same prompt
   against the same model id can route to a different upstream and answer differently run to run
   (we saw this directly: `pi` and `opencode` each failed `qa-minified-token` on one of two trials
@@ -124,7 +125,7 @@ Marshall configs (`config.ts`'s `CONFIGURATIONS`) default to a local `llamacpp` 
 (`MARSHALL_BENCH_HOST`, or `http://127.0.0.1:8080`) — point that at whatever you have running,
 or edit the list to use a different provider entirely; nothing in the harness assumes llamacpp.
 
-### Running `pi` / `opencode`
+### Running `pi` / `opencode` / `codex`
 
 Opt-in only — name them explicitly, since they need the real CLIs installed and
 `OPENROUTER_API_KEY` set, and bill a real API on every call:
@@ -133,6 +134,10 @@ Opt-in only — name them explicitly, since they need the real CLIs installed an
 export OPENROUTER_API_KEY=sk-or-...
 npx tsx run.ts --config pi --config opencode --task qa-minified-token --trials 3
 ```
+
+`codex-luna` is the exception: it runs the Codex CLI on its own ChatGPT login (`codex login`,
+`~/.codex/auth.json`) and needs no OpenRouter key. Compare it with marshall's `luna-codex` row,
+which reaches the same backend through marshall's `codex` provider — not with the OpenRouter rows.
 
 `config.ts`'s `EXTERNAL_HARNESSES` is where their model is set — same field for both, just the
 `provider/model` string each CLI's `--model` flag expects.

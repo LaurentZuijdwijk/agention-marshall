@@ -95,7 +95,7 @@ function execViaPtyStreaming(
 
 export interface ExternalHarnessConfig {
   name: string;
-  harness: 'pi' | 'opencode' | 'aider';
+  harness: 'pi' | 'omp' | 'opencode' | 'aider' | 'codex';
   /** `provider/model`, exactly as each CLI's `--model` flag expects it. */
   model: string;
   /**
@@ -103,7 +103,7 @@ export interface ExternalHarnessConfig {
    * points at the same local router the marshall configs use, which is what
    * makes a `pi` row and a marshall row comparable rather than merely adjacent.
    */
-  provider?: 'openrouter' | 'llama-cpp';
+  provider?: 'openrouter' | 'llama-cpp' | 'codex';
   /**
    * `PI_CODING_AGENT_DIR` for this row — a bench-owned config directory, so the
    * run neither depends on nor modifies the machine's own `~/.pi`. Required for
@@ -151,10 +151,16 @@ export interface ExternalRunOutcome {
  * Parsed as it arrives rather than from a buffered dump — see
  * `execViaPtyStreaming` for why that matters on a long run.
  */
+/**
+ * `omp` (oh-my-pi, a pi fork) — a bun global, so it usually sits in
+ * `~/.bun/bin` rather than on the PATH node inherits. `OMP_BIN` overrides.
+ */
+const OMP_BIN = process.env.OMP_BIN ?? `${process.env.HOME}/.bun/bin/omp`;
+
 async function runPi(config: ExternalHarnessConfig, task: BenchTask, workspaceDir: string, apiKey: string, timeoutMs: number, options: ExternalRunOptions = {}): Promise<ExternalRunOutcome> {
   const local = config.provider === 'llama-cpp';
   const command = [
-    'pi',
+    ...(config.harness === 'omp' ? [OMP_BIN, '--profile', 'marshall-bench'] : ['pi']),
     '--provider', config.provider ?? 'openrouter',
     '--model', config.model,
     '--no-session', '--mode', 'json',
@@ -220,16 +226,6 @@ async function runPi(config: ExternalHarnessConfig, task: BenchTask, workspaceDi
   return { response, toolCalls, inputTokens, outputTokens, costUsd: local ? undefined : costUsd };
 }
 
-/**
- * `opencode run` has no working structured-output mode we found (`--format
- * json` produced no stdout at all in testing — see docs/competitive-findings.md)
- * so this parses the human-readable terminal transcript instead: tool
- * invocations are lines starting with `$ ` (bash) or the `✱`/`✗` glyphs
- * (its built-in tools), and the response is whatever text follows the last
- * one. That makes `toolCalls` here an approximation and token counts
- * unavailable — both are documented limitations, not silent gaps; see
- * bench/README.md.
- */
 /**
  * `aider`, which works differently enough from the others to need explaining.
  *
@@ -300,38 +296,109 @@ async function runAider(config: ExternalHarnessConfig, task: BenchTask, workspac
   };
 }
 
-async function runOpencode(config: ExternalHarnessConfig, task: BenchTask, workspaceDir: string, timeoutMs: number): Promise<ExternalRunOutcome> {
-  let stdout: string;
+/**
+ * `opencode run --format json` streams one JSON object per line. Earlier
+ * versions printed nothing in that mode (see docs/competitive-findings.md), so
+ * this row used to scrape the terminal transcript and had no token counts; as
+ * of opencode 1.17 the JSON stream is real and carries everything pi's does.
+ *
+ * One `step_finish` per provider request, each with `tokens` and `cost`.
+ * Input is summed as `input + cache.read + cache.write`, the same convention
+ * as pi, and output as `output + reasoning`, since opencode reports the two
+ * separately where OpenRouter bills them as one. A `tool_use` event is one
+ * completed tool call; the response is the last `text` part.
+ */
+async function runOpencode(config: ExternalHarnessConfig, task: BenchTask, workspaceDir: string, apiKey: string, timeoutMs: number, options: ExternalRunOptions = {}): Promise<ExternalRunOutcome> {
+  const command = ['opencode', 'run', '--format', 'json', '--model', `openrouter/${config.model}`, task.prompt];
+  let response = '';
+  let toolCalls = 0;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let costUsd = 0;
+  const transcript = options.transcriptPath ? createWriteStream(options.transcriptPath) : undefined;
+
+  const onLine = (line: string) => {
+    if (!line.trim()) return;
+    transcript?.write(line + '\n');
+    let event: { type?: string; part?: Record<string, unknown> };
+    try { event = JSON.parse(line); } catch { return; }
+    const part = event.part ?? {};
+    if (event.type === 'tool_use') toolCalls++;
+    else if (event.type === 'text' && typeof part.text === 'string') response = part.text;
+    else if (event.type === 'step_finish') {
+      const tokens = part.tokens as { input?: number; output?: number; reasoning?: number; cache?: { read?: number; write?: number } } | undefined;
+      inputTokens += (tokens?.input ?? 0) + (tokens?.cache?.read ?? 0) + (tokens?.cache?.write ?? 0);
+      outputTokens += (tokens?.output ?? 0) + (tokens?.reasoning ?? 0);
+      costUsd += typeof part.cost === 'number' ? part.cost : 0;
+    }
+  };
+
   try {
-    const result = await execViaPty(
-      ['opencode', 'run', '--model', `openrouter/${config.model}`, task.prompt],
-      { cwd: workspaceDir, timeout: timeoutMs },
-    );
-    stdout = result.stdout;
+    const { timedOut } = await execViaPtyStreaming(command, { cwd: workspaceDir, timeout: timeoutMs, env: { OPENROUTER_API_KEY: apiKey } }, onLine);
+    if (timedOut) return { response, toolCalls, inputTokens, outputTokens, costUsd, error: 'timeout' };
   } catch (err) {
-    const stdout2 = (err as { stdout?: string }).stdout ?? '';
-    return { response: '', toolCalls: 0, error: (err as Error).message.slice(0, 300) || stdout2.slice(0, 300) };
+    return { response: '', toolCalls: 0, error: (err as Error).message.slice(0, 300) };
+  } finally {
+    transcript?.end();
   }
+  return { response, toolCalls, inputTokens, outputTokens, costUsd };
+}
 
-  // Strip ANSI escapes so the line-prefix checks below see plain text.
-  // eslint-disable-next-line no-control-regex
-  const clean = stdout.replace(/\x1b\[[0-9;]*m/g, '');
-  const lines = clean.split('\n');
+/**
+ * The Codex CLI, on the ChatGPT login in `~/.codex/auth.json` — the same
+ * backend marshall's `codex` provider reaches, which is what the matching
+ * marshall row (`luna-codex` in config.ts) runs on. Not OpenRouter: a Codex row
+ * is compared with that row, never with the OpenRouter ones.
+ *
+ * `codex exec --json` streams JSONL. Tool calls are the `item.completed`
+ * events whose item is an action the model took (a shell command, a file
+ * change, an MCP or web-search call); `agent_message` items are its replies,
+ * and the last one is the response. Each `turn.completed` carries `usage`,
+ * whose `input_tokens` already includes `cached_input_tokens`. There is no
+ * cost: a subscription login is not billed per token, so `costUsd` stays
+ * undefined rather than reading as a misleading $0.00.
+ *
+ * `workspace-write` lets it edit the fixture and run the tests without asking;
+ * `--ephemeral` keeps the bench out of the user's own Codex session history.
+ */
+async function runCodex(config: ExternalHarnessConfig, task: BenchTask, workspaceDir: string, timeoutMs: number, options: ExternalRunOptions = {}): Promise<ExternalRunOutcome> {
+  const command = [
+    'codex', 'exec', '--json', '--ephemeral', '--skip-git-repo-check',
+    '-s', 'workspace-write', '-m', config.model, task.prompt,
+  ];
+  const TOOL_ITEMS = new Set(['command_execution', 'file_change', 'mcp_tool_call', 'web_search']);
+  let response = '';
+  let toolCalls = 0;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let failure: string | undefined;
+  const transcript = options.transcriptPath ? createWriteStream(options.transcriptPath) : undefined;
 
-  const toolCalls = lines.filter(l => /^\$ /.test(l.trim()) || /^[✱✗] /.test(l.trim())).length;
+  const onLine = (line: string) => {
+    if (!line.trim()) return;
+    transcript?.write(line + '\n');
+    let event: { type?: string; item?: { type?: string; text?: string }; usage?: Record<string, number>; error?: { message?: string } };
+    try { event = JSON.parse(line); } catch { return; }
+    if (event.type === 'item.completed' && event.item) {
+      if (TOOL_ITEMS.has(event.item.type ?? '')) toolCalls++;
+      else if (event.item.type === 'agent_message' && event.item.text) response = event.item.text;
+    } else if (event.type === 'turn.completed' && event.usage) {
+      inputTokens += event.usage.input_tokens ?? 0;
+      outputTokens += event.usage.output_tokens ?? 0;
+    } else if (event.type === 'turn.failed') {
+      failure = event.error?.message ?? 'turn failed';
+    }
+  };
 
-  // The response is the run of non-tool, non-empty lines at the end of the
-  // transcript — opencode prints its final answer last, with no marker of
-  // its own to anchor on.
-  let end = lines.length;
-  while (end > 0 && !lines[end - 1].trim()) end--;
-  let start = end;
-  while (start > 0 && lines[start - 1].trim() && !/^\$ /.test(lines[start - 1].trim()) && !/^[✱✗] /.test(lines[start - 1].trim())) {
-    start--;
+  try {
+    const { timedOut } = await execViaPtyStreaming(command, { cwd: workspaceDir, timeout: timeoutMs }, onLine);
+    if (timedOut) return { response, toolCalls, inputTokens, outputTokens, error: 'timeout' };
+  } catch (err) {
+    return { response: '', toolCalls: 0, error: (err as Error).message.slice(0, 300) };
+  } finally {
+    transcript?.end();
   }
-  const response = lines.slice(start, end).join('\n').trim();
-
-  return { response, toolCalls };
+  return { response, toolCalls, inputTokens, outputTokens, ...(failure ? { error: failure.slice(0, 300) } : {}) };
 }
 
 export async function runExternal(
@@ -345,7 +412,11 @@ export async function runExternal(
   timeoutMs: number,
   options: ExternalRunOptions = {},
 ): Promise<ExternalRunOutcome> {
-  if (config.harness === 'pi') return runPi(config, task, workspaceDir, apiKey, timeoutMs, options);
+  // omp speaks pi's `--mode json` event stream unchanged, so it shares the
+  // parser. `--profile` isolates its auth, sessions and settings the way
+  // PI_CODING_AGENT_DIR does for pi.
+  if (config.harness === 'pi' || config.harness === 'omp') return runPi(config, task, workspaceDir, apiKey, timeoutMs, options);
   if (config.harness === 'aider') return runAider(config, task, workspaceDir, apiKey, timeoutMs);
-  return runOpencode(config, task, workspaceDir, timeoutMs);
+  if (config.harness === 'codex') return runCodex(config, task, workspaceDir, timeoutMs, options);
+  return runOpencode(config, task, workspaceDir, apiKey, timeoutMs, options);
 }
