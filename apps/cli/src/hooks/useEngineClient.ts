@@ -66,9 +66,14 @@ export interface TranscriptPort {
  * Pure: same events in, same port calls out. Exported separately from the hook
  * so tests can drive it directly.
  */
+/** Collapse to a single line, for a row that has one line to give. */
+function flatten(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
 /** The opening of a multi-line value, for a row that has one line to give it. */
 function firstLine(text: string, max: number): string {
-  const flat = text.replace(/\s+/g, ' ').trim();
+  const flat = flatten(text);
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 }
 
@@ -128,7 +133,11 @@ export function createEngineClient(port: TranscriptPort): ClientInterface {
           // Whatever the model was mid-sentence on stays above the completion,
           // which can land in the middle of an unrelated turn.
           commitStep();
-          port.push('job', event.command, {
+          // Flattened, not cut: a backgrounded command can be a heredoc, and a
+          // row carrying a newline breaks in two however the columns are
+          // budgeted. Where to cut it is the view's call — only it knows the
+          // terminal width — so nothing is thrown away here.
+          port.push('job', flatten(event.command), {
             title: event.id,
             failed,
             note: `${outcome}  ${G.bullet}  ${(event.durationMs / 1000).toFixed(1)}s` +

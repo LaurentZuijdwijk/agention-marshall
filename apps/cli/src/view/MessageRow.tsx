@@ -18,6 +18,12 @@ const GUTTER_COLS = 4;
 const SAFETY_LABEL_COLS = 9;
 const SAFETY_JUDGE_COLS = 5;
 
+// Fixed-width parts of a completion row: the "<icon> " in front, and the
+// "  •  " that separates the content from the outcome. The label and the id
+// vary, so they are measured from what is actually rendered.
+const EVENT_ICON_COLS = 2;
+const EVENT_NOTE_COLS = 5;
+
 /**
  * The judge, named by its model alone.
  *
@@ -74,6 +80,33 @@ export function fitToolContent(
 }
 
 /**
+ * A finished job's command or agent's brief, cut to whatever the row leaves.
+ *
+ * The third row with this shape and the third with the same failure — the
+ * fixed part sits *before* the content, so a long command squeezes the columns
+ * to its left until the label itself breaks. A chained
+ * `pnpm exec prettier … && pnpm test && pnpm typecheck && pnpm lint` renders
+ * "background" as "backgrou" above a stray "d", with the job id and the
+ * outcome dragged onto the second line. That is the worst row to lose: it is
+ * the one that arrives with no turn running and nothing above it to anchor it.
+ *
+ * The note is counted as fixed rather than trimmed. `exit 0  •  16.0s` is the
+ * entire point of a completion row; if something has to go it is the tail of a
+ * command the user wrote themselves and can already see in their scrollback.
+ */
+export function fitEventContent(
+  content: string,
+  { label, title, note, columns }: { label: string; title: string; note?: string; columns: number },
+): string {
+  // label already carries its trailing space; the literal two are the gap
+  // before the content.
+  const fixed = EVENT_ICON_COLS + label.length + title.length + 2
+    + (note ? note.length + EVENT_NOTE_COLS : 0);
+  const room = columns - fixed;
+  return room <= 0 ? '' : truncate(content, room);
+}
+
+/**
  * Who made this call, in front of the tool it called.
  *
  * Only rendered when someone other than the coder made it: /plan and /review run
@@ -84,6 +117,33 @@ export function fitToolContent(
 function CallerTag({ caller }: { caller?: string }) {
   if (!caller) return null;
   return <Text color={C.faint}>{caller} </Text>;
+}
+
+/**
+ * A job or agent completion: icon, label, id, content, outcome.
+ *
+ * One component for both because they are one row with a different word in it,
+ * which the comment on `spawn` has always said. Sharing the JSX also shares the
+ * column budget — two copies of that arithmetic is how one of them drifts out
+ * of step with what is rendered, silently, since the only symptom is a row that
+ * wraps.
+ */
+function EventRow({ label, msg, columns }: { label: string; msg: Message; columns: number }) {
+  // The trailing space is part of the tag so the string that is rendered and
+  // the string that is measured are the same one.
+  const tag = `${label} `;
+  return (
+    <Box marginTop={1}>
+      <Text color={msg.failed ? C.error : C.ok}>{msg.failed ? G.no : G.ok} </Text>
+      <Text color={C.tool}>{tag}</Text>
+      <Text color={C.text}>{msg.title}</Text>
+      <Text color={C.muted}>
+        {'  '}
+        {fitEventContent(msg.content, { label: tag, title: msg.title ?? '', note: msg.note, columns })}
+      </Text>
+      {msg.note && <Text color={C.faint}>  {G.bullet}  {msg.note}</Text>}
+    </Box>
+  );
 }
 
 export function MessageRow({ msg, columns = process.stdout.columns ?? 80 }: {
@@ -214,29 +274,13 @@ export function MessageRow({ msg, columns = process.stdout.columns ?? 80 }: {
     // the one row that can appear with no turn running and nothing above it, so
     // it has to read as an event in its own right rather than as nested output.
     case 'job':
-      return (
-        <Box marginTop={1}>
-          <Text color={msg.failed ? C.error : C.ok}>{msg.failed ? G.no : G.ok} </Text>
-          <Text color={C.tool}>background </Text>
-          <Text color={C.text}>{msg.title}</Text>
-          <Text color={C.muted}>  {msg.content}</Text>
-          {msg.note && <Text color={C.faint}>  {G.bullet}  {msg.note}</Text>}
-        </Box>
-      );
+      return <EventRow label="background" msg={msg} columns={columns} />;
 
     // A spawned agent finished. Same shape as `job` and for the same reason —
     // it can land with no turn running — but named for what it is: a background
     // command prints, while an agent has been changing the workspace.
     case 'spawn':
-      return (
-        <Box marginTop={1}>
-          <Text color={msg.failed ? C.error : C.ok}>{msg.failed ? G.no : G.ok} </Text>
-          <Text color={C.tool}>agent </Text>
-          <Text color={C.text}>{msg.title}</Text>
-          <Text color={C.muted}>  {msg.content}</Text>
-          {msg.note && <Text color={C.faint}>  {G.bullet}  {msg.note}</Text>}
-        </Box>
-      );
+      return <EventRow label="agent" msg={msg} columns={columns} />;
 
     case 'tool-result': {
       const lines = msg.content.split('\n');
