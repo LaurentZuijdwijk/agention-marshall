@@ -1,6 +1,6 @@
 {
   "name": "@agentionai/marshall-engine",
-  "version": "0.25.1",
+  "version": "0.25.2",
   "type": "module",
   "exports": {
     ".": {
@@ -26,7 +26,7 @@
   },
   "dependencies": {
     "@agentionai/agents": "1.16.0",
-    "@agentionai/marshall-tools": "^0.9.3",
+    "@agentionai/marshall-tools": "^0.9.4",
     "@anthropic-ai/sdk": "^0.71.2",
     "@google/generative-ai": "^0.24.0",
     "@mistralai/mistralai": "^1.13.0",
