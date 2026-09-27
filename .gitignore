@@ -44,6 +44,9 @@ bench/results.json
 # benchmark run artifacts: ~600 MB of session/reasoning logs per sweep, regenerated
 # by `npx tsx bench/run.ts` and meaningful only next to the run that produced them.
 bench/runs/
+# The same artifacts from the harbor_jobs sweeps, which write their runs one
+# directory deeper (`codex-vs-marshall-*`, a few MB each).
+bench/harbor_jobs/runs/
 __pycache__/
 bench/.hc-*.png
 bench/harness-comparison.html

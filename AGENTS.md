@@ -83,26 +83,41 @@ for `node_modules/<name>` under whatever directory it treats as the app root.
 
 ## Release process
 
-Use Changesets for user-facing package changes. Add a changeset under `.changeset/`
-with the real workspace package names, then apply it from the repository root:
+Releases are manual and run from `main`: CI only typechecks, tests and deploys the
+site, so nothing publishes on merge.
+
+**Every changeset must list `@agentionai/marshall-cli`** — including when the change
+is entirely in `packages/engine` or `packages/tools` and no CLI source was touched.
+`checkForUpdate` (`apps/cli/src/update-check.ts`) compares the CLI's *own* version
+against `@agentionai/marshall-cli@latest` on the registry. Leave the CLI unpublished
+and `isNewer` is false: no update row ever appears, `/update` answers "up to date",
+and the release sits on npm where no existing install will reach it. Changesets will
+not add the bump for you — the CLI's `^` range on the engine still satisfies a patch
+bump, so nothing forces one.
+
+Add the changeset under `.changeset/` with the real workspace package names, then
+from the repo root:
 
 ```bash
-npx @changesets/cli status
-npx @changesets/cli version
-npm install
-npm test
+npx @changesets/cli status      # the plan, before it is applied
+npx @changesets/cli version     # bumps versions, writes changelogs, consumes the changeset
+npm install                     # `version` does not touch package-lock.json
 ```
 
-Review the generated package versions, changelogs, and lockfile. Commit the
-changeset output and implementation together, then publish from an authenticated
-npm session after pushing the release commit:
+Review the versions, changelogs and lockfile — in particular that the CLI moved and
+its internal ranges moved with it. Commit that output together with the
+implementation (`chore(release): version ...`), then publish from an authenticated
+npm session:
 
 ```bash
-npm whoami
-npx @changesets/cli publish
+npm whoami                      # a 401 here means the stored token expired — npm login
+npm run release                 # npm test && npm run build:all && changeset publish
 git push --follow-tags origin main
 ```
 
-Do not put npm tokens or other release credentials in the repository. If publish
-is interrupted, inspect Changeset status and rerun the publish command rather
-than creating another version commit.
+`--follow-tags` is load-bearing: `changeset publish` writes a git tag per published
+package locally, and a plain `git push` leaves them behind.
+
+Do not put npm tokens or other release credentials in the repository. If publish is
+interrupted, read Changeset status and rerun the publish command rather than
+creating a second version commit.
