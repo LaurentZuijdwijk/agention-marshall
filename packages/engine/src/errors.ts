@@ -113,10 +113,16 @@ export function isUnsupportedRequestError(message: string): boolean {
  * model", and neither of llama.cpp's actual answers — "image input is not
  * supported ... you may need to provide the mmproj", "failed to process
  * mtmd chunk" — matches. Worded loosely because no provider standardises
- * this phrasing. Callers only check this when the turn actually carried an
- * image, so an unrelated error that happens to mention "image" (or, more
- * easily confused, some other engine's unrelated "chunk" wording) elsewhere
- * in a stack trace does not get misread as this.
+ * this phrasing, which makes the gate in `classifyProviderError` the thing
+ * keeping it honest: this is only consulted when an image is actually in
+ * play. That gate reads history, not just the turn's attachments — a tool's
+ * screenshot arrives by neither door `run()` knows about — so the window is
+ * any session that has taken a screenshot, not only the turn that took one.
+ * Inside that window an unrelated error mentioning "image" (or, more easily
+ * confused, another engine's own "mtmd"/"chunk" wording) can still be
+ * misread as this. What bounds the cost is that the recovery is not
+ * destructive of anything but images: the misread error recurs on the next
+ * turn, reported normally, rather than being swallowed.
  */
 export function isImageRejectionError(message: string): boolean {
   // `\w*` rather than a trailing `\b image \b`, so an OpenAI-shaped field name
@@ -166,8 +172,14 @@ export interface ProviderErrorClass {
  * history does nothing for a request whose image is the problem. Without the
  * gate, `isImageRejectionError`'s loose wording match (it has to be loose;
  * providers do not standardise this phrasing) could misread an unrelated 400
- * that happens to mention "image" — passing `false` when the turn carried
- * none keeps that from ever being reachable.
+ * that happens to mention "image" — passing `false` when no image is in play
+ * is what keeps that out of reach.
+ *
+ * "In play" is deliberately wider than "attached to this turn". A screenshot
+ * an MCP tool returned is in history but in no `images` argument, and it
+ * stays there for every later turn, so callers answer this from history
+ * (`Session.historyHasImages`). The cost of the wider gate is described on
+ * `isImageRejectionError` above.
  */
 export function classifyProviderError(err: unknown, message: string, hasImages = false): ProviderErrorClass {
   if (isConnectionError(message)) {

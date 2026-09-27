@@ -286,7 +286,8 @@ export class Session {
    *
    * Session-scoped rather than turn-scoped because the fact it records is:
    * the loaded model does not change between turns. Cleared by `setProfiles`
-   * — a different model deserves to be asked again.
+   * when the *deep* model changes — that model deserves to be asked again,
+   * whereas a change of fast model leaves the one that rejected in place.
    */
   private visionRejected = false;
   private controller: AbortController | null = null;
@@ -441,12 +442,21 @@ export class Session {
    * tool belt before this, so the change lands on the next one.
    */
   setProfiles(deep: AgentProfile, fast?: AgentProfile): void {
+    const previousDeep = this.config.agent;
     this.config = { ...this.config, agent: deep, models: { deep, ...(fast ? { fast } : {}) } };
     // The one piece of learned state a switch has to forget: it was learned
     // about the model being replaced. Leaving it set is what would make
     // "change model" — the second option on the rejected-image panel — fail
     // to fix the very thing the user picked it for.
-    this.visionRejected = false;
+    //
+    // Only when the deep model actually changed, though. `/model` and the
+    // setup wizard write both tiers in one call, so an unconditional reset
+    // would forget a rejection every time the *fast* model was picked — and
+    // the deep model, the one that rejected the image and the one that will
+    // be handed the next screenshot, is still exactly the same model.
+    if (previousDeep.provider !== deep.provider || resolveModel(previousDeep) !== resolveModel(deep)) {
+      this.visionRejected = false;
+    }
     this.toolBelt.rebuildRoleTools();
     // The plugin stays registered and keeps working; only the model behind it
     // changes. Rebuilt lazily so a switch costs nothing until history is big
@@ -1552,6 +1562,16 @@ export class Session {
           // before anything else so that even if the user dismisses the panel
           // below, the next screenshot is described in text rather than
           // attached and rejected again.
+          //
+          // This trusts the classification, and the classification is a
+          // wording match that can fire on an unrelated failure while a stale
+          // screenshot sits in history (see `isImageRejectionError`). The
+          // wrong answer costs this session its screenshots — degraded to
+          // text, not dropped — until the deep model changes. The right
+          // answer saves it from wedging on a request the provider will never
+          // accept. That trade is only this one-sided because nothing else
+          // can tell us: a local model's vision support is not in any
+          // catalogue, and the rejection is the only evidence there is.
           this.visionRejected = true;
           // The rejected turn's user entry (the one carrying the image) is
           // still in history — leave it and a retry resends the same broken

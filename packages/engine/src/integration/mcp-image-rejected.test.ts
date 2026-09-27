@@ -221,3 +221,42 @@ test('after a rejection, a further screenshot is described in text instead of at
   assert.match(text, /Captured the active tab/);
   assert.doesNotMatch(text, new RegExp(FAKE_PNG));
 });
+
+test('the rejection outlives a fast-model switch, and only a deep-model switch forgets it', async (t) => {
+  const root = tempRoot();
+  const mcp = await startScreenshotServer();
+  t.after(() => mcp.close());
+  const fake = await startFakeProvider(
+    { toolCalls: [{ name: 'mcp__browser__screenshot', arguments: {} }] },
+    ...REJECTS_EVERY_ATTEMPT,
+    // After a fast-model switch: still the model that rejected, so still text.
+    { toolCalls: [{ name: 'mcp__browser__screenshot', arguments: {} }] },
+    { text: 'still cannot see it' },
+    // After a deep-model switch: a different model, which has told us nothing.
+    { toolCalls: [{ name: 'mcp__browser__screenshot', arguments: {} }] },
+    { text: 'the pagoda renders correctly' },
+  );
+  t.after(() => fake.close());
+
+  const session = makeSession(root, fake, mcp.url, makeClient([]));
+  t.after(() => session.dispose());
+
+  const deep = { provider: 'llamacpp' as const, host: fake.host, model: 'test-model' };
+  await session.run('check the pagoda renders');
+
+  // `/model` writes both tiers at once, so this is what picking a fast model
+  // looks like from here: the same deep model handed back verbatim.
+  session.setProfiles(deep, { provider: 'llamacpp', host: fake.host, model: 'fast-model' });
+  await session.run('try again');
+  assert.equal(
+    imagePartsIn(fake.requests.at(-1)!).length, 0,
+    'the deep model that rejected the image has not changed, so nothing was learned that a fast-model switch could forget',
+  );
+
+  session.setProfiles({ ...deep, model: 'vision-model' });
+  await session.run('and now?');
+  assert.ok(
+    imagePartsIn(fake.requests.at(-1)!).length > 0,
+    'a different deep model has said nothing about images yet, so it gets the screenshot',
+  );
+});
